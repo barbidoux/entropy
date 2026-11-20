@@ -9,16 +9,23 @@ subpackage.
 
 Inside `solvers`, each solver (a module or subpackage of `solvers`) is its own
 unit, named `solvers.<name>` (SPEC 8: solvers talk to each other only through
-the coupling layer). A solver may import `solvers.interface`, the package root
-`solvers` and what `solvers` may import, never another solver; the interface
-and the package root name no solver; `coupling` may import the interface and
-the package root only (SPEC 8.1: solver interfaces only). Other packages see
-`solvers` as one package.
+the coupling layer):
+- A solver may import `solvers.interface`, the package root `solvers` and what
+  `solvers` may import (`fields`, `linalg`, `core`), never another solver.
+  Every module of `solvers` other than `interface` counts as a solver, so code
+  shared by solvers goes to `fields`, `linalg` or the interface.
+- The interface names no solver. The package root imports the interface only, to
+  re-export it, so no solver can be written there.
+- `coupling` may import the interface and the package root only (SPEC 8.1:
+  solver interfaces only).
+Other packages see `solvers` as one package.
 
 Known limits, checked by review instead:
 - Imports are read statically; `importlib.import_module` and attribute access
   through an imported `entropy` are not seen.
 - "Read-only" in the `render`, `ui` and `audio` rows is about writes, not imports.
+- Code written in `solvers/interface.py` itself is not checked: review keeps it
+  to the interface.
 """
 
 import ast
@@ -70,11 +77,12 @@ def reachable(package: str, allowed: Mapping[str, frozenset[str]]) -> frozenset[
 def violations(
     imports: Mapping[str, set[str]], allowed: Mapping[str, frozenset[str]]
 ) -> list[tuple[str, str]]:
-    """(importer, imported) pairs that break the rules.
+    """(importer, imported) unit pairs that break the rules.
 
-    `imports` maps each subpackage to the `entropy` subpackages it imports.
-    A subpackage missing from `allowed` is reported as (package, NOT_IN_SPEC),
-    so a new package cannot slip in without its row in SPEC 8.1.
+    `imports` maps each unit (see `collect_imports`) to the units it imports.
+    A unit whose package is missing from `allowed` is reported as
+    (unit, NOT_IN_SPEC), so a new package cannot slip in without its row in
+    SPEC 8.1.
     """
     found: list[tuple[str, str]] = []
     for unit, targets in sorted(imports.items()):
@@ -102,7 +110,10 @@ def _package(unit: str) -> str:
 
 
 def _breaks_solver_isolation(unit: str, target: str) -> bool:
-    """A specific solver imported from another solver, the interface, the root or coupling."""
+    """A specific solver imported from another solver, the interface, the root or coupling;
+    or the package root importing anything but the interface."""
+    if unit == SOLVERS:
+        return target != SOLVER_INTERFACE
     names_a_solver = target.startswith(f"{SOLVERS}.") and target != SOLVER_INTERFACE
     return names_a_solver and _package(unit) in (SOLVERS, "coupling")
 
@@ -165,7 +176,7 @@ def test_upward_import_is_a_violation() -> None:
 
 
 def test_transitive_downward_import_is_allowed() -> None:
-    assert violations({"solvers": {"core"}, "game": {"fields"}}, ALLOWED) == []
+    assert violations({"solvers.liquid": {"core"}, "game": {"fields"}}, ALLOWED) == []
 
 
 def test_render_may_not_import_game() -> None:
@@ -207,6 +218,13 @@ def test_the_interface_and_the_package_root_name_no_solver() -> None:
         ("solvers", "solvers.liquid"),
         ("solvers.interface", "solvers.rigid"),
     ]
+
+
+def test_the_package_root_imports_only_the_interface() -> None:
+    """A solver written in `solvers/__init__.py` would need `fields` or `linalg`: caught."""
+    imports = {"solvers": {"solvers.interface", "linalg", "fields"}}
+
+    assert violations(imports, ALLOWED) == [("solvers", "fields"), ("solvers", "linalg")]
 
 
 def test_coupling_may_import_only_the_solver_interface() -> None:

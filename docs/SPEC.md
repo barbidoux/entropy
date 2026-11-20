@@ -458,8 +458,8 @@ Dependencies point downward only, and a test enforces the import rules. "May dep
 | `core` | Units, configuration, logging, profiler | nothing |
 | `fields` | Grids (staggered, cell-centred, later sparse), interpolation, advection | `core` |
 | `linalg` | Poisson solvers: Jacobi, PCG, MGPCG | `fields` |
-| `solvers/*` | One solver per phenomenon, each implementing the solver interface of `solvers/interface.py`; a solver never imports another | `fields`, `linalg`, `solvers/interface.py` |
-| `coupling` | Ordered exchanges between solvers, conservation checks | solver interfaces only (`solvers/interface.py`) |
+| `solvers/*` | One solver per phenomenon, each implementing the solver interface of `solvers/interface.py`; a solver never imports another, so code shared by solvers lives in `fields`, `linalg` or the interface. The package root `solvers/__init__.py` only re-exports the interface | `fields`, `linalg`, `solvers/interface.py` |
+| `coupling` | Ordered exchanges between solvers, conservation checks | solver interfaces only (`solvers/interface.py`, or the package root that re-exports it) |
 | `world` | Entities, materials, prefabs, map loader and migrations, generators, SDF and spatial queries | `core` |
 | `sim` | Frame loop and frame order (stages behind a protocol, ADR 0010), substeps, time scale, checkpoints, recorder, NaN guard | `solvers`, `coupling`, `world` |
 | `game` | Modes, player controller, tools, input mapping | `sim`, `world` |
