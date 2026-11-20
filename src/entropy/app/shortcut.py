@@ -11,7 +11,7 @@ import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePath, PureWindowsPath
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _MINIMISED = 7
@@ -19,21 +19,23 @@ _MINIMISED = 7
 
 @dataclass(frozen=True)
 class Shortcut:
-    path: Path
-    target: Path
+    """A Windows shortcut; paths are Windows paths on any system the code runs on."""
+
+    path: PureWindowsPath
+    target: PureWindowsPath
     arguments: str
-    working_dir: Path
+    working_dir: PureWindowsPath
     description: str
     window_style: int
 
 
-def shortcut_for(repo_root: Path, *, desktop: Path, uv: Path) -> Shortcut:
+def shortcut_for(repo_root: PurePath, *, desktop: PurePath, uv: PurePath) -> Shortcut:
     """The ENTROPY shortcut on `desktop`, running `uv` in `repo_root`."""
     return Shortcut(
-        path=desktop / "ENTROPY.lnk",
-        target=uv,
+        path=PureWindowsPath(str(desktop)) / "ENTROPY.lnk",
+        target=PureWindowsPath(str(uv)),
         arguments="run entropy",
-        working_dir=repo_root,
+        working_dir=PureWindowsPath(str(repo_root)),
         description="ENTROPY physics sandbox",
         window_style=_MINIMISED,
     )

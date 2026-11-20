@@ -1,7 +1,7 @@
 """Desktop shortcut to launch the game (`entropy.app.shortcut`), SPEC 10.5."""
 
 import subprocess
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 import pytest
 
@@ -17,10 +17,10 @@ def test_shortcut_runs_the_game_with_uv_from_the_clone() -> None:
     shortcut = shortcut_for(REPO, desktop=DESKTOP, uv=UV)
 
     assert shortcut == Shortcut(
-        path=DESKTOP / "ENTROPY.lnk",
-        target=UV,
+        path=PureWindowsPath(str(DESKTOP)) / "ENTROPY.lnk",
+        target=PureWindowsPath(str(UV)),
         arguments="run entropy",
-        working_dir=REPO,
+        working_dir=PureWindowsPath(str(REPO)),
         description="ENTROPY physics sandbox",
         window_style=7,
     )
@@ -65,6 +65,15 @@ def test_main_explains_what_is_missing(
     assert shortcut.main() == 1
 
     assert "Windows only" in capsys.readouterr().err
+
+
+def test_windows_separators_whatever_system_builds_the_script() -> None:
+    """CI runs on Linux, where Path joins with '/'."""
+    shortcut = shortcut_for(
+        PurePosixPath(str(REPO)), desktop=PurePosixPath(str(DESKTOP)), uv=PurePosixPath(str(UV))
+    )
+
+    assert str(shortcut.path) == rf"{DESKTOP}\ENTROPY.lnk"
 
 
 def test_quotes_in_paths_are_escaped_for_powershell() -> None:
