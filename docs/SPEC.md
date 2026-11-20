@@ -70,18 +70,25 @@ The game targets one machine: a Dell Precision 7780 laptop with an RTX 4090 Lapt
 | Game logic, UI and Python orchestration | 2 |
 | Margin | 0.3 |
 
-**Initial solver capacities**
+**Solver capacities**
 
-These are starting targets, recalibrated by measurement in milestone M0. A house of 10 × 8 × 6 m at the 6.25 cm liquid cell size is 160 × 128 × 96 ≈ 2.0 million cells, so the whole house fits in the liquid grid.
+Recalibrated by the M0 measurements (`docs/benchmarks/2026-11-20-m0-laptop.md`); later milestones measure each solver against its row. A house of 10 × 8 × 6 m at the 6.25 cm liquid cell size is 160 × 128 × 96 ≈ 2.0 million cells, so the whole house fits in the liquid grid.
 
 | Solver | Capacity | Time budget (ms) |
 | --- | --- | --- |
-| Liquid (APIC/FLIP) | 1–2 million particles, ≤ 2 million active cells at 6.25 cm | 9 |
-| Gas, smoke and fire | 128³ to 192³ cells in a moving box, 5–10 cm cells | 6 |
-| Rigid bodies and fracture | 5,000 bodies, 20,000 bonds | 3 |
-| Granular (MPM) | 300,000 particles | 2 |
-| Shallow water (street, M8) | 1024 × 1024 cells at 25 cm | 1 |
-| Blast model and coupling | analytic, per event | 1 |
+| Liquid (APIC/FLIP) | 1–2 million particles, ≤ 2 million active cells at 6.25 cm. At risk: the pressure solve on the full house grid is estimated at 4.6–8.7 ms per substep; particle transfers are measured in M1 | 9 |
+| Gas, smoke and fire | Target 96³ to 128³ cells in a moving box, 5–10 cm cells. At risk: estimated 3.3–6.1 ms per substep at 96³ and 6.8–13.5 ms at 128³, times 1–4 CFL substeps per frame (3 for a 5 m/s plume in 7.5 cm cells at 30 fps, the cap of 4 in 5 cm cells); 192³ is out of reach (≈ 44 ms). M3 decides box size, gas substeps and pressure solve frequency | 6 |
+| Rigid bodies and fracture | 5,000 bodies, 20,000 bonds (not measured in M0; checked in M2) | 3 |
+| Granular (MPM) | 300,000 particles (not measured in M0; checked in M4) | 2 |
+| Shallow water (street, M8) | 1024 × 1024 cells at 25 cm (bandwidth bound ≈ 0.2 ms per step; checked in M8) | 1 |
+| Blast model and coupling | analytic, per event (checked in M5) | 1 |
+
+**Measured hardware limits (M0, provisional until the Dell thermal profile is confirmed)**
+
+- Planning bandwidth: 450 GB/s for read-write streaming in the sustained state (503 GB/s measured at the full 9001 MHz memory clock; the clock drops to 8001 MHz under the power cap). A kernel moving B bytes per cell over N cells costs at least B·N / 450 GB/s. Grids that fit in the 64 MiB L2 cache run up to twice as fast; solvers with many live fields should not count on it.
+- Sustained GPU state after warm-up: 83–89 °C, 110 W power limit, thermal and power capped; SM clock 1.3–1.7 GHz instead of 2.3 GHz, memory clock 8001–9001 MHz.
+- A kernel launched from Python costs about 15 µs of CPU time, so solver frames launch their kernels from CUDA graphs only (median 0.2–0.7 µs of CPU per kernel depending on graph size, up to 1.1 µs at p90 for large graphs): at most about 1,800 graph kernels per frame on the CPU side if launches had the whole 2 ms orchestration budget, which they share with game logic and the interface. Iterative solver loops run as conditional graph nodes, so CPU launches do not grow with iterations. On the GPU every executed kernel, iterations included, costs about 1.2 µs on top of its work and is counted in the solver's budget (2,000 kernels = 2.4 ms).
+- CPU and GPU work concurrently (reasoned, measured from M1): Python enqueues while the GPU runs earlier work, so the orchestration budget is the CPU time the GPU has to wait for: synchronisation points such as CUDA–OpenGL map and unmap, read-backs, and OpenGL and interface calls on the same thread.
 
 **Memory budgets**
 
@@ -187,7 +194,7 @@ Procedural generators produce ordinary, editable maps: a house generator (floors
 
 ### 4.6 Time control, checkpoints and recording
 
-- Slow motion advances less simulated time per frame with the same physical time step, so slow motion costs less and loses no fidelity.
+- Slow motion advances less simulated time per frame, every frame; solvers take smaller CFL substeps, so slow motion costs less per frame and loses no fidelity (ADR 0008).
 - The camera stays free while paused, to inspect a frozen explosion from every side.
 - Checkpoints copy the full simulation state to host memory asynchronously: automatically every 10 s (ring of 6) and on F5.
 - A re-run from a checkpoint is not bit-identical on the GPU (section 9.6). Small divergence is expected and harmless.
@@ -210,7 +217,7 @@ Each story is accepted only when its criteria pass as automated tests and Matt h
 | --- | --- | --- | --- |
 | US-01 | First splash | In Test Tank, 10 s of hose at 20 L/s puts 200 L ± 2 % of water in the tank, at ≥ 30 fps | M1 |
 | US-02 | Dam break | A released water column advances like Martin & Moyce's experiment (test V-LIQ-03) | M1 |
-| US-03 | Slow motion | At 0.1× the camera moves freely and the physics stays identical in simulated time | M1 |
+| US-03 | Slow motion | At 0.1× the camera moves freely, and a scenario run at 0.1× matches the same scenario at 1× in simulated time within a stated tolerance (substeps differ; section 9.6) | M1 |
 | US-04 | It floats | A wooden crate (600 kg/m³) settles 60 % ± 5 % submerged; a concrete block sinks | M2 |
 | US-05 | Wading | In Walk mode, water 0.5 m deep flowing at 1 m/s pushes the player | M2 |
 | US-06 | Light it up | An ignited wooden table burns; smoke fills the ceiling layer first, then descends | M3 |
@@ -267,7 +274,7 @@ Water uses the Affine Particle-In-Cell method (APIC): particles carry the water,
 
 Air is an incompressible gas on a grid that follows the active region, carrying temperature, soot, fuel, oxygen and steam. Fire is a one-step chemical reaction inside that gas: fuel and oxygen burn above an ignition temperature, release heat and soot, and make the gas expand.
 
-- **Domain:** a box of 128³ to 192³ cells, 5 to 10 cm each, that moves and grows to follow smoke and fire. Sparse bricks extend it later.
+- **Domain:** a box of 96³ to 128³ cells (M0 estimate, measured in M3), 5 to 10 cm each, that moves and grows to follow smoke and fire. Sparse bricks extend it later.
 - **Fields:** velocity, temperature, soot density, fuel and oxygen mass fractions, steam density.
 - **Advection:** semi-Lagrangian with a BFECC/MacCormack error correction, clamped to stay stable.
 - **Forces:** buoyancy from temperature (hot gas rises) and soot weight; vorticity confinement to restore the small swirls the grid smooths away.
@@ -322,7 +329,7 @@ The street and the sea use the 2D depth-averaged shallow-water (Saint-Venant) eq
 
 ### 5.9 Time stepping and frame order
 
-The frame is 1/60 s, falling back to 1/30 s under load. Each frame advances the world by the frame time multiplied by the time scale.
+Each frame advances the world once by the measured frame time multiplied by the time scale, clamped to 1/30 s (ADR 0008). The frame rate is capped at 60 fps, so a frame is normally 1/60 s and falls back to 1/30 s under load; below 30 fps the clamp makes the world slow down, and the HUD says so.
 
 1. Apply tools and sources.
 2. Predict rigid bodies.
@@ -665,7 +672,7 @@ A gate fails closed: the next milestone does not start until every criterion pas
 
 **What each milestone builds**
 
-1. **M0 Foundations:** repository, uv, CI and pre-commit; Warp on CPU and CUDA; window, camera, OpenGL interop, game loop and HUD; test and benchmark harnesses; laptop measurements (memory bandwidth, pressure solve time at 128³ and 192³); first ADRs (Python version, rendering stack, coordinate frame).
+1. **M0 Foundations:** repository, uv, CI and pre-commit; Warp on CPU and CUDA; window, camera, OpenGL interop, game loop and HUD; test and benchmark harnesses; laptop measurements (memory bandwidth, stencil sweep cost and pressure-solve estimates at 128³ and 192³); first ADRs (Python version, rendering stack, coordinate frame).
 2. **M1 The water tank:** staggered grid, advection, MGPCG, APIC, static SDF solids, liquid rendering, hose, bucket, flood and eraser tools, time controls, map files (format v1) and the Test Tank map. Map files exist from here; Build mode comes in M6.
 3. **M2 Things that float:** XPBD rigid bodies with contacts, friction and sleeping; variational liquid–rigid coupling; spawner and grabber; Walk mode and player; first version of the Room map.
 4. **M3 Fire and smoke:** gas solver with combustion, oxygen and steam; first version of burning solids; volume rendering with blackbody colour; lighter, flamethrower and wind.
@@ -706,7 +713,7 @@ None of these blocks M0; each has a recommended default that applies unless Matt
 | Mortal mode in Walk | Immortal in v1.0; optional mortal mode in M9 | M9 |
 | Licence if the project goes open source | Apache-2.0 | Before publishing |
 | Sound sources | CC0 sample libraries, credited in the repository | M9 |
-| Default frame target | 60 fps rendering, simulation allowed to fall back to 30 fps | M0, after benchmarks |
+| Default frame target | Decided in M0 (ADR 0008): one simulation advance per frame of the frame time × time scale, clamped to 1/30 s; frame rate capped at 60 fps; simulation and rendering together | Decided |
 | Python version | 3.12, recorded in an ADR; revisit 3.13 when every dependency ships Windows wheels | M0 |
 
 ## 14. Glossary

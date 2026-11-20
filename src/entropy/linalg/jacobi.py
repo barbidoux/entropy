@@ -17,8 +17,9 @@ import warp as wp
 CHUNK = 8
 """Cells each thread updates along i, keeping p[i-1] and p[i] in registers.
 
-Measured on the RTX 4090 Laptop GPU during the review of PR #22: about 1.7x
-faster than one thread per cell at 192³, close to a pure streaming kernel.
+Measured 1.7x (192³) to 2.4x (128³) faster than one thread per cell in the review
+of PR #22; the M0 benchmark puts it at 92-109 % of a streaming pass with the same
+traffic (docs/benchmarks/2026-11-20-m0-laptop.md).
 """
 
 

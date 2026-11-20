@@ -26,6 +26,7 @@ from bench.harness import (
 REPO_ROOT = Path(__file__).parents[2]
 PERF_DIR = Path(__file__).parent
 DEVICE = "cuda:0"
+REHEAT_S = 10.0
 
 
 @pytest.hookimpl(tryfirst=True)
@@ -57,4 +58,9 @@ def bench_session() -> BenchSession:
 
 @pytest.fixture(autouse=True)
 def _warmed_up(bench_session: BenchSession) -> None:
-    """Every benchmark runs after the warm-up, even one that records nothing."""
+    """Every benchmark runs after the warm-up, then a short re-heat.
+
+    The re-heat (`ENTROPY_REHEAT_S`, default 10 s) brings the GPU back to its
+    sustained state after a benchmark that barely loaded it.
+    """
+    warm_up(float(os.environ.get("ENTROPY_REHEAT_S", REHEAT_S)), device=DEVICE)
