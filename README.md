@@ -22,7 +22,7 @@ uv run entropy-shortcut     # once: put an ENTROPY shortcut on the desktop
 | Action | Keys (set in `content/settings.toml`) |
 | --- | --- |
 | Look around | click in the window, then move the mouse; Esc gives the mouse back |
-| Fly | Z Q S D on an AZERTY keyboard (W A S D on QWERTY) |
+| Fly | Z Q S D, set for an AZERTY keyboard; on QWERTY write W A S D in `[controls]` |
 | Up, down | Space, Ctrl |
 | Performance HUD | F3 |
 | Quit | close the window |

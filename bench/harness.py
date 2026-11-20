@@ -15,7 +15,7 @@ import platform
 import subprocess
 import sys
 import time
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from enum import StrEnum
@@ -288,21 +288,6 @@ def read_gpu_telemetry(query: Callable[[], str] = _query_nvidia_smi) -> dict[str
         return parse_nvidia_smi(lines[0]) if lines else None
     except (OSError, subprocess.SubprocessError, ValueError):
         return None
-
-
-def dram_peak_gb_per_s(
-    readings: Iterable[Mapping[str, Any] | None], *, bus_width_bits: int
-) -> float | None:
-    """Theoretical DRAM bandwidth in GB/s at the fastest memory clock among `readings`.
-
-    GDDR6 transfers two words per reported memory clock on each pin. The clock
-    can drop between readings, so the fastest one bounds what a measurement
-    could reach. None if no reading has a memory clock.
-    """
-    clocks_mhz = [r["memory_clock_mhz"] for r in readings if r and r.get("memory_clock_mhz")]
-    if not clocks_mhz:
-        return None
-    return 2 * max(clocks_mhz) * 1e6 * bus_width_bits / 8 / 1e9
 
 
 def time_device(

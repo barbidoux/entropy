@@ -21,7 +21,6 @@ from bench.harness import (
     Conditions,
     PowerMode,
     PowerState,
-    dram_peak_gb_per_s,
     parse_nvidia_smi,
     power_mode_from_guids,
     read_gpu_telemetry,
@@ -292,21 +291,3 @@ def test_cuda_event_timing_scales_with_the_work() -> None:
 @pytest.mark.gpu
 def test_warm_up_on_cuda_lasts_at_least_the_requested_time() -> None:
     assert warm_up(1.0, device="cuda:0") >= 1.0
-
-
-def test_dram_peak_from_the_memory_clock() -> None:
-    """GDDR6 moves two words per reported clock on each pin: 9001 MHz x 256 bits = 576 GB/s."""
-    assert dram_peak_gb_per_s([{"memory_clock_mhz": 9001.0}], bus_width_bits=256) == (
-        pytest.approx(576.064)
-    )
-
-
-def test_dram_peak_takes_the_fastest_clock_seen() -> None:
-    """The clock may drop between readings; a result above the fastest one is impossible."""
-    readings = [{"memory_clock_mhz": 8001.0}, None, {"memory_clock_mhz": 9001.0}, {}]
-
-    assert dram_peak_gb_per_s(readings, bus_width_bits=256) == pytest.approx(576.064)
-
-
-def test_no_dram_peak_without_a_memory_clock() -> None:
-    assert dram_peak_gb_per_s([None, {"memory_clock_mhz": None}], bus_width_bits=256) is None

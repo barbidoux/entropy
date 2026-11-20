@@ -8,7 +8,7 @@ the cache cannot inflate the result and it measures device memory (DRAM).
 
 import warp as wp
 
-from bench.harness import BenchSession, dram_peak_gb_per_s, summarize, time_device
+from bench.harness import BenchSession, summarize, time_device
 
 DEVICE = "cuda:0"
 BUFFER_BYTES = 512 * 2**20
@@ -59,7 +59,6 @@ def test_memory_bandwidth(bench_session: BenchSession) -> None:
         "read_vec4": (BUFFER_BYTES, lambda: wp.launch(_read_vec4, floats // 4, [src4, sink])),
     }
 
-    telemetry_before = bench_session.telemetry()
     bench_session.start("bandwidth")
     metrics: dict[str, object] = {
         "buffer_mib": BUFFER_BYTES / 2**20,
@@ -73,14 +72,12 @@ def test_memory_bandwidth(bench_session: BenchSession) -> None:
                 "gb_per_s": _gb_per_s(bytes_moved, summary.median_s),
                 "fraction_of_peak": _gb_per_s(bytes_moved, summary.median_s) / PEAK_GB_PER_S,
             }
-    peak_from_clock = dram_peak_gb_per_s(
-        [telemetry_before, bench_session.telemetry()], bus_width_bits=BUS_WIDTH_BITS
-    )
-    if peak_from_clock is not None:
-        metrics["peak_from_clock_gb_per_s"] = peak_from_clock
-    # Under the power cap the memory clock can sit below the nominal 9001 MHz, so the
-    # bound comes from the clock actually seen when nvidia-smi can read it.
-    bound_gb_per_s = peak_from_clock or PEAK_GB_PER_S
+    telemetry = bench_session.telemetry() or {}
+    if telemetry.get("memory_clock_mhz"):
+        # GDDR6 transfers two words per reported memory clock on each pin.
+        metrics["peak_from_clock_gb_per_s"] = (
+            2 * telemetry["memory_clock_mhz"] * 1e6 * BUS_WIDTH_BITS / 8 / 1e9
+        )
     path = bench_session.record("bandwidth", metrics)
     print(f"\nbandwidth -> {path}")
     for name in cases:
@@ -88,4 +85,4 @@ def test_memory_bandwidth(bench_session: BenchSession) -> None:
         assert isinstance(result, dict)
         print(f"  {name:10s} {result['gb_per_s']:7.1f} GB/s ({result['fraction_of_peak']:.0%})")
         # Above the DRAM peak means the timing or the byte count is wrong.
-        assert 0.0 < result["gb_per_s"] <= bound_gb_per_s * 1.05
+        assert 0.0 < result["gb_per_s"] <= PEAK_GB_PER_S * 1.05

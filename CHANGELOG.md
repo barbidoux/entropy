@@ -84,12 +84,20 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   1/30 s, frame rate capped at 60 fps (SPEC 13, SPEC 5.9); SPEC 4.6 and US-03 reworded:
   slow motion matches normal speed within a tolerance, not bit for bit.
 - Benchmarks re-heat the GPU for 10 s before each run and read a non-zero buffer.
-- M0 physics audit applied: ADR 0013 (one shared advance per frame computed before any
-  solver, CFL substeps of liquid and gas capped at 4, XPBD substeps of at most 1/480 s,
-  sources by accumulated volume); SPEC 3 costs per substep times substeps (water 2 m/s
-  needs 2, a furniture fire plume at about 7 m/s needs 4 in 7.5 cm cells, McCaffrey 1979),
-  shallow water costed per frame, estimates labelled; SPEC 4.6 and US-03: slow motion is
-  slightly more dissipative and compared on integral quantities; benchmark report states
-  the MGPCG assumptions (12–18 sweep equivalents per iteration). The bandwidth benchmark
-  bounds its results by the peak of the memory clock actually seen. M1 issues #34–#36.
+- M0 physics audit applied:
+  - ADR 0013: the CPU fixes one shared advance per frame from the previous frame's
+    maximum speeds, before any solver steps. Liquid and gas CFL substeps are capped at 4
+    with explicit formulas, including liquid gravity. XPBD substeps are at most 1/480 s.
+    Sources emit by accumulated volume. The ADR states the expected slowdown for fast
+    jets and a measurable falsifier.
+  - SPEC 3: costs are per substep times substeps. Water at 2 m/s needs 2 substeps. A
+    0.5–1 MW fire plume at 6.7–7.7 m/s needs 3–4 in 7.5 cm cells (McCaffrey 1979). The
+    liquid solve is 4.6–12.7 ms per substep, including variational weights. Shallow water
+    is costed per frame (Kurganov & Petrova CFL), and estimates are labelled.
+  - SPEC 4.6 and US-03: slow motion is slightly more dissipative and must meet V-LIQ-02
+    and V-LIQ-03 at both speeds.
+  - SPEC 6: couplings are exchanged once per advance.
+  - The benchmark report states the MGPCG assumptions (12–18 sweep equivalents per
+    iteration).
+  - M1 issues #34–#36.
 - README: how to play M0.
