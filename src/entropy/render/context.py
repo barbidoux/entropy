@@ -9,6 +9,7 @@ terminates GLFW when the window closes.
 from __future__ import annotations
 
 import logging
+import warnings
 from types import TracebackType
 from typing import Any
 
@@ -33,12 +34,19 @@ class GameWindow:
         glfw.window_hint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
         glfw.window_hint(glfw.OPENGL_FORWARD_COMPAT, True)
         glfw.window_hint(glfw.VISIBLE, visible)
-        handle = glfw.create_window(
-            settings.width_px, settings.height_px, settings.title, None, None
-        )
+        with warnings.catch_warnings(record=True) as glfw_errors:
+            warnings.simplefilter("always", glfw.GLFWError)
+            handle = glfw.create_window(
+                settings.width_px, settings.height_px, settings.title, None, None
+            )
         if not handle:
             glfw.terminate()
-            raise RuntimeError(f"no OpenGL {major}.{minor} core context on this machine")
+            reasons = "; ".join(str(error.message) for error in glfw_errors) or "no details"
+            raise RuntimeError(
+                f"no OpenGL {major}.{minor} core context on this machine (GLFW: {reasons})"
+            )
+        for error in glfw_errors:
+            _log.warning("GLFW: %s", error.message)
         self._handle = handle
         glfw.make_context_current(handle)
         glfw.swap_interval(1 if settings.vsync else 0)

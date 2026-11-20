@@ -71,3 +71,9 @@ def test_settings_are_immutable() -> None:
 
 def test_shipped_settings_file_loads() -> None:
     assert isinstance(load_settings(default_settings_path()), Settings)
+
+
+def test_the_game_asks_for_opengl_4_6() -> None:
+    """SPEC 7.1; tests may ask for less (ADR 0009), the game does not."""
+    assert load_settings(default_settings_path()).window.gl_version == (4, 6)
+    assert WindowSettings().gl_version == (4, 6)

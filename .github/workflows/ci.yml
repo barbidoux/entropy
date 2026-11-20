@@ -9,6 +9,9 @@ jobs:
   cpu:
     name: CPU suite, lint and types
     runs-on: ubuntu-latest
+    env:
+      # Mesa's software renderer offers OpenGL 4.5, not the game's 4.6 (ADR 0009).
+      ENTROPY_TEST_GL_VERSION: "4.5"
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
@@ -24,7 +27,7 @@ jobs:
         run: >-
           xvfb-run -a uv run python -c "from entropy.core.config import WindowSettings;
           from entropy.render.context import GameWindow;
-          w = GameWindow(WindowSettings(), visible=False); i = w.ctx.info;
+          w = GameWindow(WindowSettings(gl_version=(4, 5)), visible=False); i = w.ctx.info;
           print(i['GL_VERSION'], '|', i['GL_RENDERER']); w.close()"
       - name: Tests
         run: xvfb-run -a uv run coverage run -m pytest
