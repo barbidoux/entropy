@@ -11,7 +11,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (`entropy.render.context`); settings as immutable dataclasses loaded from
   `content/settings.toml` (`entropy.core.config`). CI runs the `render` tests headless
   with Mesa software OpenGL 4.5 under Xvfb (#15); ADR 0009 records why 4.5 in CI and
-  GLSL 4.50 shaders.
+  GLSL 4.50 shaders. ADR 0004 records the rendering stack.
 - `entropy.linalg.jacobi` (#6): weighted Jacobi sweep for the 7-point Poisson stencil
   with zero values outside the grid, tested against NumPy and the exact discrete
   solution of a manufactured problem on CPU and CUDA. Each thread marches 8 cells along

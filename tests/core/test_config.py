@@ -77,3 +77,38 @@ def test_the_game_asks_for_opengl_4_6() -> None:
     """SPEC 7.1; tests may ask for less (ADR 0009), the game does not."""
     assert load_settings(default_settings_path()).window.gl_version == (4, 6)
     assert WindowSettings().gl_version == (4, 6)
+
+
+def test_a_value_where_a_table_belongs_is_an_error(tmp_path: Path) -> None:
+    with pytest.raises(TypeError, match=r"^setting window must be a table"):
+        load_settings(_write(tmp_path, 'window = "big"\n'))
+
+
+def test_a_bool_is_not_an_int(tmp_path: Path) -> None:
+    with pytest.raises(TypeError, match=r"window\.width_px must be int, not bool"):
+        load_settings(_write(tmp_path, "[window]\nwidth_px = true\n"))
+
+
+def test_toml_syntax_errors_name_the_file(tmp_path: Path) -> None:
+    path = _write(tmp_path, "[window\n")
+
+    with pytest.raises(ValueError, match=r"settings\.toml"):
+        load_settings(path)
+
+
+@pytest.mark.parametrize(
+    ("section", "text"),
+    [
+        ("window", "width_px = 0"),
+        ("window", "height_px = -1"),
+        ("window", "gl_version = [3, 1]"),
+        ("camera", "near_m = 0.0"),
+        ("camera", "far_m = 0.01"),
+        ("camera", "fov_y_deg = 180.0"),
+        ("camera", "fov_y_deg = nan"),
+        ("camera", "speed_m_per_s = -1.0"),
+    ],
+)
+def test_impossible_values_are_errors(tmp_path: Path, section: str, text: str) -> None:
+    with pytest.raises(ValueError, match=text.split()[0]):
+        load_settings(_write(tmp_path, f"[{section}]\n{text}\n"))

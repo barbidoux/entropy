@@ -1,12 +1,18 @@
 """Settings: immutable dataclasses loaded from TOML (CLAUDE.md rule 6).
 
 Each TOML table maps to one dataclass field of `Settings`; missing keys keep
-their defaults, unknown keys and wrong types are errors that name the key.
+their defaults, unknown keys, wrong types and impossible values are errors
+that name the key. The defaults below are the reference; `content/settings.toml`
+repeats them so Matt can see and change them.
+
+The loader handles scalars, nested tables and fixed-length tuples, which is
+all the settings use; other field types would need loader support first.
 """
 
 from __future__ import annotations
 
 import dataclasses
+import math
 import tomllib
 import typing
 from dataclasses import dataclass, field
@@ -26,6 +32,11 @@ class WindowSettings:
     vsync: bool = True
     gl_version: tuple[int, int] = (4, 6)
 
+    def __post_init__(self) -> None:
+        _require(self.width_px > 0, "width_px must be positive")
+        _require(self.height_px > 0, "height_px must be positive")
+        _require(self.gl_version >= (3, 2), "gl_version must be 3.2 or later (core profile)")
+
 
 @dataclass(frozen=True)
 class CameraSettings:
@@ -40,11 +51,28 @@ class CameraSettings:
     start_yaw_deg: float = 50.0
     start_pitch_deg: float = -15.0
 
+    def __post_init__(self) -> None:
+        _require(0.0 < self.fov_y_deg < 180.0, "fov_y_deg must be between 0 and 180")
+        _require(0.0 < self.near_m < self.far_m, "near_m and far_m need 0 < near_m < far_m")
+        _require(math.isfinite(self.far_m), "far_m must be finite")
+        _require(0.0 < self.speed_m_per_s < math.inf, "speed_m_per_s must be positive")
+        _require(
+            0.0 <= self.mouse_rad_per_px < math.inf, "mouse_rad_per_px must be zero or positive"
+        )
+
 
 @dataclass(frozen=True)
 class Settings:
+    """Everything `content/settings.toml` can set, one table per section."""
+
     window: WindowSettings = field(default_factory=WindowSettings)
     camera: CameraSettings = field(default_factory=CameraSettings)
+
+
+def _require(condition: bool, message: str) -> None:
+    # Comparisons with NaN are false, so NaN fails every range check here.
+    if not condition:
+        raise ValueError(message)
 
 
 def default_settings_path() -> Path:
@@ -54,9 +82,12 @@ def default_settings_path() -> Path:
 
 def load_settings(path: Path) -> Settings:
     """Read `path` and return the settings it describes over the defaults."""
-    with path.open("rb") as file:
-        data = tomllib.load(file)
-    return _build(Settings, data, prefix="")
+    try:
+        with path.open("rb") as file:
+            data = tomllib.load(file)
+        return _build(Settings, data, prefix="")
+    except tomllib.TOMLDecodeError as error:
+        raise ValueError(f"{path}: {error}") from error
 
 
 def _build[T](cls: type[T], data: dict[str, Any], prefix: str) -> T:
@@ -87,7 +118,7 @@ def _convert(value: Any, hint: Any, key: str) -> Any:
     if hint is float and isinstance(value, int) and not isinstance(value, bool):
         return float(value)
     if hint is int and isinstance(value, bool):
-        raise TypeError(f"setting {key} must be {hint.__name__}")
+        raise TypeError(f"setting {key} must be int, not bool")
     if not isinstance(value, hint):
         raise TypeError(f"setting {key} must be {hint.__name__}, not {type(value).__name__}")
     return value

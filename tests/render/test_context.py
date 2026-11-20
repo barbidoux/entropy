@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 
 from entropy.core.config import WindowSettings
+from entropy.render import context
 from entropy.render.context import GameWindow
 
 pytestmark = pytest.mark.render
@@ -73,6 +74,64 @@ def test_an_impossible_gl_version_is_one_clear_error(window_settings: WindowSett
     """GLFW's own diagnosis goes into the error instead of a stray warning."""
     with pytest.raises(RuntimeError, match=r"no OpenGL 9\.9 core context.*\(GLFW: .+\)"):
         GameWindow(dataclasses.replace(window_settings, gl_version=(9, 9)), visible=False)
+
+
+def _glfw_is_terminated() -> bool:
+    """GLFW reports 'not initialized' for any call after `glfw.terminate()`."""
+    with pytest.warns(glfw.GLFWError) as record:
+        glfw.get_current_context()
+    return any("not initialized" in str(w.message).lower() for w in record)
+
+
+def test_closing_terminates_glfw(window_settings: WindowSettings) -> None:
+    GameWindow(window_settings, visible=False).close()
+
+    assert _glfw_is_terminated()
+
+
+def test_a_failed_window_leaves_nothing_behind(window_settings: WindowSettings) -> None:
+    with pytest.raises(RuntimeError):
+        GameWindow(dataclasses.replace(window_settings, gl_version=(9, 9)), visible=False)
+
+    assert _glfw_is_terminated()
+
+
+def test_a_failure_after_the_window_exists_cleans_up(
+    window_settings: WindowSettings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def broken(**kwargs: object) -> None:
+        raise RuntimeError("context creation failed")
+
+    monkeypatch.setattr(context.moderngl, "create_context", broken)
+
+    with pytest.raises(RuntimeError, match="context creation failed"):
+        GameWindow(window_settings, visible=False)
+    assert _glfw_is_terminated()
+
+
+def test_a_second_window_at_the_same_time_is_refused(window_settings: WindowSettings) -> None:
+    """GLFW is process-wide: closing one window would terminate it under the other."""
+    with GameWindow(window_settings, visible=False) as first:
+        with pytest.raises(RuntimeError, match="one game window"):
+            GameWindow(window_settings, visible=False)
+
+        assert first.framebuffer_size_px() == (window_settings.width_px, window_settings.height_px)
+
+
+def test_the_context_is_unusable_after_close(window_settings: WindowSettings) -> None:
+    window = GameWindow(window_settings, visible=False)
+    window.close()
+
+    with pytest.raises(RuntimeError, match="closed"):
+        _ = window.ctx
+
+
+def test_raw_mouse_motion_when_captured(window_settings: WindowSettings) -> None:
+    with GameWindow(window_settings, visible=False) as window:
+        window.set_mouse_captured(True)
+
+        if glfw.raw_mouse_motion_supported():
+            assert glfw.get_input_mode(window.handle, glfw.RAW_MOUSE_MOTION) == 1
 
 
 def test_no_display_is_a_clear_error(

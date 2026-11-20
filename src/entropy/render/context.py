@@ -1,9 +1,10 @@
-"""The game window and its OpenGL core context (SPEC 7.1, ADR 0004).
+"""The game window and its OpenGL core context (SPEC 7.1, ADR 0004, ADR 0009).
 
 GLFW opens a native Windows window with an OpenGL core context of the version
-in the settings (4.6 by default); moderngl wraps that context. ENTROPY uses a
-single window, so this class also owns GLFW's process-wide initialisation and
-terminates GLFW when the window closes.
+in the settings (4.6 by default); moderngl wraps that context. GLFW's state is
+process-wide, and ENTROPY has one window, so this class owns GLFW's
+initialisation, terminates GLFW when the window closes, and refuses to open a
+second window while one is open.
 """
 
 from __future__ import annotations
@@ -27,6 +28,9 @@ class GameWindow:
     def __init__(self, settings: WindowSettings, *, visible: bool = True) -> None:
         if not glfw.init():
             raise RuntimeError("GLFW could not start: no display or no OpenGL driver")
+        if glfw.get_current_context():
+            # Another GameWindow is open; terminating GLFW here would close it.
+            raise RuntimeError("only one game window can be open at a time")
         major, minor = settings.gl_version
         glfw.default_window_hints()
         glfw.window_hint(glfw.CONTEXT_VERSION_MAJOR, major)
@@ -48,16 +52,30 @@ class GameWindow:
         for error in glfw_errors:
             _log.warning("GLFW: %s", error.message)
         self._handle = handle
-        glfw.make_context_current(handle)
-        glfw.swap_interval(1 if settings.vsync else 0)
-        self.ctx = moderngl.create_context(require=major * 100 + minor * 10)
-        info = self.ctx.info
+        try:
+            glfw.make_context_current(handle)
+            glfw.swap_interval(1 if settings.vsync else 0)
+            self._ctx: moderngl.Context = moderngl.create_context(require=major * 100 + minor * 10)
+        except BaseException:
+            glfw.make_context_current(None)  # pyright: ignore[reportArgumentType] (detach)
+            glfw.destroy_window(handle)
+            self._handle = None
+            glfw.terminate()
+            raise
+        info = self._ctx.info
         _log.info(
             "OpenGL %s on %s (%s)",
             info["GL_VERSION"],
             info["GL_RENDERER"],
             info["GL_VENDOR"],
         )
+
+    @property
+    def ctx(self) -> moderngl.Context:
+        """The moderngl context; unusable once the window is closed."""
+        if self._handle is None:
+            raise RuntimeError("the window is closed")
+        return self._ctx
 
     @property
     def handle(self) -> Any:  # GLFW's ctypes window pointer
@@ -94,7 +112,8 @@ class GameWindow:
         """Release the context and the window, then GLFW. Safe to call twice."""
         if self._handle is None:
             return
-        self.ctx.release()
+        self._ctx.release()
+        glfw.make_context_current(None)  # pyright: ignore[reportArgumentType] (detach)
         glfw.destroy_window(self._handle)
         self._handle = None
         glfw.terminate()
