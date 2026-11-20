@@ -3,12 +3,13 @@
 A kernel writes 1 million positions (vec3, 12 MB) into an OpenGL buffer, either
 through CUDA-OpenGL interop (map, write, unmap) or through a host copy (write a
 Warp array, copy it to host memory, upload it). The time is wall time per
-frame on the Python thread, from the start of the write until the GPU has
-finished it, since both paths synchronize anyway (unmap, or the copy to host).
+frame on the Python thread, from the start of the write until both CUDA and
+OpenGL have finished it (`wp.synchronize_device` and `ctx.finish`).
 """
 
 import time
 
+import moderngl
 import warp as wp
 
 from bench.harness import BenchSession, summarize
@@ -28,7 +29,7 @@ def _positions(points: wp.array(dtype=wp.vec3), t: float):
     points[i] = wp.vec3(wp.sin(x + t), wp.cos(x + t), x)
 
 
-def _frame_seconds(shared: SharedBuffer) -> list[float]:
+def _frame_seconds(shared: SharedBuffer, ctx: moderngl.Context) -> list[float]:
     samples = []
     for frame in range(REPEATS + 3):
         wp.synchronize_device(DEVICE)
@@ -36,6 +37,7 @@ def _frame_seconds(shared: SharedBuffer) -> list[float]:
         with shared.writable() as points:
             wp.launch(_positions, dim=PARTICLES, inputs=[points, float(frame)], device=DEVICE)
         wp.synchronize_device(DEVICE)
+        ctx.finish()
         if frame >= 3:  # the first frames load the kernel and map the buffer
             samples.append(time.perf_counter() - begin)
     return samples
@@ -49,8 +51,8 @@ def test_interop_cost_for_a_million_particles(bench_session: BenchSession) -> No
         assert zero_copy.mode is InteropMode.ZERO_COPY, zero_copy.fallback_reason
 
         bench_session.start("interop")
-        zero = summarize(_frame_seconds(zero_copy))
-        host = summarize(_frame_seconds(host_copy))
+        zero = summarize(_frame_seconds(zero_copy, window.ctx))
+        host = summarize(_frame_seconds(host_copy, window.ctx))
         zero_copy.release()
         host_copy.release()
 
