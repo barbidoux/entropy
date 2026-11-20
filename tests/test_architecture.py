@@ -15,7 +15,7 @@ the coupling layer):
   Every module of `solvers` other than `interface` counts as a solver, so code
   shared by solvers goes to `fields`, `linalg` or the interface.
 - The interface names no solver. The package root imports the interface only, to
-  re-export it, so no solver can be written there.
+  re-export it, so a solver written there cannot use `fields`, `linalg` or `core`.
 - `coupling` may import the interface and the package root only (SPEC 8.1:
   solver interfaces only).
 Other packages see `solvers` as one package.
@@ -24,8 +24,8 @@ Known limits, checked by review instead:
 - Imports are read statically; `importlib.import_module` and attribute access
   through an imported `entropy` are not seen.
 - "Read-only" in the `render`, `ui` and `audio` rows is about writes, not imports.
-- Code written in `solvers/interface.py` itself is not checked: review keeps it
-  to the interface.
+- Code written in `solvers/interface.py`, or in `solvers/__init__.py` without
+  importing an `entropy` package, is not seen: review keeps both to the interface.
 """
 
 import ast
@@ -221,7 +221,7 @@ def test_the_interface_and_the_package_root_name_no_solver() -> None:
 
 
 def test_the_package_root_imports_only_the_interface() -> None:
-    """A solver written in `solvers/__init__.py` would need `fields` or `linalg`: caught."""
+    """A solver written in `solvers/__init__.py` with `fields` or `linalg` is caught."""
     imports = {"solvers": {"solvers.interface", "linalg", "fields"}}
 
     assert violations(imports, ALLOWED) == [("solvers", "fields"), ("solvers", "linalg")]
