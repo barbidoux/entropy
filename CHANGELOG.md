@@ -7,6 +7,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Game loop (#11): `entropy.sim.loop.FrameLoop` runs input, logic (real time, capped at
+  0.1 s after stalls), one simulation advance per frame (frame time × time scale,
+  clamped to 1/30 s, slowdown reported) and rendering, with a 60 fps cap paced against a
+  deadline (ADR 0008); `entropy.core.profiler` keeps rolling frame and stage statistics,
+  the effective world speed and GPU memory for the HUD. ADR 0010: the loop skeleton
+  lives in `sim` behind a stages protocol.
 - Free camera (#12): God mode flight in the Z-up frame (`entropy.game.free_camera`),
   keys and mouse mapped to actions per SPEC 4.5 (`entropy.game.input`), view and
   projection matrices (`entropy.render.camera`).
