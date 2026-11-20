@@ -43,7 +43,14 @@ line-length = 100
 target-version = "py312"
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "B", "UP", "N", "SIM", "RUF"]
+select = ["E", "F", "W", "I", "B", "UP", "N", "SIM", "RUF", "ICN"]
+
+[tool.ruff.lint.flake8-import-conventions]
+# `import warp as wp` everywhere: the coverage exclusion of kernels relies on `@wp.`.
+banned-from = ["warp"]
+
+[tool.ruff.lint.flake8-import-conventions.extend-aliases]
+warp = "wp"
 
 [tool.pyright]
 include = ["src", "tests"]
@@ -59,9 +66,10 @@ source = ["entropy"]
 branch = true
 
 [tool.coverage.report]
-# SPEC 9.3: at least 90 % of Python orchestration lines. Warp kernels and functions
-# are compiled, so line coverage cannot see inside them; each kernel module has its
-# own behavioural tests instead.
+# SPEC 9.3: at least 90 % of Python orchestration lines. Branch coverage is on, so the
+# floor applies to lines and branches together, which is stricter. Warp kernels and
+# functions are compiled, so line coverage cannot see inside them; each kernel module
+# has its own behavioural tests instead.
 fail_under = 90
 show_missing = true
 exclude_also = ["@wp\\.kernel", "@wp\\.func"]

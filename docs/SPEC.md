@@ -1,6 +1,6 @@
 # ENTROPY — Engine & Game Specification
 
-> Living document: https://claude.ai/artifact/RK3rxXqXVz6rBX78kGedLc — this file is its versioned mirror, exported 2026-11-20. When the two differ, the living document wins until the next export.
+> Living document: https://claude.ai/artifact/RK3rxXqXVz6rBX78kGedLc — exported here on 2026-11-20. Since then this file is the reference: the maintainer edits it through pull requests, and Matt brings changes made in the living document here.
 
 ## 1. Vision & pillars
 
@@ -436,7 +436,7 @@ Arrows show the data flow within one frame. The renderer, interface and exporter
 
 ### 8.1 Module responsibilities
 
-Dependencies point downward only, and a test enforces the import rules.
+Dependencies point downward only, and a test enforces the import rules. "May depend on" is transitive: a module may also use what its dependencies may use (ADR 0005).
 
 | Module | Responsibility | May depend on |
 | --- | --- | --- |
@@ -452,6 +452,8 @@ Dependencies point downward only, and a test enforces the import rules.
 | `render` | OpenGL context, interop buffers, passes, camera | `sim`, read-only |
 | `ui` | Dear ImGui panels, HUD | `game`, `sim`, read-only |
 | `io` | Save, load, export | `sim`, `world` |
+| `audio` | Sound events (M9) | `sim`, read-only |
+| `app` | Composition root: window, main loop, wiring of game, renderer and interface; no logic of its own | everything; nothing depends on it |
 
 ### 8.2 Extension points
 
@@ -601,6 +603,7 @@ entropy/
     ui/          Dear ImGui panels, HUD
     io/          save, export (PLY, OpenVDB, JSON)
     audio/       sound events (M9)
+    app/         composition root: window, main loop, wiring
   content/       materials, prefabs, tools, maps (TOML, JSON)
   tests/         unit, property, validation, golden, render, gameplay, perf
   bench/         benchmark scenarios

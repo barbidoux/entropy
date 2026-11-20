@@ -27,10 +27,10 @@ def harness(pytester: pytest.Pytester) -> pytest.Pytester:
 
 
 def test_device_fixture_runs_on_cpu_in_the_default_suite(harness: pytest.Pytester) -> None:
-    result = harness.runpytest("-m", "not gpu")
+    result = harness.runpytest("-m", "not gpu", "-v")
 
     result.assert_outcomes(passed=1, deselected=1)
-    result.stdout.no_fnmatch_line("*test_runs_on?cuda*PASSED*")
+    result.stdout.fnmatch_lines(["*test_runs_on?cpu?*PASSED*"])
 
 
 def test_device_fixture_adds_a_cuda_case_marked_gpu(harness: pytest.Pytester) -> None:
