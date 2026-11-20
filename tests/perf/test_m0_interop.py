@@ -45,16 +45,18 @@ def _frame_seconds(shared: SharedBuffer, ctx: moderngl.Context) -> list[float]:
 
 def test_interop_cost_for_a_million_particles(bench_session: BenchSession) -> None:
     settings = WindowSettings(width_px=64, height_px=64, vsync=False)
-    with GameWindow(settings, visible=False) as window:
-        zero_copy = SharedBuffer(window.ctx, PARTICLES, wp.vec3, DEVICE)
-        host_copy = SharedBuffer(window.ctx, PARTICLES, wp.vec3, DEVICE, mode=InteropMode.HOST_COPY)
+    with (
+        GameWindow(settings, visible=False) as window,
+        SharedBuffer(window.ctx, PARTICLES, wp.vec3, DEVICE) as zero_copy,
+        SharedBuffer(
+            window.ctx, PARTICLES, wp.vec3, DEVICE, mode=InteropMode.HOST_COPY
+        ) as host_copy,
+    ):
         assert zero_copy.mode is InteropMode.ZERO_COPY, zero_copy.fallback_reason
 
         bench_session.start("interop")
         zero = summarize(_frame_seconds(zero_copy, window.ctx))
         host = summarize(_frame_seconds(host_copy, window.ctx))
-        zero_copy.release()
-        host_copy.release()
 
     metrics = {
         "particles": PARTICLES,

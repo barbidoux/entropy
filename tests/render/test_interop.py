@@ -45,6 +45,7 @@ def _write_and_read(shared: SharedBuffer) -> np.ndarray:
 
 def _refuse_native_registration(monkeypatch: pytest.MonkeyPatch) -> None:
     """Make CUDA refuse to register OpenGL buffers, at Warp's native boundary."""
+    wp.init()  # the native runtime exists only once Warp is initialised
     monkeypatch.setattr(
         warp_context.runtime.core, "wp_cuda_graphics_register_gl_buffer", lambda *args: None
     )
@@ -76,6 +77,15 @@ def test_zero_copy_cannot_be_forced_on_cpu(window: GameWindow) -> None:
 def test_buffer_size_matches_count_and_type(window: GameWindow) -> None:
     with SharedBuffer(window.ctx, COUNT, wp.vec3, device="cpu") as shared:
         assert shared.buffer.size == COUNT * 12
+
+
+def test_a_requested_host_copy_says_so_and_release_is_idempotent(window: GameWindow) -> None:
+    shared = SharedBuffer(window.ctx, COUNT, wp.vec3, device="cpu", mode=InteropMode.HOST_COPY)
+
+    assert shared.fallback_reason == "host copy requested"
+    np.testing.assert_array_equal(_write_and_read(shared), _expected())
+    shared.release()
+    shared.release()
 
 
 @pytest.mark.gpu
