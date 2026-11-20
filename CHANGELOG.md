@@ -13,7 +13,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
     measurement (0.23 ms zero-copy against 6.7 ms through host memory for 1 M
     particles);
   - a 10-minute soak at 60 fps with no memory growth.
-  Nothing changes in SPEC 3. Only Matt's play session remains.
+  The budgets hold. SPEC 3's sustained-state line is widened (82–93 °C, 110–122 W, SM
+  1.05–2.3 GHz, memory 7001–9001 MHz). The optimistic ends of the gas and liquid
+  estimates use the slower L2 rate (15.2 ps). Matt's play session remains for the
+  gate, and the Dell thermal profile stays open.
 - The game (#16): `uv run entropy` (or `python -m entropy`) opens the window and runs
   the M0 scene with free flight (click to look, Esc to release), the F3 HUD and a
   200,000-point interop test pattern written by Warp each frame (not physics; it follows
