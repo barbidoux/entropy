@@ -8,8 +8,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 - `entropy.linalg.jacobi` (#6): weighted Jacobi sweep for the 7-point Poisson stencil
-  with zero values outside the grid, tested against NumPy and a manufactured solution
-  on CPU and CUDA. Measured by the M0 stencil benchmark; the M1 multigrid smoother.
+  with zero values outside the grid, tested against NumPy and the exact discrete
+  solution of a manufactured problem on CPU and CUDA. Each thread marches 8 cells along
+  i to reuse neighbours from registers. Inputs are checked (shape, device, aliasing).
+  Measured by the M0 stencil benchmark; the M1 multigrid smoother.
 - Benchmark harness (#4): `bench/harness.py` and the `-m perf` session fixture. Checks
   mains power, energy saver and the Windows power mode around every benchmark, warms
   the GPU up for 5 minutes, times work with CUDA events, and writes JSON results with
