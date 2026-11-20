@@ -47,8 +47,8 @@ class CameraSettings:
     far_m: float = 1000.0
     speed_m_per_s: float = 5.0
     mouse_rad_per_px: float = 0.0025
-    start_position_m: tuple[float, float, float] = (-8.0, -10.0, 4.0)
-    start_yaw_deg: float = 50.0
+    start_position_m: tuple[float, float, float] = (8.0, -9.0, 4.0)
+    start_yaw_deg: float = 130.0
     start_pitch_deg: float = -15.0
 
     def __post_init__(self) -> None:

@@ -6,6 +6,8 @@ column-major layout OpenGL expects. Clip space follows OpenGL: x right,
 y up, depth from -1 (near plane) to +1 (far plane).
 """
 
+from dataclasses import dataclass
+
 import numpy as np
 import numpy.typing as npt
 
@@ -48,6 +50,29 @@ def perspective(fov_y_rad: float, aspect: float, near_m: float, far_m: float) ->
     projection[2, 3] = 2.0 * far_m * near_m / (near_m - far_m)
     projection[3, 2] = -1.0
     return projection.astype(np.float32)
+
+
+@dataclass(frozen=True)
+class CameraView:
+    """What the renderer needs from the camera, in the Z-up world frame.
+
+    The game owns the camera and its controls (SPEC 8.1: render reads only);
+    it hands the renderer one of these per frame.
+    """
+
+    position_m: tuple[float, float, float]
+    forward: tuple[float, float, float]
+    fov_y_rad: float
+    near_m: float
+    far_m: float
+
+    def view(self) -> np.ndarray:
+        """World to camera space (float32 4x4)."""
+        return view_matrix(self.position_m, self.forward)
+
+    def projection(self, aspect: float) -> np.ndarray:
+        """Camera to clip space for a width/height `aspect` (float32 4x4)."""
+        return perspective(self.fov_y_rad, aspect, self.near_m, self.far_m)
 
 
 def gl_bytes(matrix: np.ndarray) -> bytes:
