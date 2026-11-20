@@ -19,7 +19,7 @@ def device(request: pytest.FixtureRequest) -> str:
     return request.param
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def window_settings() -> WindowSettings:
     """A small hidden-window setup for `render` tests.
 
