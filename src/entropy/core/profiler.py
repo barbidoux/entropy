@@ -25,7 +25,11 @@ class FrameSummary:
     frame_ms_worst: float
     stages_ms_mean: Mapping[str, float]
     world_speed: float = 0.0
-    """Simulated seconds per real second over the window (the effective time scale)."""
+    """Simulated seconds per real second over the window (the effective time scale).
+
+    It includes the chosen time scale: compare it with that scale to tell a slowdown
+    under load from slow motion. After a stall it reads low for one window.
+    """
 
 
 @dataclass(frozen=True)
