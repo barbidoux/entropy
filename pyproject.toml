@@ -12,6 +12,10 @@ dependencies = [
     "warp-lang>=1.19",
 ]
 
+[project.scripts]
+entropy = "entropy.app.main:main"
+entropy-shortcut = "entropy.app.shortcut:main"
+
 [dependency-groups]
 dev = [
     "coverage[toml]>=7.6",

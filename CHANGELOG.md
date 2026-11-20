@@ -7,6 +7,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- The game (#16): `uv run entropy` (or `python -m entropy`) opens the window and runs
+  the M0 scene with free flight, the F3 HUD and a 200,000-point interop test pattern
+  written by Warp each frame (not physics; it follows a formula in simulated time).
+  `uv run entropy-shortcut` puts an ENTROPY shortcut on the Windows desktop. God mode
+  (`entropy.game.god_mode`) wires input to the camera: click to look, Esc to release.
 - Performance HUD (#14): Dear ImGui overlay toggled with F3 (`entropy.ui.hud`) showing
   fps, mean and worst frame time, time per stage (CPU wall times), VRAM (device and
   ENTROPY's Warp pool), the interop path, the time scale or pause, and a highlighted line
