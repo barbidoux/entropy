@@ -7,6 +7,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- CUDA–OpenGL interop (#10): `entropy.render.interop.SharedBuffer` registers an OpenGL
+  buffer with CUDA and maps it as a Warp array, with no copy; on CPU or if registration
+  fails it copies through host memory and says why (Warp's own silent copy fallback is
+  disabled). Benchmark for 1 million particles. ADR 0004 accepted.
 - Game loop (#11): `entropy.sim.loop.FrameLoop` runs input, logic (real time, capped at
   0.1 s after stalls), one simulation advance per frame (frame time × time scale,
   clamped to 1/30 s, slowdown reported) and rendering, with a 60 fps cap paced against a

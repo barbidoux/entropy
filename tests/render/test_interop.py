@@ -30,8 +30,8 @@ def _expected() -> np.ndarray:
 
 
 @pytest.fixture(scope="module")
-def window() -> Iterator[GameWindow]:
-    with GameWindow(WindowSettings(width_px=64, height_px=64, vsync=False), visible=False) as w:
+def window(window_settings: WindowSettings) -> Iterator[GameWindow]:
+    with GameWindow(window_settings, visible=False) as w:
         yield w
 
 
