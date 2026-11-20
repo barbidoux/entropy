@@ -5,7 +5,13 @@ import sys
 import pytest
 import warp as wp
 
-from entropy.core.profiler import FrameStats, gpu_memory, host_memory_bytes
+from entropy.core.profiler import (
+    FrameStats,
+    StageTimer,
+    cuda_stage_timer,
+    gpu_memory,
+    host_memory_bytes,
+)
 
 
 def test_steady_sixty_hertz() -> None:
@@ -126,3 +132,145 @@ def test_gpu_memory_counts_warp_allocations() -> None:
     assert 0 < after.device_used_bytes < after.device_total_bytes
     assert after.device_total_bytes == wp.get_device("cuda:0").total_memory
     del block
+
+
+class FakeTimings:
+    """A GPU timing backend whose spans finish when the test says so."""
+
+    def __init__(self, duration_s: float, *, lag_frames: int = 0) -> None:
+        self.duration_s = duration_s
+        self.lag_frames = lag_frames
+        self.finished = False
+        self.begun = 0
+        self.ended = 0
+
+    def begin(self) -> int:
+        self.begun += 1
+        return self.begun
+
+    def end(self, token: int) -> None:
+        self.ended += 1
+
+    def ready(self, token: int, frames_ago: int) -> bool:
+        return self.finished and frames_ago >= self.lag_frames
+
+    def take_elapsed_s(self, token: int) -> float:
+        return self.duration_s
+
+
+def test_gpu_times_come_once_the_gpu_has_finished_the_frame() -> None:
+    timings = FakeTimings(0.002)
+    timer = StageTimer(timings)
+    with timer.stage("liquid"):
+        pass
+    timer.end_frame()
+
+    assert timer.collect() == []
+    timings.finished = True
+    assert timer.collect() == [{"liquid": pytest.approx(0.002)}]
+    assert timer.collect() == []
+
+
+def test_stages_of_the_same_name_add_up_within_a_frame() -> None:
+    """Substeps of one solver count as one stage."""
+    timings = FakeTimings(0.001)
+    timings.finished = True
+    timer = StageTimer(timings)
+    for _ in range(3):
+        with timer.stage("liquid"):
+            pass
+    timer.end_frame()
+
+    assert timer.collect() == [{"liquid": pytest.approx(0.003)}]
+
+
+def test_finished_frames_come_one_by_one_oldest_first() -> None:
+    timings = FakeTimings(0.001)
+    timer = StageTimer(timings)
+    with timer.stage("liquid"):
+        pass
+    timer.end_frame()
+    with timer.stage("gas"):
+        pass
+    timer.end_frame()
+    timings.finished = True
+
+    assert timer.collect() == [{"liquid": pytest.approx(0.001)}, {"gas": pytest.approx(0.001)}]
+
+
+def test_results_can_be_read_a_number_of_frames_later() -> None:
+    """OpenGL queries cannot say when they are ready, so they are read late."""
+    timings = FakeTimings(0.001, lag_frames=2)
+    timings.finished = True
+    timer = StageTimer(timings)
+    with timer.stage("scene"):
+        pass
+    timer.end_frame()
+    assert timer.collect() == []
+    timer.end_frame()
+    assert timer.collect() == []
+    timer.end_frame()
+
+    assert timer.collect() == [{"scene": pytest.approx(0.001)}]
+
+
+def test_a_stage_left_by_an_exception_is_still_closed() -> None:
+    timings = FakeTimings(0.001)
+    timer = StageTimer(timings)
+
+    with pytest.raises(RuntimeError), timer.stage("liquid"):
+        raise RuntimeError("solver failed")
+
+    assert timings.ended == 1
+
+
+def test_without_a_gpu_nothing_is_timed() -> None:
+    timer = StageTimer(None)
+    with timer.stage("liquid"):
+        pass
+    timer.end_frame()
+
+    assert timer.collect() == []
+
+
+def test_cuda_stage_timer_on_cpu_times_nothing() -> None:
+    timer = cuda_stage_timer("cpu")
+    with timer.stage("liquid"):
+        pass
+    timer.end_frame()
+
+    assert timer.collect() == []
+
+
+def test_gpu_times_are_averaged_per_stage() -> None:
+    stats = FrameStats(window=10)
+    stats.record(1 / 60, {})
+    stats.record_gpu({"liquid": 0.002, "scene": 0.001})
+    stats.record_gpu({"liquid": 0.004})
+
+    assert stats.summary().gpu_ms_mean == pytest.approx({"liquid": 3.0, "scene": 1.0})
+
+
+def test_gpu_times_leave_the_window_like_frames() -> None:
+    stats = FrameStats(window=2)
+    stats.record(1 / 60, {})
+    for liquid_s in (0.010, 0.001, 0.001):
+        stats.record_gpu({"liquid": liquid_s})
+
+    assert stats.summary().gpu_ms_mean == pytest.approx({"liquid": 1.0})
+
+
+@pytest.mark.gpu
+def test_cuda_events_time_a_kernel() -> None:
+    timer = cuda_stage_timer("cuda:0")
+    block = wp.zeros(64 * 2**20, dtype=float, device="cuda:0")
+    with timer.stage("fill"):
+        block.fill_(1.0)
+    timer.end_frame()
+    wp.synchronize_device("cuda:0")
+
+    (frame,) = timer.collect()
+
+    # 256 MiB written at no more than the 576 GB/s DRAM peak take at least 0.46 ms.
+    assert 0.00046 < frame["fill"] < 0.1
+
