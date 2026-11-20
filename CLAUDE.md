@@ -1,8 +1,9 @@
 # ENTROPY — maintainer guide
 
 This file is the operating manual for any Claude session working on this repository.
-Read it fully before changing anything. The specification is `docs/SPEC.md`; the living
-version is the Claude doc linked at its top.
+Read it fully before changing anything. The specification is `docs/SPEC.md`, the
+reference copy (ADR 0006). The Claude doc linked at its top is where it started; never
+re-export it over SPEC.md. Matt tells the maintainer when he changes it there.
 
 ## Who does what
 
@@ -11,7 +12,7 @@ version is the Claude doc linked at its top.
   to. Talk to him in French, informally ("tu"), in plain words, with a short note on what
   to try when there is something to play.
 - **Claude (main session)** is the maintainer: writes tests and code, runs the suites,
-  opens and merges pull requests, keeps the spec mirror, ADRs and changelog current.
+  opens and merges pull requests, keeps the spec, ADRs and changelog current.
 - **Independent reviewer**: a separate agent with a fresh context reviews every pull
   request against the spec and the tests before merge. The session that wrote a change
   never approves it. Findings are fixed or answered before merging.
@@ -70,7 +71,7 @@ uv run pyright
 
 ## Where things are
 
-- `docs/SPEC.md` — specification (mirror of the living doc).
+- `docs/SPEC.md` — specification, the reference copy (ADR 0006).
 - `docs/adr/` — architecture decision records, numbered, never edited once accepted.
 - `CHANGELOG.md` — one entry per merged change.
 - `src/entropy/` — the package; layout in SPEC 10.2.

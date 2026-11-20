@@ -1,6 +1,6 @@
 # ENTROPY — Engine & Game Specification
 
-> Living document: https://claude.ai/artifact/RK3rxXqXVz6rBX78kGedLc — exported here on 2026-11-20. Since then this file is the reference: the maintainer edits it through pull requests, and Matt brings changes made in the living document here.
+> Living document: https://claude.ai/artifact/RK3rxXqXVz6rBX78kGedLc — exported here on 2026-11-20. Since then this file is the reference (ADR 0006): it changes through pull requests, and changes Matt makes in the living document are brought here by the maintainer when he reports them.
 
 ## 1. Vision & pillars
 
@@ -436,7 +436,7 @@ Arrows show the data flow within one frame. The renderer, interface and exporter
 
 ### 8.1 Module responsibilities
 
-Dependencies point downward only, and a test enforces the import rules. "May depend on" is transitive: a module may also use what its dependencies may use (ADR 0005).
+Dependencies point downward only, and a test enforces the import rules. "May depend on" is transitive: a module may also use what its dependencies may use (ADR 0005). The package root `entropy/__init__.py` imports no module, and `app` together with `entropy/__main__.py` forms the composition root.
 
 | Module | Responsibility | May depend on |
 | --- | --- | --- |
