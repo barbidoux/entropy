@@ -5,6 +5,9 @@ description = "Real-time physics sandbox: water, fire, smoke, explosions and des
 readme = "README.md"
 requires-python = ">=3.12,<3.14"
 dependencies = [
+    "glfw>=2.11.0",
+    "imgui-bundle>=1.93.0",
+    "moderngl>=5.13.0",
     "numpy>=2.0",
     "warp-lang>=1.19",
 ]

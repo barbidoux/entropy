@@ -54,6 +54,8 @@ re-export it over SPEC.md. Matt tells the maintainer when he changes it there.
 ```bash
 uv sync                     # environment (Python 3.12)
 uv run pytest               # CPU suite (default markers exclude gpu, perf, soak)
+xvfb-run -a uv run pytest   # the same on Linux without a display; CI also sets
+                            # ENTROPY_TEST_GL_VERSION=4.5 for Mesa (ADR 0009)
 uv run pytest -m gpu        # GPU suite, laptop only
 uv run pytest -m perf       # benchmarks against SPEC section 3 budgets, laptop only
 uv run coverage run -m pytest && uv run coverage report   # 90 % floor, as in CI
