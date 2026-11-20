@@ -7,6 +7,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Game loop (#11): `entropy.sim.loop.FrameLoop` runs input, logic, one simulation
+  advance per frame (frame time × time scale, clamped to 1/30 s, excess reported) and
+  rendering, with a 60 fps cap (ADR 0008); `entropy.core.profiler` keeps rolling frame
+  and stage statistics and reads GPU memory for the HUD.
 - Game loop (#11): `entropy.sim.loop.FrameLoop` runs input, logic, fixed 1/60 s
   simulation steps scaled by the time scale (at most 4 per frame, excess time dropped
   and reported) and rendering; `entropy.core.profiler` keeps rolling frame and stage
