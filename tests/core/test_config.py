@@ -73,6 +73,19 @@ def test_shipped_settings_file_loads() -> None:
     assert isinstance(load_settings(default_settings_path()), Settings)
 
 
+def test_controls_are_read_from_their_table(tmp_path: Path) -> None:
+    settings = load_settings(_write(tmp_path, '[controls]\nforward = "Z"\nleft = "Q"\n'))
+
+    assert (settings.controls.forward, settings.controls.left) == ("Z", "Q")
+    assert settings.controls.back == "@S"  # the default: a position
+
+
+def test_the_shipped_controls_are_zqsd_for_an_azerty_keyboard() -> None:
+    controls = load_settings(default_settings_path()).controls
+
+    assert (controls.forward, controls.left, controls.back, controls.right) == ("Z", "Q", "S", "D")
+
+
 def test_the_game_asks_for_opengl_4_6() -> None:
     """SPEC 7.1; tests may ask for less (ADR 0009), the game does not."""
     assert load_settings(default_settings_path()).window.gl_version == (4, 6)

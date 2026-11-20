@@ -8,6 +8,8 @@ GPU timing per solver comes with the solvers (issue #29).
 
 from __future__ import annotations
 
+import ctypes
+import sys
 from collections import deque
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -129,3 +131,43 @@ def gpu_memory(device: str) -> GpuMemory | None:
         device_total_bytes=int(dev.total_memory),
         warp_high_bytes=int(wp.get_mempool_used_mem_high(dev)) if pooled else None,
     )
+
+
+class _ProcessMemoryCounters(ctypes.Structure):
+    _fields_ = (
+        ("cb", ctypes.c_uint32),
+        ("page_fault_count", ctypes.c_uint32),
+        ("peak_working_set_size", ctypes.c_size_t),
+        ("working_set_size", ctypes.c_size_t),
+        ("quota_peak_paged_pool_usage", ctypes.c_size_t),
+        ("quota_paged_pool_usage", ctypes.c_size_t),
+        ("quota_peak_non_paged_pool_usage", ctypes.c_size_t),
+        ("quota_non_paged_pool_usage", ctypes.c_size_t),
+        ("pagefile_usage", ctypes.c_size_t),
+        ("peak_pagefile_usage", ctypes.c_size_t),
+    )
+
+
+def host_memory_bytes() -> int | None:
+    """Memory this process has committed (its private bytes), on Windows; None elsewhere.
+
+    SPEC 3 budgets host RAM at 24 GB; the soak test watches this for leaks.
+    """
+    if sys.platform != "win32":
+        return None
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+    get_info = kernel32.K32GetProcessMemoryInfo
+    get_info.argtypes = (
+        wintypes.HANDLE,
+        ctypes.POINTER(_ProcessMemoryCounters),
+        wintypes.DWORD,
+    )
+    get_info.restype = wintypes.BOOL
+    counters = _ProcessMemoryCounters()
+    counters.cb = ctypes.sizeof(counters)
+    if not get_info(kernel32.GetCurrentProcess(), ctypes.byref(counters), counters.cb):
+        raise ctypes.WinError(ctypes.get_last_error())  # type: ignore[attr-defined]
+    return int(counters.pagefile_usage)

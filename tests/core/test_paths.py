@@ -17,3 +17,14 @@ def test_missing_content_is_a_clear_error(monkeypatch: pytest.MonkeyPatch, tmp_p
 
     with pytest.raises(FileNotFoundError, match="run ENTROPY from its git clone"):
         paths.content_dir()
+
+
+def test_repo_root_holds_the_project() -> None:
+    assert (paths.repo_root() / "pyproject.toml").is_file()
+
+
+def test_out_dir_is_ignored_by_git() -> None:
+    """Logs and unofficial results go to out/, which .gitignore leaves out."""
+    assert paths.out_dir() == paths.repo_root() / "out"
+    ignored = (paths.repo_root() / ".gitignore").read_text(encoding="utf-8").split()
+    assert "out/" in ignored

@@ -1,9 +1,11 @@
 """Frame statistics for the performance HUD (`entropy.core.profiler`)."""
 
+import sys
+
 import pytest
 import warp as wp
 
-from entropy.core.profiler import FrameStats, gpu_memory
+from entropy.core.profiler import FrameStats, gpu_memory, host_memory_bytes
 
 
 def test_steady_sixty_hertz() -> None:
@@ -93,6 +95,22 @@ def test_window_must_hold_a_frame() -> None:
 
 def test_no_gpu_memory_on_cpu() -> None:
     assert gpu_memory("cpu") is None
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows process memory API")
+def test_host_memory_sees_a_new_allocation() -> None:
+    before = host_memory_bytes()
+    block = bytearray(64 * 2**20)  # committed and touched
+    after = host_memory_bytes()
+
+    assert before is not None and after is not None
+    assert after - before >= 60 * 2**20
+    del block
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="other systems")
+def test_host_memory_is_none_elsewhere() -> None:
+    assert host_memory_bytes() is None
 
 
 @pytest.mark.gpu
