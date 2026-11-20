@@ -70,18 +70,25 @@ The game targets one machine: a Dell Precision 7780 laptop with an RTX 4090 Lapt
 | Game logic, UI and Python orchestration | 2 |
 | Margin | 0.3 |
 
-**Initial solver capacities**
+**Solver capacities**
 
-These are starting targets, recalibrated by measurement in milestone M0. A house of 10 × 8 × 6 m at the 6.25 cm liquid cell size is 160 × 128 × 96 ≈ 2.0 million cells, so the whole house fits in the liquid grid.
+Recalibrated by the M0 measurements (`docs/benchmarks/2026-11-20-m0-laptop.md`); later milestones measure each solver against its row. A house of 10 × 8 × 6 m at the 6.25 cm liquid cell size is 160 × 128 × 96 ≈ 2.0 million cells, so the whole house fits in the liquid grid.
 
 | Solver | Capacity | Time budget (ms) |
 | --- | --- | --- |
-| Liquid (APIC/FLIP) | 1–2 million particles, ≤ 2 million active cells at 6.25 cm | 9 |
-| Gas, smoke and fire | 128³ to 192³ cells in a moving box, 5–10 cm cells | 6 |
+| Liquid (APIC/FLIP) | 1–2 million particles, ≤ 2 million active cells at 6.25 cm; the pressure solve on the full house grid is estimated at 4–8 ms | 9 |
+| Gas, smoke and fire | 128³ cells (2.1 million) in a moving box, 5–10 cm cells; 192³ does not fit (≈ 44 ms per step by M0 estimate) | 6 |
 | Rigid bodies and fracture | 5,000 bodies, 20,000 bonds | 3 |
 | Granular (MPM) | 300,000 particles | 2 |
 | Shallow water (street, M8) | 1024 × 1024 cells at 25 cm | 1 |
 | Blast model and coupling | analytic, per event | 1 |
+
+**Measured hardware limits (M0)**
+
+- Planning bandwidth: 500 GB/s for read-write streaming after warm-up (87 % of the 576 GB/s peak). A kernel moving B bytes per cell over N cells costs at least B·N / 500 GB/s.
+- Sustained GPU state after warm-up: 83–89 °C, SM clock 1.3–1.7 GHz instead of 2.3 GHz, 110 W power limit; memory-bound kernels are barely affected, compute-bound ones are.
+- A kernel launched from Python costs about 15 µs of CPU time, so solver frames launch their kernels from CUDA graphs only (about 0.2–0.7 µs of CPU and 1.2 µs of GPU per kernel). A frame launches at most about 2,000 kernels, and iterative solver loops use conditional graph nodes so the CPU does not launch each iteration.
+- CPU and GPU work concurrently: Python enqueues while the GPU runs earlier work, so the orchestration budget is the CPU time the GPU has to wait for.
 
 **Memory budgets**
 
@@ -706,7 +713,7 @@ None of these blocks M0; each has a recommended default that applies unless Matt
 | Mortal mode in Walk | Immortal in v1.0; optional mortal mode in M9 | M9 |
 | Licence if the project goes open source | Apache-2.0 | Before publishing |
 | Sound sources | CC0 sample libraries, credited in the repository | M9 |
-| Default frame target | 60 fps rendering, simulation allowed to fall back to 30 fps | M0, after benchmarks |
+| Default frame target | Decided (ADR 0008): 60 fps when the scene allows, falling back to 30 fps under load, simulation and rendering together | Decided in M0 |
 | Python version | 3.12, recorded in an ADR; revisit 3.13 when every dependency ships Windows wheels | M0 |
 
 ## 14. Glossary

@@ -7,6 +7,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- M0 laptop benchmarks (#5, #6, #7, #8): memory bandwidth, Jacobi sweep at 128³, 192³
+  and the house grid with a streaming reference, kernel launch overhead with and without
+  CUDA graphs. First official results in `docs/benchmarks/results/` and the report
+  `docs/benchmarks/2026-11-20-m0-laptop.md`.
 - Game window (#9): GLFW window with an OpenGL 4.6 core context wrapped by moderngl
   (`entropy.render.context`); settings as immutable dataclasses loaded from
   `content/settings.toml` (`entropy.core.config`). CI runs the `render` tests headless
@@ -37,3 +41,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   pyright, pre-commit, GitHub Actions CPU CI.
 - ADR 0001 (record decisions), 0002 (Python and Warp), 0003 (SI units, Z-up frame).
 - Maintainer guide (`CLAUDE.md`).
+
+### Changed
+
+- SPEC 3 recalibrated from the M0 measurements: gas box 128³ (192³ does not fit in
+  6 ms), measured hardware limits (500 GB/s, sustained GPU state, kernel launches from
+  CUDA graphs only, at most about 2,000 kernels per frame). ADR 0008: frame target 60 fps
+  with a 30 fps floor, simulation and rendering together (SPEC 13).
