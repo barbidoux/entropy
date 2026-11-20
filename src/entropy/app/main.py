@@ -99,8 +99,8 @@ class GameStages:
             far_m=camera.far_m,
         )
         screen = self.window.ctx.screen
-        self.scene.render(screen, view)
-        self.points.render(screen, view)
+        self.scene.render(screen, view, (width, height))
+        self.points.render(screen, view, (width, height))
         lines = hud_lines(
             self.stats.summary(),
             gpu_memory(self.device),

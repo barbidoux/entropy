@@ -80,9 +80,17 @@ class PointsRenderer:
         self._program["centre_z"].value = PATTERN_CENTRE_M[2]  # type: ignore[union-attr]
         self._vao = ctx.vertex_array(self._program, [(shared.buffer, "3f", "position_m")])
 
-    def render(self, target: moderngl.Framebuffer, view: CameraView) -> None:
+    def render(
+        self,
+        target: moderngl.Framebuffer,
+        view: CameraView,
+        size_px: tuple[int, int] | None = None,
+    ) -> None:
+        """Draw the points over `size_px` of `target` (see `SceneRenderer.render`)."""
+        width, height = size_px or target.size
+        if width <= 0 or height <= 0:
+            return
         target.use()
-        width, height = target.size
         self.ctx.viewport = (0, 0, width, height)
         view_projection = view.projection(width / height) @ view.view()
         self._program["view_projection"].write(gl_bytes(view_projection))  # type: ignore[union-attr]
