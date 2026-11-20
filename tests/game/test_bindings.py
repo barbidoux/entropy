@@ -27,8 +27,12 @@ def qwerty(key: int) -> str | None:
     return None
 
 
+_AZERTY_DIGITS = dict(zip(range(glfw.KEY_0, glfw.KEY_9 + 1), "à&é\"'(-è_ç", strict=True))
+
+
 def azerty(key: int) -> str | None:
-    return _AZERTY_SWAPS.get(key, qwerty(key))
+    """French AZERTY: letters swapped, the digit row prints symbols unshifted."""
+    return _AZERTY_SWAPS.get(key, _AZERTY_DIGITS.get(key, qwerty(key)))
 
 
 ZQSD = ControlsSettings(forward="Z", left="Q", back="S", right="D")
@@ -43,8 +47,10 @@ def test_azerty_labels_land_on_the_usual_positions() -> None:
     assert bindings[glfw.KEY_D] is Action.RIGHT
 
 
-def test_the_default_controls_on_a_qwerty_keyboard_are_wasd() -> None:
-    bindings = bindings_from_settings(ControlsSettings(), key_label=qwerty)
+@pytest.mark.parametrize("layout", [qwerty, azerty], ids=["qwerty", "azerty"])
+def test_the_default_controls_are_the_usual_positions_on_any_layout(layout: object) -> None:
+    """Defaults name positions (@W...), so they give WASD on QWERTY and ZQSD on AZERTY."""
+    bindings = bindings_from_settings(ControlsSettings(), key_label=layout)  # type: ignore[arg-type]
 
     assert {key: bindings[key] for key in (glfw.KEY_W, glfw.KEY_A, glfw.KEY_S, glfw.KEY_D)} == {
         glfw.KEY_W: Action.FORWARD,
@@ -68,13 +74,29 @@ def test_labels_ignore_case_and_names_allow_several_keys() -> None:
     assert bindings[glfw.KEY_PAGE_UP] is Action.UP
 
 
+def test_digits_fall_back_to_the_digit_row_when_no_key_prints_them() -> None:
+    """On AZERTY the digit row prints & é \" ... unshifted; "1" still means that key."""
+    bindings = bindings_from_settings(ControlsSettings(toggle_hud="1"), key_label=azerty)
+
+    assert bindings[glfw.KEY_1] is Action.TOGGLE_HUD
+
+
+def test_a_position_can_be_named_explicitly() -> None:
+    bindings = bindings_from_settings(ControlsSettings(forward="@W"), key_label=azerty)
+
+    assert bindings[glfw.KEY_W] is Action.FORWARD
+
+
 @pytest.mark.parametrize(
     ("controls", "message"),
     [
-        (ControlsSettings(forward="É"), r"controls\.forward: no key labelled 'É'"),
+        (ControlsSettings(forward="Ñ"), r"controls\.forward: no key labelled 'Ñ'"),
         (ControlsSettings(up="SPACEBAR"), r"controls\.up: unknown key name 'SPACEBAR'"),
         (ControlsSettings(forward="Z", up="Z"), r"key 'Z' is bound to both forward and up"),
         (ControlsSettings(menu=""), r"controls\.menu: no key"),
+        (ControlsSettings(menu="UNKNOWN"), r"controls\.menu: unknown key name 'UNKNOWN'"),
+        (ControlsSettings(menu="LAST"), r"controls\.menu: unknown key name 'LAST'"),
+        (ControlsSettings(menu="@É"), r"controls\.menu: unknown key position '@É'"),
     ],
 )
 def test_impossible_controls_are_errors_naming_the_setting(

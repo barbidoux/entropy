@@ -77,7 +77,7 @@ def test_controls_are_read_from_their_table(tmp_path: Path) -> None:
     settings = load_settings(_write(tmp_path, '[controls]\nforward = "Z"\nleft = "Q"\n'))
 
     assert (settings.controls.forward, settings.controls.left) == ("Z", "Q")
-    assert settings.controls.back == "S"
+    assert settings.controls.back == "@S"  # the default: a position
 
 
 def test_the_shipped_controls_are_zqsd_for_an_azerty_keyboard() -> None:

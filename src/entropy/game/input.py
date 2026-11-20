@@ -13,6 +13,7 @@ while the mouse is captured; with raw motion on (ADR 0004) the units are mouse
 counts, so the look sensitivity depends on the mouse's resolution.
 """
 
+import warnings
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
@@ -64,21 +65,34 @@ _PRINTABLE_KEYS = (
 
 
 def glfw_key_label(key: int) -> str | None:
-    """The label printed on key in the current keyboard layout (GLFW must be running)."""
-    label = glfw.get_key_name(key, 0)
+    """The label printed on key in the current keyboard layout (GLFW must be running).
+
+    Keys this keyboard lacks (often KEY_WORLD_1 and 2) have no label; GLFW's
+    warning for them is not an error here.
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", glfw.GLFWError)
+        label = glfw.get_key_name(key, 0)
     if isinstance(label, bytes):
         label = label.decode("utf-8")
     return label or None
 
 
 def _key_for(setting: str, name: str, key_label: Callable[[int], str | None]) -> int:
+    if name.startswith("@"):  # a position, named after the US-layout key there
+        key = getattr(glfw, f"KEY_{name[1:].upper()}", None)
+        if len(name) != 2 or not isinstance(key, int) or key not in _PRINTABLE_KEYS:
+            raise ValueError(f"controls.{setting}: unknown key position {name!r}")
+        return key
     if len(name) == 1:
         for key in _PRINTABLE_KEYS:
             if (key_label(key) or "").upper() == name.upper():
                 return key
+        if name.isdigit():  # AZERTY prints & é " ... on the digit row: use that row
+            return glfw.KEY_0 + int(name)
         raise ValueError(f"controls.{setting}: no key labelled {name!r} on this keyboard")
     key = getattr(glfw, f"KEY_{name.upper()}", None)
-    if not isinstance(key, int):
+    if not isinstance(key, int) or key < 0 or name.upper() in ("UNKNOWN", "LAST"):
         raise ValueError(f"controls.{setting}: unknown key name {name!r}")
     return key
 

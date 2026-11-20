@@ -7,8 +7,12 @@ interop test pattern, and the HUD shows the frame statistics.
 
 from __future__ import annotations
 
+import ctypes
 import logging
 import math
+import sys
+from contextlib import ExitStack
+from pathlib import Path
 from typing import Any
 
 import glfw
@@ -29,6 +33,9 @@ from entropy.ui.hud import PerformanceHud, hud_lines
 _log = logging.getLogger(__name__)
 
 PATTERN_POINTS = 200_000
+DEFAULT_LOG_PATH = Path(__file__).resolve().parents[3] / "out" / "entropy.log"
+"""Where the game logs, next to the clone (`out/` is ignored by git)."""
+CONTROLS_HINT = "clic : regarder   Échap : libérer la souris   F3 : HUD"
 
 
 class GameStages:
@@ -46,11 +53,20 @@ class GameStages:
         self._pattern_time_s = 0.0
 
         ctx = window.ctx
-        self.scene = SceneRenderer(ctx)
-        self.pattern = SharedBuffer(ctx, PATTERN_POINTS, wp.vec3, self.device)
-        self.points = PointsRenderer(ctx, self.pattern)
-        self.hud = PerformanceHud(window.handle)
-        self._install_callbacks()
+        # Everything made here is released in reverse order, also if a later step fails,
+        # while the window and its OpenGL context still exist.
+        with ExitStack() as resources:
+            self.scene = SceneRenderer(ctx)
+            resources.callback(self.scene.release)
+            self.pattern = resources.enter_context(
+                SharedBuffer(ctx, PATTERN_POINTS, wp.vec3, self.device)
+            )
+            self.points = PointsRenderer(ctx, self.pattern)
+            resources.callback(self.points.release)
+            self.hud = resources.enter_context(PerformanceHud(window.handle))
+            self._install_callbacks()
+            resources.callback(self._remove_callbacks)
+            self._resources = resources.pop_all()
 
     def _install_callbacks(self) -> None:
         handle = self.window.handle
@@ -65,10 +81,24 @@ class GameStages:
         def on_button(_window: Any, _button: int, action: int, _mods: int) -> None:
             mode.on_mouse_button(pressed=action == glfw.PRESS)
 
-        self.callbacks = (on_key, on_cursor, on_button)  # GLFW keeps no reference
+        self.callbacks = (on_key, on_cursor, on_button)
         glfw.set_key_callback(handle, on_key)
         glfw.set_cursor_pos_callback(handle, on_cursor)
         glfw.set_mouse_button_callback(handle, on_button)
+
+    def _remove_callbacks(self) -> None:
+        handle = self.window.handle
+        # pyGLFW accepts None to remove a callback; its stubs do not say so.
+        glfw.set_key_callback(handle, None)  # pyright: ignore[reportArgumentType]
+        glfw.set_cursor_pos_callback(handle, None)  # pyright: ignore[reportArgumentType]
+        glfw.set_mouse_button_callback(handle, None)  # pyright: ignore[reportArgumentType]
+
+    def hud_notes(self) -> list[str]:
+        """Extra HUD lines: the controls, the test pattern, and why interop copies, if it does."""
+        notes = [CONTROLS_HINT, f"{PATTERN_POINTS:,} points by Warp (interop test pattern)"]
+        if self.pattern.fallback_reason:
+            notes.append(f"host copy because: {self.pattern.fallback_reason}")
+        return notes
 
     def poll_input(self) -> None:
         self.window.poll_events()
@@ -108,7 +138,7 @@ class GameStages:
             gpu_memory(self.device),
             interop=self.pattern.mode.value,
             time_scale=self.loop_settings.time_scale,
-            notes=[f"{PATTERN_POINTS:,} points by Warp (interop test pattern)"],
+            notes=self.hud_notes(),
         )
         self.hud.draw(lines)
 
@@ -116,10 +146,7 @@ class GameStages:
         self.window.swap_buffers()
 
     def release(self) -> None:
-        self.hud.release()
-        self.points.release()
-        self.pattern.release()
-        self.scene.release()
+        self._resources.close()
 
 
 def run(settings: Settings, *, visible: bool = True, max_frames: int | None = None) -> FrameStats:
@@ -142,7 +169,37 @@ def run(settings: Settings, *, visible: bool = True, max_frames: int | None = No
     return stats
 
 
-def main() -> int:
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
-    run(load_settings(default_settings_path()))
+def _show_error(title: str, text: str) -> None:
+    """A message box on Windows (the console of the shortcut is minimised), stderr elsewhere."""
+    if sys.platform == "win32":
+        ctypes.WinDLL("user32").MessageBoxW(None, text, title, 0x10)  # MB_ICONERROR
+    else:
+        print(f"{title}: {text}", file=sys.stderr)
+
+
+def main(log_path: Path = DEFAULT_LOG_PATH) -> int:
+    """Run the game; on a failure, log the details and tell Matt in French."""
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    handlers: list[logging.Handler] = [
+        logging.StreamHandler(),
+        logging.FileHandler(log_path, mode="w", encoding="utf-8"),
+    ]
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        handlers=handlers,
+        force=True,
+    )
+    try:
+        run(load_settings(default_settings_path()))
+    except Exception as error:
+        _log.exception("ENTROPY stopped on an error")
+        _show_error(
+            "ENTROPY",
+            f"ENTROPY n'a pas pu démarrer ou s'est arrêté :\n\n{error}\n\nDétails : {log_path}",
+        )
+        return 1
+    finally:
+        for handler in handlers:
+            handler.flush()
     return 0

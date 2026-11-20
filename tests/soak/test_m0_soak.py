@@ -1,16 +1,16 @@
 """M0 gate soak test: the assembled game runs for minutes without leaking or failing.
 
-`uv run pytest -m soak` on the laptop. The game runs in a hidden window with
-random keys and mouse motion for `ENTROPY_SOAK_S` seconds (default 600). After
-a settling minute, video memory used on the GPU and the process's own memory
-must not grow by more than a few tens of megabytes, and every frame must
+`uv run pytest -m soak` on the laptop, with the GPU otherwise idle. The game
+runs in a hidden window with random keys and mouse motion for `ENTROPY_SOAK_S`
+seconds (default 600). After a settling minute, the process's own memory, the
+memory in ENTROPY's Warp pool and the video memory used on the whole GPU must
+not grow by more than 64 MiB; each figure is the minimum of several samples,
+so a passing spike elsewhere on the GPU does not count. Every frame must
 complete.
 """
 
-import ctypes
 import os
 import random
-import sys
 import time
 
 import glfw
@@ -18,7 +18,7 @@ import pytest
 
 from entropy.app.main import GameStages
 from entropy.core.config import default_settings_path, load_settings
-from entropy.core.profiler import FrameStats, gpu_memory
+from entropy.core.profiler import FrameStats, gpu_memory, host_memory_bytes
 from entropy.render.context import GameWindow
 from entropy.sim.loop import FrameLoop
 
@@ -27,32 +27,26 @@ pytestmark = pytest.mark.soak
 KEYS = (glfw.KEY_W, glfw.KEY_A, glfw.KEY_S, glfw.KEY_D, glfw.KEY_SPACE, glfw.KEY_LEFT_CONTROL)
 LEAK_LIMIT_BYTES = 64 * 2**20
 SETTLE_S = 60.0
+SAMPLES = 5
 
 
-class _ProcessMemory(ctypes.Structure):
-    _fields_ = (
-        ("cb", ctypes.c_uint32),
-        ("page_fault_count", ctypes.c_uint32),
-        ("peak_working_set", ctypes.c_size_t),
-        ("working_set", ctypes.c_size_t),
-        ("quota_peak_paged_pool", ctypes.c_size_t),
-        ("quota_paged_pool", ctypes.c_size_t),
-        ("quota_peak_non_paged_pool", ctypes.c_size_t),
-        ("quota_non_paged_pool", ctypes.c_size_t),
-        ("pagefile_usage", ctypes.c_size_t),
-        ("peak_pagefile_usage", ctypes.c_size_t),
+def _memory(device: str) -> tuple[int, int, int]:
+    """(process bytes, Warp pool bytes, GPU-wide used bytes); 0 where unknown."""
+    gpu = gpu_memory(device)
+    return (
+        host_memory_bytes() or 0,
+        (gpu.warp_bytes or 0) if gpu else 0,
+        gpu.device_used_bytes if gpu else 0,
     )
 
 
-def _private_bytes() -> int:
-    """Committed memory of this process (Windows); 0 elsewhere."""
-    if sys.platform != "win32":
-        return 0
-    counters = _ProcessMemory()
-    counters.cb = ctypes.sizeof(counters)
-    handle = ctypes.windll.kernel32.GetCurrentProcess()
-    ctypes.windll.psapi.GetProcessMemoryInfo(handle, ctypes.byref(counters), counters.cb)
-    return int(counters.pagefile_usage)
+def _sample(loop: FrameLoop, device: str) -> tuple[int, int, int]:
+    """Minimum of each figure over a few frames."""
+    samples = []
+    for _ in range(SAMPLES):
+        loop.run_frame()
+        samples.append(_memory(device))
+    return tuple(min(column) for column in zip(*samples, strict=True))  # type: ignore[return-value]
 
 
 def test_the_game_runs_for_minutes_without_leaking() -> None:
@@ -79,22 +73,22 @@ def test_the_game_runs_for_minutes_without_leaking() -> None:
                 stages.mode.input.on_mouse_move(rng.uniform(0, 1600), rng.uniform(0, 900))
                 loop.run_frame()
                 frames += 1
-                if baseline is None and time.perf_counter() - start >= min(
-                    SETTLE_S, duration_s / 2
-                ):
-                    memory = gpu_memory(stages.device)
-                    baseline = (memory.device_used_bytes if memory else 0, _private_bytes())
-            memory = gpu_memory(stages.device)
-            final = (memory.device_used_bytes if memory else 0, _private_bytes())
+                settled = time.perf_counter() - start >= min(SETTLE_S, duration_s / 2)
+                if baseline is None and settled:
+                    baseline = _sample(loop, stages.device)
+            final = _sample(loop, stages.device)
+            elapsed_s = time.perf_counter() - start
         finally:
             stages.release()
 
     assert baseline is not None
-    vram_growth, host_growth = final[0] - baseline[0], final[1] - baseline[1]
+    host, warp, device = (after - before for after, before in zip(final, baseline, strict=True))
     print(
-        f"\nsoak: {frames} frames in {duration_s:.0f} s ({frames / duration_s:.1f} fps), "
-        f"VRAM growth {vram_growth / 2**20:.1f} MiB, host growth {host_growth / 2**20:.1f} MiB"
+        f"\nsoak: {frames} frames in {elapsed_s:.0f} s ({frames / elapsed_s:.1f} fps); growth "
+        f"process {host / 2**20:.1f} MiB, Warp pool {warp / 2**20:.1f} MiB, "
+        f"GPU-wide {device / 2**20:.1f} MiB"
     )
     assert frames > 0
-    assert vram_growth < LEAK_LIMIT_BYTES
-    assert host_growth < LEAK_LIMIT_BYTES
+    assert host < LEAK_LIMIT_BYTES
+    assert warp < LEAK_LIMIT_BYTES
+    assert device < LEAK_LIMIT_BYTES

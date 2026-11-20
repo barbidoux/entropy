@@ -46,13 +46,30 @@ def test_main_runs_the_script_for_the_clone(monkeypatch: pytest.MonkeyPatch) -> 
         return subprocess.CompletedProcess(args, 0, stdout=str(DESKTOP) + "\n")
 
     monkeypatch.setattr(shortcut.sys, "platform", "win32")
+    monkeypatch.delenv("UV", raising=False)
     monkeypatch.setattr(shortcut.shutil, "which", lambda name: str(UV))
     monkeypatch.setattr(shortcut.subprocess, "run", fake_run)
 
     assert shortcut.main() == 0
     script = calls[-1][-1]
     assert rf"'{DESKTOP}\ENTROPY.lnk'" in script
-    assert "WorkingDirectory" in script
+    assert f".TargetPath = '{UV}'" in script
+    assert f".WorkingDirectory = '{PureWindowsPath(str(shortcut._REPO_ROOT))}'" in script
+
+
+def test_main_prefers_the_uv_that_is_running(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(args)
+        return subprocess.CompletedProcess(args, 0, stdout=str(DESKTOP) + "\n")
+
+    monkeypatch.setattr(shortcut.sys, "platform", "win32")
+    monkeypatch.setenv("UV", r"D:\tools\uv.exe")
+    monkeypatch.setattr(shortcut.subprocess, "run", fake_run)
+
+    assert shortcut.main() == 0
+    assert r".TargetPath = 'D:\tools\uv.exe'" in calls[-1][-1]
 
 
 def test_main_explains_what_is_missing(
@@ -60,11 +77,13 @@ def test_main_explains_what_is_missing(
 ) -> None:
     monkeypatch.setattr(shortcut.sys, "platform", "linux")
     assert shortcut.main() == 1
+    assert "Windows only" in capsys.readouterr().err
     monkeypatch.setattr(shortcut.sys, "platform", "win32")
+    monkeypatch.delenv("UV", raising=False)
     monkeypatch.setattr(shortcut.shutil, "which", lambda name: None)
     assert shortcut.main() == 1
 
-    assert "Windows only" in capsys.readouterr().err
+    assert "uv is not on the PATH" in capsys.readouterr().err
 
 
 def test_windows_separators_whatever_system_builds_the_script() -> None:

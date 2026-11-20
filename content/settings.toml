@@ -16,9 +16,11 @@ start_yaw_deg = 130.0                # from +X towards +Y
 start_pitch_deg = -15.0              # negative looks down
 
 [controls]
-# Une lettre ou un chiffre = la touche qui porte ce signe sur TON clavier (ici AZERTY).
+# Une lettre = la touche qui porte cette lettre sur TON clavier (ici AZERTY).
+# Un chiffre = la touche de ce chiffre sur la rangée du haut.
 # Les autres touches par leur nom : SPACE, LEFT_CONTROL, RIGHT_SHIFT, F3, ESCAPE, PAGE_UP...
 # Plusieurs touches pour une action : séparées par des virgules.
+# Si une touche est mal écrite, le jeu le dit au démarrage dans une fenêtre d'erreur.
 forward = "Z"
 back = "S"
 left = "Q"

@@ -7,6 +7,7 @@ through PowerShell, which every Windows install has.
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
@@ -65,7 +66,14 @@ def powershell_script(shortcut: Shortcut) -> str:
 def _desktop() -> Path:
     """The user's desktop folder, as Windows reports it (it may be redirected)."""
     output = subprocess.run(
-        ["powershell", "-NoProfile", "-Command", "[Environment]::GetFolderPath('Desktop')"],
+        [
+            "powershell",
+            "-NoProfile",
+            "-Command",
+            "[Console]::OutputEncoding = [Text.Encoding]::UTF8; "
+            "[Environment]::GetFolderPath('Desktop')",
+        ],
+        encoding="utf-8",
         check=True,
         capture_output=True,
         text=True,
@@ -78,7 +86,7 @@ def main() -> int:
     if sys.platform != "win32":
         print("The desktop shortcut is for Windows only.", file=sys.stderr)
         return 1
-    uv = shutil.which("uv")
+    uv = os.environ.get("UV") or shutil.which("uv")  # `uv run` sets UV to itself
     if uv is None:
         print("uv is not on the PATH: install uv first.", file=sys.stderr)
         return 1

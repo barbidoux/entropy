@@ -71,16 +71,18 @@ class ControlsSettings:
     """Keys for each action (SPEC 4.5), issue #32.
 
     A single letter or digit is the label printed on the player's keyboard, so
-    "Z" means the key marked Z whatever the layout; other keys are named as in
-    GLFW without the KEY_ prefix (SPACE, LEFT_CONTROL, F3, ESCAPE, PAGE_UP...).
-    Several keys for one action are separated by commas. The defaults are for a
-    QWERTY keyboard; `content/settings.toml` sets Matt's AZERTY keys.
+    "Z" means the key marked Z whatever the layout (a digit no key prints, as on
+    AZERTY, means the digit row); "@W" means a position, the key where W sits on a
+    US keyboard; other keys are named as in GLFW without the KEY_ prefix (SPACE,
+    LEFT_CONTROL, F3, ESCAPE, PAGE_UP...). Several keys for one action are
+    separated by commas (ADR 0012). The defaults are positions, so they give W A S D
+    on QWERTY and Z Q S D on AZERTY.
     """
 
-    forward: str = "W"
-    back: str = "S"
-    left: str = "A"
-    right: str = "D"
+    forward: str = "@W"
+    back: str = "@S"
+    left: str = "@A"
+    right: str = "@D"
     up: str = "SPACE"
     down: str = "LEFT_CONTROL, RIGHT_CONTROL"
     toggle_hud: str = "F3"

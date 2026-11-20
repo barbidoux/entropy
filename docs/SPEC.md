@@ -173,10 +173,12 @@ Procedural generators produce ordinary, editable maps: a house generator (floors
 
 ### 4.5 Controls
 
+Keys below are positions on a QWERTY keyboard (W A S D is Z Q S D on AZERTY). Every key is set in the `[controls]` table of `content/settings.toml` by the label printed on the player's keyboard (ADR 0012).
+
 | Action | Input |
 | --- | --- |
 | Move | W A S D; Space and Ctrl for up and down in God and Build; Space jumps in Walk |
-| Look | Mouse |
+| Look | Mouse, after a click in the window; Esc gives the mouse back |
 | Use tool | Left click, held for continuous tools |
 | Tool alternate action | Right click |
 | Tool power | Mouse wheel |
