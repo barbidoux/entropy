@@ -436,7 +436,7 @@ Arrows show the data flow within one frame. The renderer, interface and exporter
 
 ### 8.1 Module responsibilities
 
-Dependencies point downward only, and a test enforces the import rules. "May depend on" is transitive: a module may also use what its dependencies may use (ADR 0005). The package root `entropy/__init__.py` imports no module, and `app` together with `entropy/__main__.py` forms the composition root.
+Dependencies point downward only, and a test enforces the import rules. "May depend on" is transitive: a module may also use what its dependencies may use (ADR 0005). The package root `entropy/__init__.py` imports no subpackage, and `app` together with `entropy/__main__.py` forms the composition root.
 
 | Module | Responsibility | May depend on |
 | --- | --- | --- |
@@ -585,7 +585,7 @@ The code lives in the private GitHub repository [barbidoux/entropy](https://gith
 - Squash merge, Conventional Commits messages, a changelog entry per merged change.
 - Work is tracked as GitHub issues grouped by milestone; each user story is an issue.
 - Architecture decisions are short ADRs in `docs/adr/`, numbered, never edited after acceptance (a new ADR supersedes an old one).
-- This spec is mirrored in `docs/SPEC.md`, versioned with the code.
+- `docs/SPEC.md` is the reference copy of this spec (ADR 0006), versioned with the code.
 
 ```
 entropy/
