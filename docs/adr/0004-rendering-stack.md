@@ -1,6 +1,6 @@
 # ADR 0004: Rendering stack, OpenGL 4.6 through moderngl and GLFW, zero-copy CUDA interop
 
-- Status: accepted
+- Status: proposed (accepted with the interop pull request for #10, which brings the code and the measurement it cites)
 - Date: 2026-11-20
 
 ## Context

@@ -53,8 +53,8 @@ class CameraSettings:
 
     def __post_init__(self) -> None:
         _require(0.0 < self.fov_y_deg < 180.0, "fov_y_deg must be between 0 and 180")
-        _require(0.0 < self.near_m < self.far_m, "near_m and far_m need 0 < near_m < far_m")
-        _require(math.isfinite(self.far_m), "far_m must be finite")
+        _require(self.near_m > 0.0, "near_m must be positive")
+        _require(self.near_m < self.far_m < math.inf, "far_m must be finite and beyond near_m")
         _require(0.0 < self.speed_m_per_s < math.inf, "speed_m_per_s must be positive")
         _require(
             0.0 <= self.mouse_rad_per_px < math.inf, "mouse_rad_per_px must be zero or positive"
@@ -106,7 +106,10 @@ def _build[T](cls: type[T], data: dict[str, Any], prefix: str) -> T:
             values[name] = _build(hint, value, prefix=f"{key}.")  # type: ignore[arg-type]
         else:
             values[name] = _convert(value, hint, key)
-    return cls(**values)
+    try:
+        return cls(**values)
+    except ValueError as error:
+        raise ValueError(f"{prefix}{error}") from error
 
 
 def _convert(value: Any, hint: Any, key: str) -> Any:

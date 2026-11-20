@@ -366,7 +366,7 @@ The real-time renderer uses OpenGL 4.6 and reads simulation data straight from G
 
 ### 7.1 Stack
 
-- OpenGL 4.6 core through moderngl; window and input through GLFW. Vulkan is not used in v1.0 because of its cost in code; an ADR records the choice.
+- OpenGL 4.6 core through moderngl; window and input through GLFW. Vulkan is not used in v1.0 because of its cost in code (ADR 0004). Shaders are GLSL 4.50 and no OpenGL 4.6-only feature is used, so the same code runs on Mesa's software OpenGL 4.5 in CI (ADR 0009).
 - Zero-copy interop: Warp kernels write directly into OpenGL buffers registered with CUDA. A slower fallback copies through host memory if interop fails on Windows (checked in M0).
 - HDR pipeline at an internal resolution that scales with the quality preset.
 
@@ -501,7 +501,7 @@ Every line of production code exists because a failing test asked for it, and ev
 | Performance | Budgets of section 3 | 1 million particles at ≥ 30 fps after warm-up | GPU only | Milestone gates, on demand |
 | Soak | No NaN, leak or crash over long runs | 30 min of random tool use in House | GPU only | Milestone gates |
 
-Headless rendering tests in the workspace rely on Mesa's software OpenGL; feasibility is checked in M0.
+Headless rendering tests in the workspace and in CI use Mesa's software OpenGL (llvmpipe), which offers OpenGL 4.5: CI runs the render tests at 4.5 under Xvfb, the laptop at 4.6 (checked in M0, ADR 0009).
 
 ### 9.3 Commands and markers
 

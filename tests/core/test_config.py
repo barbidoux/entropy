@@ -110,5 +110,5 @@ def test_toml_syntax_errors_name_the_file(tmp_path: Path) -> None:
     ],
 )
 def test_impossible_values_are_errors(tmp_path: Path, section: str, text: str) -> None:
-    with pytest.raises(ValueError, match=text.split()[0]):
+    with pytest.raises(ValueError, match=rf"{section}\.{text.split()[0]}"):
         load_settings(_write(tmp_path, f"[{section}]\n{text}\n"))

@@ -26,7 +26,13 @@ def window_settings() -> WindowSettings:
     It asks for the game's OpenGL 4.6, or for `ENTROPY_TEST_GL_VERSION`: CI sets
     4.5, the highest Mesa's software renderer offers (ADR 0009).
     """
-    major, minor = os.environ.get("ENTROPY_TEST_GL_VERSION", "4.6").split(".")
+    requested = os.environ.get("ENTROPY_TEST_GL_VERSION", "4.6")
+    try:
+        major, minor = requested.split(".")
+    except ValueError:
+        raise pytest.UsageError(
+            f"ENTROPY_TEST_GL_VERSION must look like 4.5, got {requested!r}"
+        ) from None
     return WindowSettings(
         width_px=320,
         height_px=200,

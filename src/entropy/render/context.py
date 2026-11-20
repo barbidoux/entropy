@@ -4,7 +4,10 @@ GLFW opens a native Windows window with an OpenGL core context of the version
 in the settings (4.6 by default); moderngl wraps that context. GLFW's state is
 process-wide, and ENTROPY has one window, so this class owns GLFW's
 initialisation, terminates GLFW when the window closes, and refuses to open a
-second window while one is open.
+second window while one is open. The check relies on the open window's context
+being current on the calling thread: ENTROPY drives its window from one thread
+and never detaches the context, and GLFW's error reporting stays in its
+default warning mode.
 """
 
 from __future__ import annotations
