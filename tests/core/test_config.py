@@ -107,6 +107,8 @@ def test_toml_syntax_errors_name_the_file(tmp_path: Path) -> None:
         ("camera", "fov_y_deg = 180.0"),
         ("camera", "fov_y_deg = nan"),
         ("camera", "speed_m_per_s = -1.0"),
+        ("camera", "start_pitch_deg = 90.0"),
+        ("camera", "start_position_m = [0.0, inf, 1.0]"),
     ],
 )
 def test_impossible_values_are_errors(tmp_path: Path, section: str, text: str) -> None:

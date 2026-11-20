@@ -3,7 +3,12 @@
 GLFW calls `on_key` and `on_mouse_move` as events arrive; the game loop takes
 one `FrameInput` per frame. Held actions persist across frames; presses are
 reported once, in the frame they happened, even if the key was released in
-the same frame.
+the same frame. An action stays held while any key bound to it is down.
+
+Keys are GLFW key tokens, which name physical key positions: on an AZERTY
+keyboard W A S D are the keys labelled Z Q S D. Mouse motion is counted only
+while the mouse is captured; with raw motion on (ADR 0004) the units are mouse
+counts, so the look sensitivity depends on the mouse's resolution.
 """
 
 from collections.abc import Mapping
@@ -57,8 +62,8 @@ class InputState:
 
     def __init__(self, bindings: Mapping[int, Action] = DEFAULT_BINDINGS) -> None:
         self.bindings = bindings
-        self.mouse_captured = True
-        self._held: set[Action] = set()
+        self._mouse_captured = False
+        self._held_keys: set[int] = set()
         self._pressed: set[Action] = set()
         self._cursor_px: tuple[float, float] | None = None
         self._dx_px = 0.0
@@ -70,14 +75,28 @@ class InputState:
         if action is None:
             return
         if event == glfw.PRESS:
-            self._held.add(action)
+            self._held_keys.add(key)
             self._pressed.add(action)
         elif event == glfw.RELEASE:
-            self._held.discard(action)
+            self._held_keys.discard(key)
+
+    @property
+    def mouse_captured(self) -> bool:
+        return self._mouse_captured
+
+    def set_mouse_captured(self, captured: bool) -> None:
+        """Follow the window's mouse capture; call both together.
+
+        On capture the next cursor position becomes the reference, so the view
+        does not jump to wherever GLFW's virtual cursor restarts.
+        """
+        if captured and not self._mouse_captured:
+            self._cursor_px = None
+        self._mouse_captured = captured
 
     def on_mouse_move(self, x_px: float, y_px: float) -> None:
         """A GLFW cursor position; motion counts only while the mouse is captured."""
-        if self._cursor_px is not None and self.mouse_captured:
+        if self._cursor_px is not None and self._mouse_captured:
             self._dx_px += x_px - self._cursor_px[0]
             self._dy_px += y_px - self._cursor_px[1]
         self._cursor_px = (x_px, y_px)
@@ -85,7 +104,7 @@ class InputState:
     def take_frame(self) -> FrameInput:
         """This frame's input; presses and mouse motion start again from zero."""
         frame = FrameInput(
-            held=frozenset(self._held),
+            held=frozenset(self.bindings[key] for key in self._held_keys),
             pressed=frozenset(self._pressed),
             look_dx_px=self._dx_px,
             look_dy_px=self._dy_px,

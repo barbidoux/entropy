@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from entropy.render.camera import gl_bytes, perspective, view_matrix
+from entropy.render.camera import WORLD_UP, gl_bytes, perspective, view_matrix
 
 EYE = np.array([1.0, 2.0, 3.0])
 FORWARD = np.array([1.0, 0.0, 0.0])
@@ -58,6 +58,29 @@ def test_gl_bytes_are_column_major() -> None:
     columns = np.frombuffer(gl_bytes(matrix), dtype=np.float32)
 
     assert list(columns[:4]) == [0.0, 4.0, 8.0, 12.0]
+
+
+@pytest.mark.parametrize(
+    ("fov_y_rad", "aspect", "near_m", "far_m"),
+    [
+        (0.0, 1.0, 0.1, 10.0),
+        (np.pi, 1.0, 0.1, 10.0),
+        (1.0, 0.0, 0.1, 10.0),
+        (1.0, 1.0, 0.0, 10.0),
+        (1.0, 1.0, 1.0, 1.0),
+    ],
+)
+def test_impossible_projections_are_rejected(
+    fov_y_rad: float, aspect: float, near_m: float, far_m: float
+) -> None:
+    """A minimised window has a 0x0 framebuffer: the caller must skip the frame."""
+    with pytest.raises(ValueError):
+        perspective(fov_y_rad, aspect, near_m, far_m)
+
+
+def test_world_up_cannot_be_changed() -> None:
+    with pytest.raises((TypeError, ValueError, AttributeError)):
+        WORLD_UP[2] = -1.0  # type: ignore[index]
 
 
 def test_looking_straight_up_is_rejected() -> None:

@@ -59,6 +59,11 @@ class CameraSettings:
         _require(
             0.0 <= self.mouse_rad_per_px < math.inf, "mouse_rad_per_px must be zero or positive"
         )
+        _require(
+            all(math.isfinite(c) for c in self.start_position_m), "start_position_m must be finite"
+        )
+        _require(math.isfinite(self.start_yaw_deg), "start_yaw_deg must be finite")
+        _require(abs(self.start_pitch_deg) <= 89.0, "start_pitch_deg must be within ±89")
 
 
 @dataclass(frozen=True)

@@ -23,6 +23,10 @@ class CameraPose:
     yaw_rad: float
     pitch_rad: float
 
+    def __post_init__(self) -> None:
+        if not abs(self.pitch_rad) <= MAX_PITCH_RAD + 1e-12:
+            raise ValueError(f"pitch {self.pitch_rad} rad is beyond ±{MAX_PITCH_RAD:.4f} rad")
+
     def forward(self) -> np.ndarray:
         """Unit view direction."""
         cos_pitch = math.cos(self.pitch_rad)
@@ -43,8 +47,8 @@ class CameraPose:
 class FlightInput:
     """One frame of flight controls.
 
-    `forward`, `right` and `up` are in [-1, 1]; mouse motion is in screen
-    pixels, x to the right and y downwards, as GLFW reports it.
+    `forward`, `right` and `up` are in [-1, 1]; mouse motion is in GLFW cursor
+    units (pixels, or mouse counts with raw motion), x to the right and y downwards.
     """
 
     forward: float = 0.0
@@ -62,7 +66,11 @@ def fly(
     speed_m_per_s: float,
     mouse_rad_per_px: float,
 ) -> CameraPose:
-    """The pose after `dt_s` seconds of `flight`: turn first, then move."""
+    """The pose after `dt_s` seconds of `flight`: turn first, then move.
+
+    `dt_s` is real frame time, not simulated time, so the camera keeps flying
+    while the world is paused or in slow motion (SPEC 4.6).
+    """
     yaw_rad = pose.yaw_rad - flight.look_dx_px * mouse_rad_per_px
     pitch_rad = pose.pitch_rad - flight.look_dy_px * mouse_rad_per_px
     pitch_rad = max(-MAX_PITCH_RAD, min(MAX_PITCH_RAD, pitch_rad))

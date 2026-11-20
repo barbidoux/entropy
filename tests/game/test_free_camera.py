@@ -24,7 +24,12 @@ def _fly(pose: CameraPose, flight: FlightInput, dt_s: float = 1.0) -> CameraPose
 
 @pytest.mark.parametrize(
     ("yaw_deg", "pitch_deg", "expected"),
-    [(0, 0, (1, 0, 0)), (90, 0, (0, 1, 0)), (0, 90, (0, 0, 1)), (180, -90, (0, 0, -1))],
+    [
+        (0, 0, (1, 0, 0)),
+        (90, 0, (0, 1, 0)),
+        (0, 60, (0.5, 0, 0.75**0.5)),
+        (180, -60, (-0.5, 0, -(0.75**0.5))),
+    ],
 )
 def test_forward_from_yaw_and_pitch(
     yaw_deg: float, pitch_deg: float, expected: tuple[float, float, float]
@@ -45,6 +50,36 @@ def test_strafing_right_moves_towards_minus_y_when_looking_along_x() -> None:
     moved = _fly(LEVEL, FlightInput(right=1.0))
 
     assert moved.position_m == pytest.approx((0.0, -5.0, 2.0))
+
+
+@pytest.mark.parametrize("yaw_deg", [-170, -90, -30, 0, 45, 90, 135, 180, 300])
+@pytest.mark.parametrize("pitch_deg", [-80, -20, 0, 35, 85])
+def test_right_is_horizontal_and_to_the_right_of_the_view(yaw_deg: float, pitch_deg: float) -> None:
+    pose = CameraPose((0.0, 0.0, 0.0), math.radians(yaw_deg), math.radians(pitch_deg))
+    expected = np.cross(pose.forward(), [0.0, 0.0, 1.0])
+
+    assert pose.right() == pytest.approx(expected / np.linalg.norm(expected), abs=1e-9)
+
+
+@pytest.mark.parametrize(("yaw_deg", "expected"), [(90, (5, 0, 2)), (180, (0, 5, 2))])
+def test_strafing_right_at_other_headings(yaw_deg: float, expected: tuple[float, ...]) -> None:
+    pose = CameraPose((0.0, 0.0, 2.0), math.radians(yaw_deg), 0.0)
+
+    assert _fly(pose, FlightInput(right=1.0)).position_m == pytest.approx(expected, abs=1e-9)
+
+
+def test_the_camera_turns_before_it_moves() -> None:
+    """Looking 90° left and flying forward in the same frame moves along the new view."""
+    turned_and_moved = _fly(
+        LEVEL, FlightInput(forward=1.0, look_dx_px=-math.pi / 2 / MOUSE_RAD_PER_PX)
+    )
+
+    assert turned_and_moved.position_m == pytest.approx((0.0, 5.0, 2.0), abs=1e-9)
+
+
+def test_a_pose_beyond_the_pitch_limit_is_rejected() -> None:
+    with pytest.raises(ValueError, match="pitch"):
+        CameraPose((0.0, 0.0, 0.0), 0.0, math.pi / 2)
 
 
 def test_up_input_moves_along_world_z_whatever_the_pitch() -> None:

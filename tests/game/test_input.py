@@ -15,6 +15,7 @@ from entropy.game.input import DEFAULT_BINDINGS, Action, InputState, flight_inpu
         (glfw.KEY_D, Action.RIGHT),
         (glfw.KEY_SPACE, Action.UP),
         (glfw.KEY_LEFT_CONTROL, Action.DOWN),
+        (glfw.KEY_RIGHT_CONTROL, Action.DOWN),
         (glfw.KEY_F3, Action.TOGGLE_HUD),
         (glfw.KEY_ESCAPE, Action.MENU),
     ],
@@ -60,6 +61,7 @@ def test_a_tap_inside_one_frame_is_not_lost() -> None:
 
 def test_mouse_motion_accumulates_until_the_frame_is_taken() -> None:
     state = InputState()
+    state.set_mouse_captured(True)
 
     state.on_mouse_move(100.0, 100.0)
     state.on_mouse_move(103.0, 98.0)
@@ -72,17 +74,40 @@ def test_mouse_motion_accumulates_until_the_frame_is_taken() -> None:
     assert (second.look_dx_px, second.look_dy_px) == (1.0, 0.0)
 
 
-def test_mouse_motion_is_ignored_while_the_mouse_is_released() -> None:
+def test_the_mouse_starts_released() -> None:
+    """The window starts with a normal cursor; moving it must not turn the camera."""
     state = InputState()
-    state.on_mouse_move(0.0, 0.0)
 
-    state.mouse_captured = False
+    state.on_mouse_move(0.0, 0.0)
     state.on_mouse_move(50.0, 50.0)
-    state.mouse_captured = True
-    state.on_mouse_move(52.0, 50.0)
+
+    assert not state.mouse_captured
+    assert state.take_frame().look_dx_px == 0.0
+
+
+def test_recapturing_the_mouse_does_not_jump_the_view() -> None:
+    """GLFW's virtual cursor restarts where the real one was, maybe outside the window."""
+    state = InputState()
+    state.set_mouse_captured(True)
+    state.on_mouse_move(960.0, 540.0)
+
+    state.set_mouse_captured(False)
+    state.set_mouse_captured(True)
+    state.on_mouse_move(2500.0, 900.0)
+    state.on_mouse_move(2502.0, 900.0)
 
     frame = state.take_frame()
     assert (frame.look_dx_px, frame.look_dy_px) == (2.0, 0.0)
+
+
+def test_releasing_one_of_two_keys_for_an_action_keeps_it_held() -> None:
+    state = InputState()
+
+    state.on_key(glfw.KEY_LEFT_CONTROL, glfw.PRESS)
+    state.on_key(glfw.KEY_RIGHT_CONTROL, glfw.PRESS)
+    state.on_key(glfw.KEY_RIGHT_CONTROL, glfw.RELEASE)
+
+    assert Action.DOWN in state.take_frame().held
 
 
 def test_unbound_keys_are_ignored() -> None:

@@ -9,7 +9,7 @@ y up, depth from -1 (near plane) to +1 (far plane).
 import numpy as np
 import numpy.typing as npt
 
-WORLD_UP = np.array([0.0, 0.0, 1.0])
+WORLD_UP = (0.0, 0.0, 1.0)
 
 type Vector = npt.ArrayLike
 
@@ -35,6 +35,11 @@ def view_matrix(eye_m: Vector, forward: Vector, up: Vector = WORLD_UP) -> np.nda
 
 def perspective(fov_y_rad: float, aspect: float, near_m: float, far_m: float) -> np.ndarray:
     """OpenGL perspective projection; `fov_y_rad` is the vertical field of view."""
+    if not (0.0 < fov_y_rad < np.pi and aspect > 0.0 and 0.0 < near_m < far_m):
+        raise ValueError(
+            f"no projection for fov {fov_y_rad} rad, aspect {aspect}, "
+            f"near {near_m} m, far {far_m} m"
+        )
     f = 1.0 / np.tan(fov_y_rad / 2.0)
     projection = np.zeros((4, 4))
     projection[0, 0] = f / aspect
