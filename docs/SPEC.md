@@ -76,18 +76,18 @@ Recalibrated by the M0 measurements (`docs/benchmarks/2026-11-20-m0-laptop.md`);
 
 | Solver | Capacity | Time budget (ms) |
 | --- | --- | --- |
-| Liquid (APIC/FLIP) | 1–2 million particles, ≤ 2 million active cells at 6.25 cm. At risk: the pressure solve on the full house grid is estimated at 4.6–8.7 ms per substep; particle transfers are measured in M1 | 9 |
-| Gas, smoke and fire | Target 96³ to 128³ cells in a moving box, 5–10 cm cells. At risk: estimated 3.3–6.1 ms per substep at 96³ and 6.8–13.5 ms at 128³, times 1–4 CFL substeps per frame (3 for a 5 m/s plume in 7.5 cm cells at 30 fps, the cap of 4 in 5 cm cells); 192³ is out of reach (≈ 44 ms). M3 decides box size, gas substeps and pressure solve frequency | 6 |
+| Liquid (APIC/FLIP) | 1–2 million particles, ≤ 2 million active cells at 6.25 cm. At risk: the pressure solve on the full house grid is estimated at 4.6–8.7 ms per substep with constant coefficients and 6.6–12.7 ms with the variational weights of rigid-body coupling (section 5.2), times the CFL substeps (2 for water at 2 m/s at 30 fps, so 9–25 ms per frame); particle transfers are measured in M1 | 9 |
+| Gas, smoke and fire | Target 96³ to 128³ cells in a moving box, 5–10 cm cells. At risk: estimated 3.3–6.1 ms per substep at 96³ and 6.8–13.5 ms at 128³, times 1–4 CFL substeps per frame; a 0.5–1 MW furniture fire rises at 6.7–7.7 m/s (McCaffrey), which needs 3–4 substeps in 7.5 cm cells at 30 fps; 192³ is out of reach (≈ 44 ms). M3 decides box size, gas substeps and pressure solve frequency | 6 |
 | Rigid bodies and fracture | 5,000 bodies, 20,000 bonds (not measured in M0; checked in M2) | 3 |
 | Granular (MPM) | 300,000 particles (not measured in M0; checked in M4) | 2 |
-| Shallow water (street, M8) | 1024 × 1024 cells at 25 cm (bandwidth bound ≈ 0.2 ms per step; checked in M8) | 1 |
+| Shallow water (street, M8) | 1024 × 1024 cells at 25 cm; about 0.23 ms per step by bandwidth bound, and a 4 m surge needs about 7 steps per 1/30 s frame (Δt ≤ Δx/4a with a = |u| + √(gh), the CFL limit of Kurganov & Petrova's 2D scheme), so about 1.6 ms per frame: at risk, M8 decides | 1 |
 | Blast model and coupling | analytic, per event (checked in M5) | 1 |
 
 **Measured hardware limits (M0, provisional until the Dell thermal profile is confirmed)**
 
-- Planning bandwidth: 450 GB/s for read-write streaming in the sustained state (503 GB/s measured at the full 9001 MHz memory clock; the clock drops to 8001 MHz under the power cap). A kernel moving B bytes per cell over N cells costs at least B·N / 450 GB/s. Grids that fit in the 64 MiB L2 cache run up to twice as fast; solvers with many live fields should not count on it.
+- Planning bandwidth (estimate): 450 GB/s for read-write streaming in the sustained state, the 503 GB/s copy measured at the full 9001 MHz memory clock scaled to the 8001 MHz seen under the power cap (the 192³ streaming pass measured 462 GB/s during a run in which the memory clock fell to 8001 MHz). A kernel moving B bytes per cell over N cells costs at least B·N / 450 GB/s. Grids that fit in the 64 MiB L2 cache run up to twice as fast; solvers with many live fields should not count on it.
 - Sustained GPU state after warm-up: 83–89 °C, 110 W power limit, thermal and power capped; SM clock 1.3–1.7 GHz instead of 2.3 GHz, memory clock 8001–9001 MHz.
-- A kernel launched from Python costs about 15 µs of CPU time, so solver frames launch their kernels from CUDA graphs only (median 0.2–0.7 µs of CPU per kernel depending on graph size, up to 1.1 µs at p90 for large graphs): at most about 1,800 graph kernels per frame on the CPU side if launches had the whole 2 ms orchestration budget, which they share with game logic and the interface. Iterative solver loops run as conditional graph nodes, so CPU launches do not grow with iterations. On the GPU every executed kernel, iterations included, costs about 1.2 µs on top of its work and is counted in the solver's budget (2,000 kernels = 2.4 ms).
+- A kernel launched from Python costs about 15 µs of CPU time (measured), so solver frames launch their kernels from CUDA graphs only (median 0.2–0.7 µs of CPU per kernel depending on graph size, up to 1.1 µs at p90 for large graphs): at most about 1,800 graph kernels per frame on the CPU side if launches had the whole 2 ms orchestration budget, which they share with game logic and the interface. Iterative solver loops run as conditional graph nodes, so CPU launches do not grow with iterations (support checked, cost to be measured in M1). On the GPU every executed kernel costs about 1.2 µs on top of its work (measured on tiny kernels; estimate for others) and is counted in the solver's budget (2,000 kernels = 2.4 ms).
 - CPU and GPU work concurrently (reasoned, measured from M1): Python enqueues while the GPU runs earlier work, so the orchestration budget is the CPU time the GPU has to wait for: synchronisation points such as CUDA–OpenGL map and unmap, read-backs, and OpenGL and interface calls on the same thread.
 
 **Memory budgets**
@@ -196,7 +196,7 @@ Keys below are positions on a QWERTY keyboard (W A S D is Z Q S D on AZERTY). Ev
 
 ### 4.6 Time control, checkpoints and recording
 
-- Slow motion advances less simulated time per frame, every frame; solvers take smaller CFL substeps, so slow motion costs less per frame and loses no fidelity (ADR 0008).
+- Slow motion advances less simulated time per frame, every frame, and costs less per frame (ADR 0008). Solvers take smaller CFL substeps, so they take more substeps per simulated second; advection and particle–grid transfers lose a little at each, so slow motion is slightly more dissipative (smoke a little blurrier), not identical (ADR 0013).
 - The camera stays free while paused, to inspect a frozen explosion from every side.
 - Checkpoints copy the full simulation state to host memory asynchronously: automatically every 10 s (ring of 6) and on F5.
 - A re-run from a checkpoint is not bit-identical on the GPU (section 9.6). Small divergence is expected and harmless.
@@ -219,7 +219,7 @@ Each story is accepted only when its criteria pass as automated tests and Matt h
 | --- | --- | --- | --- |
 | US-01 | First splash | In Test Tank, 10 s of hose at 20 L/s puts 200 L ± 2 % of water in the tank, at ≥ 30 fps | M1 |
 | US-02 | Dam break | A released water column advances like Martin & Moyce's experiment (test V-LIQ-03) | M1 |
-| US-03 | Slow motion | At 0.1× the camera moves freely, and a scenario run at 0.1× matches the same scenario at 1× in simulated time within a stated tolerance (substeps differ; section 9.6) | M1 |
+| US-03 | Slow motion | At 0.1× the camera moves freely, and a scenario run at 0.1× matches the same scenario at 1× in simulated time: a dam break run at both speeds meets V-LIQ-03 (front within 10 % of Martin & Moyce) and V-LIQ-02's volume tolerance (drift ≤ 1 %) (ADR 0008, ADR 0013) | M1 |
 | US-04 | It floats | A wooden crate (600 kg/m³) settles 60 % ± 5 % submerged; a concrete block sinks | M2 |
 | US-05 | Wading | In Walk mode, water 0.5 m deep flowing at 1 m/s pushes the player | M2 |
 | US-06 | Light it up | An ignited wooden table burns; smoke fills the ceiling layer first, then descends | M3 |
@@ -287,7 +287,7 @@ Air is an incompressible gas on a grid that follows the active region, carrying 
 
 ### 5.4 Rigid bodies
 
-Rigid bodies use extended position-based dynamics (XPBD) with substepping: 16 substeps per frame, one constraint iteration each. This scheme stays stable with large stacks and many contacts, which matters when a house comes down.
+Rigid bodies use extended position-based dynamics (XPBD) with substepping: the advance is split into ⌈advance / (1/480 s)⌉ equal substeps (16 per 1/30 s frame), one constraint iteration each. A substep is at most 1/480 s, and at least 1/960 s when the advance is longer than 1/480 s, so stiffness and joint forces vary within a factor of 2 with the frame rate, not 20 (ADR 0013). This scheme stays stable with large stacks and many contacts, which matters when a house comes down.
 
 - **Shapes:** box, sphere, capsule and convex hull (fragments). Static map geometry is an SDF.
 - **Contacts:** a GPU broad phase (hash grid or BVH), then convex narrow phase. The exact narrow-phase method is decided in an architecture decision record (ADR) in M2.
@@ -342,12 +342,18 @@ Each frame advances the world once by the measured frame time multiplied by the 
 7. Step granular matter.
 8. Write render buffers.
 
-- **Substeps:** liquid and gas substeps follow the CFL condition (no particle moves more than one cell per substep), capped at 4 per frame. When the cap is reached, the time scale drops automatically and the HUD says so. The world slows down rather than blowing up numerically.
+- **Substeps:** each frame first fixes one advance for the whole world (ADR 0008), then every solver splits it into its own substeps (ADR 0013):
+  - Liquid: n = ⌈advance · (u_max + √(g·Δx)) / Δx⌉, at most 4. No particle moves more than one cell per substep; the gravity term is Bridson's √(5·Δx·g) at a CFL number of 1.
+  - Gas: n = ⌈advance · u_max / Δx⌉, at most 4.
+  - Rigid bodies: substeps of at most 1/480 s.
+  - The CPU fixes the advance from the previous frame's maximum speeds, read back without a synchronisation point. When the cap would be exceeded, the advance shrinks before any solver steps, the time scale drops automatically and the HUD says so. The world slows down rather than blowing up numerically.
+  - Simplification: if speed grows faster within one frame than that estimate allowed, the fluid substeps stay at the cap and move more than one cell for that frame. The HUD and the log count such frames, and the next advance shrinks.
+  - With the cap and the 1/30 s clamp, flows faster than about 4 cells per advance slow the world down: about 6.7 m/s for water in 6.25 cm cells at 30 fps.
 - **Guards:** every solver checks for NaN and infinity after its step. On detection, the simulation freezes, dumps its state to disk and shows an alert, so every crash becomes a reproducible bug report.
 
 ## 6. Coupling matrix
 
-Couplings are exchanged once per substep in a fixed order (section 5.9), and every exchange conserves what it moves: momentum given by water to a body is taken from the water, heat absorbed by steam is taken from the gas. Only water and rigid bodies are solved together in one system; every other pair is exchanged in sequence.
+Couplings are exchanged once per advance in a fixed order (section 5.9, ADR 0013), and every exchange conserves what it moves: momentum given by water to a body is taken from the water, heat absorbed by steam is taken from the gas. Only water and rigid bodies are solved together in one system, in the pressure solve of every liquid substep; M2 decides how rigid substeps interleave with liquid substeps. Every other pair is exchanged in sequence.
 
 | Pair | What happens | Direction | Method | Milestone |
 | --- | --- | --- | --- | --- |
@@ -432,7 +438,7 @@ flowchart TD
     granular["<b>Granular matter</b><br/>MLS-MPM, Drucker-Prager"]
     blast["<b>Blast</b><br/>Kinney and Graham, occlusion"]
     swe["<b>Shallow water</b><br/>street surge, Saint-Venant"]
-    coupling["<b>Coupling</b>: momentum, heat and mass exchanged every substep"]
+    coupling["<b>Coupling</b>: momentum, heat and mass exchanged every advance"]
   end
   sim -->|no copy| render["<b>Renderer</b><br/>OpenGL 4.6, reads GPU buffers"]
   sim --> ui["<b>Interface</b><br/>Dear ImGui panels and HUD"]
@@ -776,6 +782,10 @@ Linked entries were checked against the publisher or the authors' page; unlinked
 - Müller, Chentanez, Kim (2013). [Real Time Dynamic Fracture with Volumetric Approximate Convex Decompositions](https://doi.org/10.1145/2461912.2461934). ACM Transactions on Graphics 32(4), SIGGRAPH 2013.
 - Hu, Fang, Ge, Qu, Zhu, Pradhana, Jiang (2018). [A Moving Least Squares Material Point Method with Displacement Discontinuity and Two-Way Rigid Body Coupling](https://doi.org/10.1145/3197517.3201293). ACM Transactions on Graphics 37(4), SIGGRAPH 2018.
 - Klár, Gast, Pradhana, Fu, Schroeder, Jiang, Teran (2016). [Drucker-Prager Elastoplasticity for Sand Animation](https://doi.org/10.1145/2897824.2925906). ACM Transactions on Graphics 35(4), SIGGRAPH 2016.
+
+**Fire plumes**
+
+- McCaffrey (1979). Purely Buoyant Diffusion Flames: Some Experimental Results. NBSIR 79-1910, National Bureau of Standards.
 
 **Explosions**
 
