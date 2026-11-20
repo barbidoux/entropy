@@ -8,6 +8,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 - Benchmark harness (#4): `bench/harness.py` and the `-m perf` session fixture. Checks
+  mains power, energy saver and the Windows power mode around every benchmark, warms
+  the GPU up for 5 minutes, times work with CUDA events, and writes JSON results with
+  GPU telemetry. Only runs meeting the SPEC 3 conditions are official and go to
+  `docs/benchmarks/results/`. ADR 0007 records the method.
   mains power and the Windows power mode, warms the GPU up for 5 minutes, times work
   with CUDA events, and writes JSON results with GPU telemetry. Only runs meeting the
   SPEC 3 conditions are official and go to `docs/benchmarks/results/`.

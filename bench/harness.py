@@ -2,9 +2,9 @@
 
 SPEC section 3: budgets are measured on the laptop, on mains power, in
 performance power mode, after a 5-minute warm-up, so thermal throttling is in
-the numbers. A run that misses any of these still records its results, but
-under `out/benchmarks/` (ignored by git) and marked unofficial; only official
-runs are written to `docs/benchmarks/results/`.
+the numbers (method: ADR 0007). A run that misses any of these still records
+its results, but under `out/benchmarks/` (ignored by git) and marked
+unofficial; only official runs are written to `docs/benchmarks/results/`.
 """
 
 from __future__ import annotations
@@ -16,10 +16,11 @@ import subprocess
 import sys
 import time
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
-from datetime import date
+from dataclasses import dataclass, field, replace
+from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
 import numpy as np
@@ -81,44 +82,54 @@ class PowerMode(StrEnum):
 
 PERFORMANCE_MODES = frozenset({PowerMode.BEST_PERFORMANCE, PowerMode.HIGH_PERFORMANCE_PLAN})
 
-_PERFORMANCE_PLANS = {
-    "8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c",  # High performance
-    "e9a42b02-d5df-448d-aa00-03f14749eb61",  # Ultimate performance
-}
-_OVERLAYS = {
-    "ded574b5-45a0-4f42-8737-46345c09c238": PowerMode.BEST_PERFORMANCE,
-    "3af9b8d9-7c97-431d-ad78-34a8bfea439f": PowerMode.BETTER_PERFORMANCE,
-    "00000000-0000-0000-0000-000000000000": PowerMode.BALANCED,
-    "961cc777-2547-4f9d-8174-7d86181b8a7a": PowerMode.BEST_EFFICIENCY,
-}
+_BALANCED_PLAN = "381b4222-f694-41f0-9685-ff5bb260df2e"
+_PERFORMANCE_PLANS = frozenset(
+    {
+        "8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c",  # High performance
+        "e9a42b02-d5df-448d-aa00-03f14749eb61",  # Ultimate performance
+    }
+)
+_OVERLAYS = MappingProxyType(
+    {
+        "ded574b5-45a0-4f42-8737-46345c09c238": PowerMode.BEST_PERFORMANCE,
+        "3af9b8d9-7c97-431d-ad78-34a8bfea439f": PowerMode.BETTER_PERFORMANCE,
+        "00000000-0000-0000-0000-000000000000": PowerMode.BALANCED,
+        "961cc777-2547-4f9d-8174-7d86181b8a7a": PowerMode.BEST_EFFICIENCY,
+    }
+)
 
 
 def power_mode_from_guids(*, plan: str | None, overlay: str | None) -> PowerMode:
     """Interpret the active power plan and overlay GUIDs.
 
-    A High or Ultimate performance plan wins; otherwise the Windows 11 power-mode
-    slider (the overlay) decides.
+    A High or Ultimate performance plan counts as performance mode. The
+    Windows 11 power-mode slider (the overlay) applies only to the Balanced
+    plan; under any other plan a stored overlay is stale and ignored.
     """
-    if plan is not None and plan.lower() in _PERFORMANCE_PLANS:
+    plan = plan.lower() if plan else None
+    if plan in _PERFORMANCE_PLANS:
         return PowerMode.HIGH_PERFORMANCE_PLAN
-    if overlay is None:
+    if plan != _BALANCED_PLAN or overlay is None:
         return PowerMode.UNKNOWN
     return _OVERLAYS.get(overlay.lower(), PowerMode.UNKNOWN)
 
 
 @dataclass(frozen=True)
 class PowerState:
+    """One reading of the Windows power state."""
+
     on_ac: bool | None
     power_mode: PowerMode
+    energy_saver: bool | None
 
 
 class _Guid(ctypes.Structure):
-    _fields_ = [
+    _fields_ = (
         ("data1", ctypes.c_uint32),
         ("data2", ctypes.c_uint16),
         ("data3", ctypes.c_uint16),
         ("data4", ctypes.c_ubyte * 8),
-    ]
+    )
 
     def __str__(self) -> str:
         tail = bytes(self.data4).hex()
@@ -126,30 +137,32 @@ class _Guid(ctypes.Structure):
 
 
 class _SystemPowerStatus(ctypes.Structure):
-    _fields_ = [
+    _fields_ = (
         ("ac_line_status", ctypes.c_ubyte),
         ("battery_flag", ctypes.c_ubyte),
         ("battery_life_percent", ctypes.c_ubyte),
         ("system_status_flag", ctypes.c_ubyte),
         ("battery_life_time", ctypes.c_uint32),
         ("battery_full_life_time", ctypes.c_uint32),
-    ]
+    )
 
 
 def read_power_state() -> PowerState:
-    """Mains power and power mode, read from the Windows power API.
+    """Mains power, power mode and energy saver, from the Windows power API.
 
     Returns unknown values on other systems or if a call fails.
     """
     if sys.platform != "win32":
-        return PowerState(on_ac=None, power_mode=PowerMode.UNKNOWN)
+        return PowerState(on_ac=None, power_mode=PowerMode.UNKNOWN, energy_saver=None)
     kernel32 = ctypes.WinDLL("kernel32")
     powrprof = ctypes.WinDLL("powrprof")
 
     status = _SystemPowerStatus()
     on_ac: bool | None = None
+    energy_saver: bool | None = None
     if kernel32.GetSystemPowerStatus(ctypes.byref(status)):
         on_ac = {0: False, 1: True}.get(status.ac_line_status)
+        energy_saver = status.system_status_flag == 1
 
     plan: str | None = None
     plan_ptr = ctypes.POINTER(_Guid)()
@@ -163,24 +176,31 @@ def read_power_state() -> PowerState:
     if get_overlay is not None and get_overlay(ctypes.byref(overlay_guid)) == 0:
         overlay = str(overlay_guid)
 
-    return PowerState(on_ac=on_ac, power_mode=power_mode_from_guids(plan=plan, overlay=overlay))
+    return PowerState(
+        on_ac=on_ac,
+        power_mode=power_mode_from_guids(plan=plan, overlay=overlay),
+        energy_saver=energy_saver,
+    )
 
 
 @dataclass(frozen=True)
 class Conditions:
-    """Conditions of a benchmark session."""
+    """Conditions under which a result was measured."""
 
     on_ac: bool | None
     power_mode: PowerMode
     warmup_s: float
+    energy_saver: bool | None = False
 
     def reasons_not_official(self) -> list[str]:
-        """Why results of this session cannot be official; empty if they can."""
+        """Why results under these conditions cannot be official; empty if they can."""
         reasons = []
         if self.on_ac is not True:
             reasons.append("not on mains power")
         if self.power_mode not in PERFORMANCE_MODES:
             reasons.append(f"power mode is {self.power_mode.value}, not performance")
+        if self.energy_saver is not False:
+            reasons.append("energy saver is on or unknown")
         if self.warmup_s < WARMUP_REQUIRED_S:
             reasons.append(f"warm-up {self.warmup_s:.0f} s < {WARMUP_REQUIRED_S:.0f} s")
         return reasons
@@ -189,51 +209,85 @@ class Conditions:
     def official(self) -> bool:
         return not self.reasons_not_official()
 
+    def after(self, state: PowerState) -> Conditions:
+        """These conditions combined with a later power reading: never better, maybe worse."""
+        on_ac = False if False in (self.on_ac, state.on_ac) else self.on_ac and state.on_ac
+        power_mode = self.power_mode
+        if state.power_mode is not power_mode and power_mode in PERFORMANCE_MODES:
+            power_mode = state.power_mode
+        saver = True if True in (self.energy_saver, state.energy_saver) else None
+        if self.energy_saver is False and state.energy_saver is False:
+            saver = False
+        return replace(self, on_ac=on_ac, power_mode=power_mode, energy_saver=saver)
+
     def as_dict(self) -> dict[str, Any]:
         return {
             "on_ac": self.on_ac,
             "power_mode": self.power_mode.value,
+            "energy_saver": self.energy_saver,
             "warmup_s": self.warmup_s,
             "official": self.official,
             "reasons_not_official": self.reasons_not_official(),
         }
 
 
+def _number(value: str) -> float | None:
+    try:
+        return float(value)
+    except ValueError:
+        return None  # "[N/A]", "[Not Supported]", or anything unexpected
+
+
 _NVIDIA_SMI_FIELDS = (
     ("gpu", "name", str),
     ("driver", "driver_version", str),
-    ("sm_clock_mhz", "clocks.sm", float),
-    ("memory_clock_mhz", "clocks.mem", float),
-    ("temperature_c", "temperature.gpu", float),
-    ("power_w", "power.draw", float),
+    ("sm_clock_mhz", "clocks.sm", _number),
+    ("memory_clock_mhz", "clocks.mem", _number),
+    ("temperature_c", "temperature.gpu", _number),
+    ("power_w", "power.draw", _number),
+    # The limit actually enforced, which reflects the Dell thermal profile too.
+    ("power_limit_w", "enforced.power.limit", _number),
     ("pstate", "pstate", str),
-    ("throttle_reasons", "clocks_throttle_reasons.active", str),
+    ("clock_event_reasons", "clocks_event_reasons.active", str),
 )
 
 
 def parse_nvidia_smi(line: str) -> dict[str, Any]:
-    """Parse one CSV line of `nvidia-smi --query-gpu` (no header, no units)."""
+    """Parse one CSV line of `nvidia-smi --query-gpu` (no header, no units).
+
+    Raises ValueError if the number of fields does not match the query.
+    """
     values = [value.strip() for value in line.split(",")]
-    parsed: dict[str, Any] = {}
-    for (key, _, convert), value in zip(_NVIDIA_SMI_FIELDS, values, strict=True):
-        parsed[key] = None if "N/A" in value else convert(value)
-    return parsed
+    if len(values) != len(_NVIDIA_SMI_FIELDS):
+        raise ValueError(f"expected {len(_NVIDIA_SMI_FIELDS)} fields, got {len(values)}")
+    return {
+        key: convert(value)
+        for (key, _, convert), value in zip(_NVIDIA_SMI_FIELDS, values, strict=True)
+    }
 
 
-def read_gpu_telemetry() -> dict[str, Any] | None:
-    """Clocks, temperature and power of GPU 0, or None without nvidia-smi."""
+def _query_nvidia_smi() -> str:
     query = ",".join(name for _, name, _ in _NVIDIA_SMI_FIELDS)
+    return subprocess.run(
+        ["nvidia-smi", f"--query-gpu={query}", "--format=csv,noheader,nounits", "-i", "0"],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    ).stdout
+
+
+def read_gpu_telemetry(query: Callable[[], str] = _query_nvidia_smi) -> dict[str, Any] | None:
+    """Clocks, temperature and power of GPU 0; None if they cannot be read.
+
+    Telemetry is context, never worth losing a measurement for, so every
+    failure gives None.
+    """
     try:
-        output = subprocess.run(
-            ["nvidia-smi", f"--query-gpu={query}", "--format=csv,noheader,nounits", "-i", "0"],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=10,
-        ).stdout
-    except (OSError, subprocess.SubprocessError):
+        lines = query().strip().splitlines()
+        return parse_nvidia_smi(lines[0]) if lines else None
+    except (OSError, subprocess.SubprocessError, ValueError):
         return None
-    return parse_nvidia_smi(output.strip().splitlines()[0])
 
 
 def time_device(
@@ -241,9 +295,11 @@ def time_device(
 ) -> list[float]:
     """Duration of each of `repeats` calls of `fn`, in seconds.
 
-    On CUDA the time is measured on the GPU with CUDA events around each call,
-    so it is the GPU time of the work `fn` enqueues. On CPU it is wall time,
-    with the device synchronized after each call.
+    On CUDA, CUDA events are recorded on the device's stream around each call,
+    so a sample is the stream time between them: the GPU work `fn` enqueues,
+    plus any time the GPU waits for Python to enqueue it. On CPU it is wall
+    time, with the device synchronized after each call. The first
+    `warmup_calls` calls (kernel loading, caches) are not timed.
     """
     wp.init()
     for _ in range(warmup_calls):
@@ -251,14 +307,15 @@ def time_device(
     wp.synchronize_device(device)
     samples: list[float] = []
     if wp.get_device(device).is_cuda:
+        stream = wp.get_stream(device)
         events = [
             (wp.Event(device, enable_timing=True), wp.Event(device, enable_timing=True))
             for _ in range(repeats)
         ]
         for start, end in events:
-            wp.record_event(start)
+            stream.record_event(start)
             fn()
-            wp.record_event(end)
+            stream.record_event(end)
         wp.synchronize_device(device)
         samples = [wp.get_event_elapsed_time(start, end) * 1e-3 for start, end in events]
     else:
@@ -286,10 +343,13 @@ def warm_up(
     """Keep `device` busy for at least `seconds`; return the time actually spent, in s.
 
     The load streams two arrays of `elements` floats (512 MiB with the default),
-    which heats both the GPU and its memory.
+    which heats both the GPU and its memory. The kernel is loaded before the
+    clock starts, so compilation never counts as warm-up.
     """
     x = wp.full(elements, 1.0, dtype=float, device=device)
     y = wp.zeros(elements, dtype=float, device=device)
+    wp.launch(_warm_up_kernel, dim=elements, inputs=[x, y], device=device)
+    wp.synchronize_device(device)
     start = clock()
     now = start
     while now - start < seconds:
@@ -300,18 +360,22 @@ def warm_up(
     return now - start
 
 
-def result_path(name: str, conditions: Conditions, repo_root: Path, day: date) -> Path:
-    """Where a result file goes: `docs/benchmarks/results/` if official, else `out/`."""
+def result_path(name: str, conditions: Conditions, repo_root: Path, stamp: datetime) -> Path:
+    """Where a result file goes: `docs/benchmarks/results/` if official, else `out/`.
+
+    The session time stamp in the name keeps two sessions of one day apart.
+    """
     folder = repo_root / "docs" / "benchmarks" / "results"
     if not conditions.official:
         folder = repo_root / "out" / "benchmarks"
-    return folder / f"{day.isoformat()}-{name}.json"
+    return folder / f"{stamp:%Y-%m-%d-%H%M%S}-{name}.json"
 
 
-def _git_commit(repo_root: Path) -> str | None:
+def _git_describe(repo_root: Path) -> str | None:
+    """Commit of the measured code, with `-dirty` if the tree had local changes."""
     try:
         return subprocess.run(
-            ["git", "rev-parse", "--short", "HEAD"],
+            ["git", "describe", "--always", "--dirty"],
             cwd=repo_root,
             check=True,
             capture_output=True,
@@ -322,53 +386,69 @@ def _git_commit(repo_root: Path) -> str | None:
         return None
 
 
+def _json_value(value: object) -> object:
+    if isinstance(value, np.generic):
+        return value.item()
+    raise TypeError(f"{type(value).__name__} is not JSON serializable")
+
+
 def write_result(
     name: str,
     metrics: Mapping[str, Any],
     conditions: Conditions,
     repo_root: Path,
     *,
-    day: date | None = None,
+    stamp: datetime | None = None,
     telemetry: Mapping[str, Any] | None = None,
 ) -> Path:
     """Write one benchmark result as JSON and return its path."""
-    day = day or date.today()
-    path = result_path(name, conditions, repo_root, day)
+    stamp = stamp or datetime.now().replace(microsecond=0)
+    path = result_path(name, conditions, repo_root, stamp)
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "name": name,
-        "date": day.isoformat(),
+        "timestamp": stamp.isoformat(),
         "metrics": dict(metrics),
         "conditions": conditions.as_dict(),
         "telemetry": dict(telemetry or {}),
         "environment": {
             "python": platform.python_version(),
             "warp": wp.config.version,
+            "numpy": np.__version__,
             "platform": platform.platform(),
-            "git_commit": _git_commit(repo_root),
+            "git": _git_describe(repo_root),
         },
     }
-    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    text = json.dumps(payload, indent=2, default=_json_value)
+    path.write_text(text + "\n", encoding="utf-8")
     return path
 
 
 @dataclass
 class BenchSession:
-    """One `-m perf` session: fixed conditions, telemetry before and after each benchmark."""
+    """One `-m perf` session.
+
+    Telemetry and the power state are read again right before and right after
+    each benchmark, so unplugging or changing the power mode during a session
+    makes the affected results unofficial.
+    """
 
     conditions: Conditions
     repo_root: Path
     telemetry: Callable[[], Mapping[str, Any] | None] = read_gpu_telemetry
-    day: date | None = None
-    _before: dict[str, Any] = field(default_factory=dict)
+    power_state: Callable[[], PowerState] = read_power_state
+    stamp: datetime = field(default_factory=lambda: datetime.now().replace(microsecond=0))
+    _started: dict[str, tuple[Mapping[str, Any] | None, PowerState]] = field(default_factory=dict)
 
     def start(self, name: str) -> None:
         """Call right before measuring `name`."""
-        self._before[name] = self.telemetry()
+        self._started[name] = (self.telemetry(), self.power_state())
 
     def record(self, name: str, metrics: Mapping[str, Any]) -> Path:
-        """Write the result of `name` with telemetry from `start` and now."""
-        telemetry = {"before": self._before.pop(name, None), "after": self.telemetry()}
+        """Write the result of `name`; `start(name)` must have been called."""
+        before, power_before = self._started.pop(name)
+        telemetry = {"before": before, "after": self.telemetry()}
+        conditions = self.conditions.after(power_before).after(self.power_state())
         return write_result(
-            name, metrics, self.conditions, self.repo_root, day=self.day, telemetry=telemetry
+            name, metrics, conditions, self.repo_root, stamp=self.stamp, telemetry=telemetry
         )

@@ -21,12 +21,14 @@ $env:ENTROPY_WARMUP_S = "20"; uv run pytest -m perf -s
 
 ## Official and unofficial results
 
-Each benchmark writes one JSON file with its metrics, the session conditions, GPU
-telemetry (clocks, temperature, power, throttle reasons) before and after, and the
-software versions (`bench/harness.py`).
+Each benchmark writes one JSON file, named after the session start time and the
+benchmark, with its metrics, its conditions, GPU telemetry (clocks, temperature, power,
+enforced power limit, clock event reasons) before and after, and the software versions
+including `git describe --dirty` (`bench/harness.py`, method in ADR 0007).
 
-- **Official**: on mains power, in a performance power mode, after at least 300 s of
-  warm-up. Written to `docs/benchmarks/results/` and committed.
+- **Official**: on mains power, energy saver off, in a performance power mode, after at
+  least 300 s of warm-up, with the power state checked again around each benchmark.
+  Written to `docs/benchmarks/results/` and committed.
 - **Unofficial**: anything else. Written to `out/benchmarks/`, ignored by git, and the
   reasons are listed in the file.
 
