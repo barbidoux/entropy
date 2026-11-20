@@ -49,5 +49,6 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   limits (450 GB/s planning bandwidth, provisional sustained GPU state, kernel launches
   from CUDA graphs only, host and GPU per-kernel costs). SPEC 5.3, 5.9 and 11 aligned.
 - ADR 0008: one simulation advance per frame of the frame time × time scale, clamped to
-  1/30 s, frame rate capped at 60 fps (SPEC 13, SPEC 5.9).
+  1/30 s, frame rate capped at 60 fps (SPEC 13, SPEC 5.9); SPEC 4.6 and US-03 reworded:
+  slow motion matches normal speed within a tolerance, not bit for bit.
 - Benchmarks re-heat the GPU for 10 s before each run and read a non-zero buffer.

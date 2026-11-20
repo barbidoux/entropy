@@ -77,7 +77,7 @@ Recalibrated by the M0 measurements (`docs/benchmarks/2026-11-20-m0-laptop.md`);
 | Solver | Capacity | Time budget (ms) |
 | --- | --- | --- |
 | Liquid (APIC/FLIP) | 1–2 million particles, ≤ 2 million active cells at 6.25 cm. At risk: the pressure solve on the full house grid is estimated at 4.6–8.7 ms per substep; particle transfers are measured in M1 | 9 |
-| Gas, smoke and fire | Target 96³ to 128³ cells in a moving box, 5–10 cm cells. At risk: estimated 3.3–6.1 ms per substep at 96³ and 6.8–13.5 ms at 128³, times 1–3 CFL substeps per frame; 192³ is out of reach (≈ 44 ms). M3 decides box size, gas substeps and pressure solve frequency | 6 |
+| Gas, smoke and fire | Target 96³ to 128³ cells in a moving box, 5–10 cm cells. At risk: estimated 3.3–6.1 ms per substep at 96³ and 6.8–13.5 ms at 128³, times 1–4 CFL substeps per frame (3 for a 5 m/s plume in 7.5 cm cells at 30 fps, the cap of 4 in 5 cm cells); 192³ is out of reach (≈ 44 ms). M3 decides box size, gas substeps and pressure solve frequency | 6 |
 | Rigid bodies and fracture | 5,000 bodies, 20,000 bonds (not measured in M0; checked in M2) | 3 |
 | Granular (MPM) | 300,000 particles (not measured in M0; checked in M4) | 2 |
 | Shallow water (street, M8) | 1024 × 1024 cells at 25 cm (bandwidth bound ≈ 0.2 ms per step; checked in M8) | 1 |
@@ -87,7 +87,7 @@ Recalibrated by the M0 measurements (`docs/benchmarks/2026-11-20-m0-laptop.md`);
 
 - Planning bandwidth: 450 GB/s for read-write streaming in the sustained state (503 GB/s measured at the full 9001 MHz memory clock; the clock drops to 8001 MHz under the power cap). A kernel moving B bytes per cell over N cells costs at least B·N / 450 GB/s. Grids that fit in the 64 MiB L2 cache run up to twice as fast; solvers with many live fields should not count on it.
 - Sustained GPU state after warm-up: 83–89 °C, 110 W power limit, thermal and power capped; SM clock 1.3–1.7 GHz instead of 2.3 GHz, memory clock 8001–9001 MHz.
-- A kernel launched from Python costs about 15 µs of CPU time, so solver frames launch their kernels from CUDA graphs only (0.2–1.1 µs of CPU per kernel): at most about 1,800 graph kernels per frame on the CPU side. Iterative solver loops run as conditional graph nodes, so CPU launches do not grow with iterations. On the GPU every executed kernel, iterations included, costs about 1.2 µs on top of its work and is counted in the solver's budget (2,000 kernels = 2.4 ms).
+- A kernel launched from Python costs about 15 µs of CPU time, so solver frames launch their kernels from CUDA graphs only (median 0.2–0.7 µs of CPU per kernel depending on graph size, up to 1.1 µs at p90 for large graphs): at most about 1,800 graph kernels per frame on the CPU side if launches had the whole 2 ms orchestration budget, which they share with game logic and the interface. Iterative solver loops run as conditional graph nodes, so CPU launches do not grow with iterations. On the GPU every executed kernel, iterations included, costs about 1.2 µs on top of its work and is counted in the solver's budget (2,000 kernels = 2.4 ms).
 - CPU and GPU work concurrently (reasoned, measured from M1): Python enqueues while the GPU runs earlier work, so the orchestration budget is the CPU time the GPU has to wait for: synchronisation points such as CUDA–OpenGL map and unmap, read-backs, and OpenGL and interface calls on the same thread.
 
 **Memory budgets**
@@ -194,7 +194,7 @@ Procedural generators produce ordinary, editable maps: a house generator (floors
 
 ### 4.6 Time control, checkpoints and recording
 
-- Slow motion advances less simulated time per frame with the same physical time step, so slow motion costs less and loses no fidelity.
+- Slow motion advances less simulated time per frame, every frame; solvers take smaller CFL substeps, so slow motion costs less per frame and loses no fidelity (ADR 0008).
 - The camera stays free while paused, to inspect a frozen explosion from every side.
 - Checkpoints copy the full simulation state to host memory asynchronously: automatically every 10 s (ring of 6) and on F5.
 - A re-run from a checkpoint is not bit-identical on the GPU (section 9.6). Small divergence is expected and harmless.
@@ -217,7 +217,7 @@ Each story is accepted only when its criteria pass as automated tests and Matt h
 | --- | --- | --- | --- |
 | US-01 | First splash | In Test Tank, 10 s of hose at 20 L/s puts 200 L ± 2 % of water in the tank, at ≥ 30 fps | M1 |
 | US-02 | Dam break | A released water column advances like Martin & Moyce's experiment (test V-LIQ-03) | M1 |
-| US-03 | Slow motion | At 0.1× the camera moves freely and the physics stays identical in simulated time | M1 |
+| US-03 | Slow motion | At 0.1× the camera moves freely, and a scenario run at 0.1× matches the same scenario at 1× in simulated time within a stated tolerance (substeps differ; section 9.6) | M1 |
 | US-04 | It floats | A wooden crate (600 kg/m³) settles 60 % ± 5 % submerged; a concrete block sinks | M2 |
 | US-05 | Wading | In Walk mode, water 0.5 m deep flowing at 1 m/s pushes the player | M2 |
 | US-06 | Light it up | An ignited wooden table burns; smoke fills the ceiling layer first, then descends | M3 |

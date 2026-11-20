@@ -51,7 +51,12 @@ and rendering kernels run on it one after the other.
   of CFL substeps the frame needs, which depends on the frame time and the flow speed.
 - The frame time drives the simulation step, so it varies slightly from frame to frame;
   CPU golden tests drive the simulation with scripted fixed time steps instead.
-- SPEC 5.9 is reworded to state this model explicitly.
+- SPEC 5.9 is reworded to state this model explicitly. SPEC 4.6 and user story US-03
+  are reworded too: a slow-motion run takes smaller substeps than a normal run, so the
+  two agree in simulated time within a tolerance, not bit for bit.
+- With vertical sync on a display whose refresh rate is not a multiple of 60 Hz (for
+  example 144 Hz), a capped frame rounds up to the next refresh (20.8 ms, 48 fps). The
+  advance uses the measured frame time, so the world still moves at the right speed.
 
 ## How we would know it is wrong
 
