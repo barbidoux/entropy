@@ -10,7 +10,7 @@ Simplifications, named (CLAUDE.md rule 7):
 - light values are relative, not calibrated physical units (SPEC 7.2 brings HDR);
 - no shadows, and no light bounced from the ground, so faces turned down are black;
 - distance haze: exponential over 300 m towards the horizon colour;
-- the sun disk is drawn about 1° wide, larger than the real 0.27°, to be visible;
+- the sun disk is drawn about 1° in radius (the real sun: 0.27°), to be visible;
 - the ground is a one-sided 20 km square; seen from below it is invisible.
 """
 

@@ -109,7 +109,8 @@ def test_each_face_of_the_origin_cube_has_the_modelled_colour(
     np.testing.assert_allclose(pixel, _expected_face(normal), atol=3.0)
 
 
-def test_sunlit_faces_are_brighter_than_faces_turned_away(window: GameWindow) -> None:
+def test_the_model_lights_sunlit_faces_more_than_faces_turned_away() -> None:
+    """The face test ties the shader to this model; here the model itself is checked."""
     assert SUN_DIRECTION[0] > 0 and SUN_DIRECTION[2] > 0
     assert _expected_face((1.0, 0.0, 0.0)).mean() > _expected_face((-1.0, 0.0, 0.0)).mean() + 20
 
@@ -120,10 +121,36 @@ def test_grid_lines_lie_on_whole_metres(window: GameWindow) -> None:
     view = _view((20.3, 20.3, 3.0), (1e-3, 0.0, -1.0))
     image = _render(window, view, size).mean(axis=2)
 
-    on_line = image[_pixel_of(view, (20.0, 20.5, 0.0), size)]
     in_cell = image[_pixel_of(view, (20.5, 20.5, 0.0), size)]
+    ten_metre_line = image[_pixel_of(view, (20.0, 20.5, 0.0), size)]
+    metre_line = image[_pixel_of(view, (21.0, 20.5, 0.0), size)]
 
-    assert on_line < in_cell - 10
+    assert ten_metre_line < in_cell - 10
+    assert metre_line < in_cell - 10
+
+
+def test_the_zenith_is_bluer_than_the_horizon(window: GameWindow) -> None:
+    """Catches an upside-down sky: below the horizon the sky is the horizon colour."""
+    up = _render(window, _view((0.0, 0.0, 1.7), (1e-3, 0.0, 1.0)))[SIZE[1] // 2, SIZE[0] // 2]
+    level = _render(window, _view((0.0, 0.0, 1.7), (-1.0, 0.0, 0.0)))[
+        SIZE[1] // 2 - 5, SIZE[0] // 2
+    ]
+
+    assert up[2] - up[0] > level[2] - level[0] + 20
+
+
+def test_a_square_stays_square_on_a_wide_image(window: GameWindow) -> None:
+    """The origin cube's top face, seen from straight above, is as wide as it is tall."""
+    size = (320, 180)
+    image = _render(window, _view((0.0, 0.0, 4.0), (1e-3, 0.0, -1.0)), size)
+    top = np.all(np.abs(image - _expected_face((0.0, 0.0, 1.0))) < 6.0, axis=2)
+
+    rows = np.flatnonzero(top.any(axis=1))
+    columns = np.flatnonzero(top.any(axis=0))
+    height, width = np.ptp(rows) + 1, np.ptp(columns) + 1
+
+    assert height > 20
+    assert abs(width - height) <= 2
 
 
 def test_the_viewport_follows_the_given_size_not_the_target(window: GameWindow) -> None:
