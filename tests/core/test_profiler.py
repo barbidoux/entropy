@@ -1,11 +1,13 @@
 """Frame statistics for the performance HUD (`entropy.core.profiler`)."""
 
 import sys
+from types import SimpleNamespace
 
 import pytest
 import warp as wp
 
 from entropy.core.profiler import (
+    CudaEvents,
     FrameStats,
     StageTimer,
     cuda_stage_timer,
@@ -260,6 +262,27 @@ def test_gpu_times_leave_the_window_like_frames() -> None:
     assert stats.summary().gpu_ms_mean == pytest.approx({"liquid": 1.0})
 
 
+def test_each_stage_keeps_its_own_window() -> None:
+    """CUDA and OpenGL results arrive as separate entries; neither pushes the other out."""
+    stats = FrameStats(window=2)
+    stats.record(1 / 60, {})
+    stats.record_gpu({"liquid": 0.010})
+    for _ in range(3):
+        stats.record_gpu({"scene": 0.001})
+
+    assert stats.summary().gpu_ms_mean == pytest.approx({"liquid": 10.0, "scene": 1.0})
+
+
+def test_a_cuda_span_is_ready_only_when_both_events_are_done() -> None:
+    """A pending start event must never be read or reused."""
+    events = CudaEvents("cpu")
+    span = SimpleNamespace(
+        start=SimpleNamespace(is_complete=False), end=SimpleNamespace(is_complete=True)
+    )
+
+    assert not events.ready(span, frames_ago=0)  # type: ignore[arg-type]
+
+
 @pytest.mark.gpu
 def test_cuda_events_time_a_kernel() -> None:
     timer = cuda_stage_timer("cuda:0")
@@ -271,5 +294,31 @@ def test_cuda_events_time_a_kernel() -> None:
 
     (frame,) = timer.collect()
 
-    # 256 MiB written at no more than the 576 GB/s DRAM peak take at least 0.46 ms.
-    assert 0.00046 < frame["fill"] < 0.1
+    # 256 MiB written, of which at most the 64 MiB L2 can hold back, at no more than the
+    # 576 GB/s DRAM peak: at least 192 MiB / 576 GB/s = 0.35 ms.
+    assert 0.00035 < frame["fill"] < 0.1
+
+
+@wp.kernel
+def _spin(out: wp.array(dtype=float), iterations: int):
+    i = wp.tid()
+    x = wp.float32(0.0)  # a typed constructor makes x mutable inside the loop
+    for _ in range(iterations):
+        x = x * 0.999 + 1.0  # pyright: ignore[reportOperatorIssue] (Warp kernel types)
+    out[i] = x
+
+
+@pytest.mark.gpu
+def test_collect_does_not_wait_for_the_gpu() -> None:
+    out = wp.zeros(256, dtype=float, device="cuda:0")
+    wp.launch(_spin, 256, [out, 1], device="cuda:0")  # compile outside the stage
+    wp.synchronize_device("cuda:0")
+    timer = cuda_stage_timer("cuda:0")
+    with timer.stage("spin"):
+        wp.launch(_spin, 256, [out, 20_000_000], device="cuda:0")
+    timer.end_frame()
+
+    assert timer.collect() == []  # the kernel is still running: no result, no wait
+    wp.synchronize_device("cuda:0")
+    (frame,) = timer.collect()
+    assert frame["spin"] > 0.001

@@ -62,6 +62,17 @@ def test_queries_bracket_the_pass_and_are_reused() -> None:
     assert len(ctx.made) == 1
 
 
+def test_nested_opengl_stages_are_refused() -> None:
+    """OpenGL cannot nest time queries: the inner one would read 0 and cut the outer short."""
+    queries = GlQueries(FakeContext(), lag_frames=0)  # type: ignore[arg-type]
+    outer = queries.begin()
+
+    with pytest.raises(RuntimeError, match="nest"):
+        queries.begin()
+    queries.end(outer)
+    queries.end(queries.begin())  # after the outer one ends, a new one may start
+
+
 @pytest.fixture(scope="module")
 def window(window_settings: WindowSettings) -> Iterator[GameWindow]:
     with GameWindow(window_settings, visible=False) as w:
@@ -72,11 +83,12 @@ def window(window_settings: WindowSettings) -> Iterator[GameWindow]:
 def test_an_opengl_pass_gets_a_gpu_time(window: GameWindow) -> None:
     timer = StageTimer(GlQueries(window.ctx, lag_frames=1))
     with timer.stage("clear"):
-        window.ctx.clear(0.2, 0.3, 0.4)
+        for shade in range(50):
+            window.ctx.clear(shade / 50, 0.3, 0.4)
     timer.end_frame()
     assert timer.collect() == []
     timer.end_frame()
 
     (frame,) = timer.collect()
 
-    assert 0.0 <= frame["clear"] < 1.0
+    assert 0.0 < frame["clear"] < 1.0

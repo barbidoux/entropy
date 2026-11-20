@@ -46,6 +46,16 @@ def test_hud_labels_cpu_and_gpu_stage_times() -> None:
     assert any("test pattern (CUDA)" in line and "0.05 ms" in line for line in lines[gpu:])
 
 
+def test_cpu_and_gpu_times_line_up() -> None:
+    summary = dataclasses.replace(SUMMARY, gpu_ms_mean={"scene (OpenGL)": 0.35})
+
+    lines = hud_lines(summary, MEMORY, interop="zero-copy")
+
+    cpu = next(line for line in lines if "logic" in line)
+    gpu = next(line for line in lines if "scene (OpenGL)" in line)
+    assert len(cpu) == len(gpu)
+
+
 def test_hud_says_when_no_gpu_time_has_come_yet() -> None:
     assert "GPU ms per stage: none yet" in hud_lines(SUMMARY, MEMORY, interop="zero-copy")
 

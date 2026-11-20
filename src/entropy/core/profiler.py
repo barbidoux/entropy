@@ -3,10 +3,12 @@
 Stage times are CPU wall times on the main thread. GPU work is enqueued
 asynchronously, so its cost shows up wherever the CPU first waits for it (the
 CUDA-OpenGL map, or presenting the frame), not in the stage that enqueued it.
-GPU time per stage is measured separately by a `StageTimer` (issue #29): CUDA
-events around Warp work here, OpenGL timer queries around render passes in
-`entropy.render.gl_timer`. Its results arrive a frame or more late and are
-read only when the GPU has finished, so the CPU never waits for them.
+GPU time per stage is measured separately by a `StageTimer` (issue #29, ADR
+0014): CUDA events around Warp work here, OpenGL timer queries around render
+passes in `entropy.render.gl_timer`. Results arrive a frame or more late. CUDA
+results are read only once the GPU has finished them, so the CPU never waits;
+OpenGL results are read after a fixed lag and the read may stall (see
+`entropy.render.gl_timer`).
 """
 
 from __future__ import annotations
@@ -58,12 +60,17 @@ class FrameStats:
     def __init__(self, window: int = 120) -> None:
         if window < 1:
             raise ValueError("the window must hold at least one frame")
+        self._window = window
         self._frames: deque[_Frame] = deque(maxlen=window)
-        self._gpu_frames: deque[Mapping[str, float]] = deque(maxlen=window)
+        self._gpu_s: dict[str, deque[float]] = {}
 
     def record_gpu(self, stages_s: Mapping[str, float]) -> None:
-        """GPU seconds per stage of one frame, as `StageTimer.collect` gives them."""
-        self._gpu_frames.append(dict(stages_s))
+        """GPU seconds per stage of one frame, as `StageTimer.collect` gives them.
+
+        Each stage keeps its own window, since CUDA and OpenGL results arrive
+        separately and at different lags."""
+        for stage, seconds in stages_s.items():
+            self._gpu_s.setdefault(stage, deque(maxlen=self._window)).append(seconds)
 
     def record(
         self,
@@ -105,7 +112,7 @@ class FrameStats:
             stages_ms_mean=_mean_ms(frame.stages_s for frame in self._frames),
             world_speed=simulated_s / real_s if real_s > 0 else 0.0,
             time_kept=kept_s / requested_s if requested_s > 0 else 1.0,
-            gpu_ms_mean=_mean_ms(self._gpu_frames),
+            gpu_ms_mean={stage: sum(s) / len(s) * 1e3 for stage, s in self._gpu_s.items()},
         )
 
 
@@ -121,15 +128,16 @@ def _mean_ms(frames: Iterable[Mapping[str, float]]) -> dict[str, float]:
 
 
 class TimerBackend(Protocol):
-    """Starts and ends GPU time spans and reads them once the GPU has finished."""
+    """Starts and ends GPU time spans and reads them later."""
 
     def begin(self) -> Any: ...
 
     def end(self, token: Any) -> None: ...
 
     def ready(self, token: Any, frames_ago: int) -> bool:
-        """Whether the span's result can be read without waiting; `frames_ago` counts the
-        frames ended since the span's own frame ended."""
+        """Whether to read the span now; `frames_ago` counts the frames ended since the
+        span's own frame ended. CUDA answers from the GPU, so the read never waits;
+        OpenGL answers from a fixed lag, so its read may wait (`entropy.render.gl_timer`)."""
         ...
 
     def take_elapsed_s(self, token: Any) -> float:
@@ -138,10 +146,11 @@ class TimerBackend(Protocol):
 
 
 class StageTimer:
-    """GPU time of named stages per frame (SPEC 4.7), read only once the GPU is done.
+    """GPU time of named stages per frame (SPEC 4.7), read when the backend says so.
 
-    Stages with the same name in one frame add up (a solver's substeps). With no
-    backend (no GPU) nothing is timed.
+    Stages with the same name in one frame add up (a solver's substeps). Whether
+    stages may nest depends on the backend: CUDA events may, OpenGL queries may
+    not. With no backend (no GPU) nothing is timed.
     """
 
     def __init__(self, backend: TimerBackend | None) -> None:
@@ -192,7 +201,16 @@ class _CudaSpan:
 
 
 class CudaEvents:
-    """CUDA events with timing on the device's current stream; reused once read."""
+    """CUDA events with timing on the device's current stream; reused once read.
+
+    A span is GPU time between two points of that stream, so:
+    - Work inside a stage must run on the stream current when the stage starts. Put a
+      `wp.ScopedStream` around the stage, never inside it, or the kernels run elsewhere
+      and the span measures nearly nothing.
+    - Stages bracket CUDA graph launches; they cannot sit inside a graph capture.
+    - The span includes idle time when the CPU enqueues more slowly than the GPU runs
+      (for example a kernel compiled on its first launch inside the stage).
+    """
 
     def __init__(self, device: str) -> None:
         self._device = wp.get_device(device)
@@ -211,7 +229,9 @@ class CudaEvents:
         self._device.stream.record_event(token.end)
 
     def ready(self, token: _CudaSpan, frames_ago: int) -> bool:
-        return token.end is not None and token.end.is_complete
+        # Both events, so a pending event is never read or reused: cheap, and safe if a
+        # stage ever spans two streams.
+        return token.end is not None and token.start.is_complete and token.end.is_complete
 
     def take_elapsed_s(self, token: _CudaSpan) -> float:
         assert token.end is not None

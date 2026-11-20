@@ -19,6 +19,9 @@ _GIB = 2**30
 SLOWDOWN_PREFIX = "world slowed"
 _WARNING_COLOUR = (1.0, 0.65, 0.2, 1.0)
 
+_NAME_WIDTH = 20
+"""Stage names are padded to this width, so CPU and GPU times line up."""
+
 
 def hud_lines(
     summary: FrameSummary,
@@ -42,10 +45,14 @@ def hud_lines(
         f"frame {summary.frame_ms_mean:.2f} ms (worst {summary.frame_ms_worst:.2f} ms)",
     ]
     lines.append("CPU ms per stage")
-    lines += [f"  {stage:<11}{ms:6.2f} ms" for stage, ms in summary.stages_ms_mean.items()]
+    lines += [
+        f"  {stage:<{_NAME_WIDTH}}{ms:6.2f} ms" for stage, ms in summary.stages_ms_mean.items()
+    ]
     if summary.gpu_ms_mean:
         lines.append("GPU ms per stage")
-        lines += [f"  {stage:<20}{ms:6.2f} ms" for stage, ms in summary.gpu_ms_mean.items()]
+        lines += [
+            f"  {stage:<{_NAME_WIDTH}}{ms:6.2f} ms" for stage, ms in summary.gpu_ms_mean.items()
+        ]
     else:
         lines.append("GPU ms per stage: none yet")
     if memory is None:

@@ -10,9 +10,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - GPU time per stage in the HUD (#29): `entropy.core.profiler.StageTimer` brackets
   stages with CUDA events (Warp work) or OpenGL timer queries (render passes,
   `entropy.render.gl_timer`). It reads results only once the GPU has finished them
-  (CUDA) or three frames later (OpenGL, a named simplification). The HUD shows GPU ms
-  per stage under the CPU stage times, both labelled. M0 times the interop test pattern
-  and the scene, points and HUD passes; solvers add their own stages from M1.
+  (CUDA) or three frames later (OpenGL, a named simplification; nested OpenGL stages
+  raise). The HUD shows GPU ms per stage under the CPU stage times, both labelled and
+  aligned. M0 times the interop test pattern and the scene, points and HUD passes;
+  solvers add their own stages from M1. ADR 0014.
 - Solver isolation (#21): the architecture test sees each solver in `solvers/` as its
   own unit. A solver may not import another solver. The interface
   (`solvers/interface.py`) names no solver, and the package root imports only the
