@@ -7,6 +7,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Empty lit scene (#13): sky with a sun disk, ground with 1 m and 10 m grid lines, five
+  reference cubes of known size, Lambert sun light plus a sky term, ACES tone mapping and
+  sRGB output (`entropy.render.scene`), drawn at the window's real size; simplifications
+  named in the module docstring. `CameraView` hands the camera to the renderer. The start
+  camera shows all five cubes, each with a lit and a shaded face.
 - CUDA–OpenGL interop (#10): `entropy.render.interop.SharedBuffer` registers an OpenGL
   buffer with CUDA and maps it as a Warp array, with no copy; on CPU or if registration
   fails it copies through host memory (pinned staging) and logs why (Warp's own silent
