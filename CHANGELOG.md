@@ -84,3 +84,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   1/30 s, frame rate capped at 60 fps (SPEC 13, SPEC 5.9); SPEC 4.6 and US-03 reworded:
   slow motion matches normal speed within a tolerance, not bit for bit.
 - Benchmarks re-heat the GPU for 10 s before each run and read a non-zero buffer.
+- M0 physics audit applied: ADR 0013 (one shared advance per frame computed before any
+  solver, CFL substeps of liquid and gas capped at 4, XPBD substeps of at most 1/480 s,
+  sources by accumulated volume); SPEC 3 costs per substep times substeps (water 2 m/s
+  needs 2, a furniture fire plume at about 7 m/s needs 4 in 7.5 cm cells, McCaffrey 1979),
+  shallow water costed per frame, estimates labelled; SPEC 4.6 and US-03: slow motion is
+  slightly more dissipative and compared on integral quantities; benchmark report states
+  the MGPCG assumptions (12–18 sweep equivalents per iteration). The bandwidth benchmark
+  bounds its results by the peak of the memory clock actually seen. M1 issues #34–#36.
+- README: how to play M0.
