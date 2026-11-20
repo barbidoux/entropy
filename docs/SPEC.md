@@ -219,7 +219,7 @@ Each story is accepted only when its criteria pass as automated tests and Matt h
 | --- | --- | --- | --- |
 | US-01 | First splash | In Test Tank, 10 s of hose at 20 L/s puts 200 L ± 2 % of water in the tank, at ≥ 30 fps | M1 |
 | US-02 | Dam break | A released water column advances like Martin & Moyce's experiment (test V-LIQ-03) | M1 |
-| US-03 | Slow motion | At 0.1× the camera moves freely, and a scenario run at 0.1× matches the same scenario at 1× in simulated time: a dam break run at both speeds meets V-LIQ-03 (front within 10 % of Martin & Moyce) and V-LIQ-02 (volume drift ≤ 1 %) (ADR 0008, ADR 0013) | M1 |
+| US-03 | Slow motion | At 0.1× the camera moves freely, and a scenario run at 0.1× matches the same scenario at 1× in simulated time: a dam break run at both speeds meets V-LIQ-03 (front within 10 % of Martin & Moyce) and V-LIQ-02's volume tolerance (drift ≤ 1 %) (ADR 0008, ADR 0013) | M1 |
 | US-04 | It floats | A wooden crate (600 kg/m³) settles 60 % ± 5 % submerged; a concrete block sinks | M2 |
 | US-05 | Wading | In Walk mode, water 0.5 m deep flowing at 1 m/s pushes the player | M2 |
 | US-06 | Light it up | An ignited wooden table burns; smoke fills the ceiling layer first, then descends | M3 |
@@ -438,7 +438,7 @@ flowchart TD
     granular["<b>Granular matter</b><br/>MLS-MPM, Drucker-Prager"]
     blast["<b>Blast</b><br/>Kinney and Graham, occlusion"]
     swe["<b>Shallow water</b><br/>street surge, Saint-Venant"]
-    coupling["<b>Coupling</b>: momentum, heat and mass exchanged every substep"]
+    coupling["<b>Coupling</b>: momentum, heat and mass exchanged every advance"]
   end
   sim -->|no copy| render["<b>Renderer</b><br/>OpenGL 4.6, reads GPU buffers"]
   sim --> ui["<b>Interface</b><br/>Dear ImGui panels and HUD"]

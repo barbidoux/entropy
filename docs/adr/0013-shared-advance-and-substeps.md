@@ -58,8 +58,8 @@ The M0 physics audit re-derived ADR 0008's model against the solvers to come:
     of 20 with the frame rate. In slow motion, substeps shrink with the advance.
 - **Slow motion is honest.** It is cheaper per frame and slightly more dissipative per
   simulated second. In US-03 the dam break run at 0.1× and at 1× must both meet
-  V-LIQ-03 (front within 10 % of Martin & Moyce for T ≤ 3) and V-LIQ-02 (volume drift
-  ≤ 1 %). These tolerances come from the references, not from the runs.
+  V-LIQ-03 (front within 10 % of Martin & Moyce for T ≤ 3) and V-LIQ-02's volume
+  tolerance (drift ≤ 1 %). These tolerances come from the references, not from the runs.
 - **Sources** (hose, flood, gas leak) emit by accumulated mass or volume carried across
   substeps and frames, so a small advance in slow motion loses nothing to rounding.
 
@@ -76,7 +76,7 @@ At 30 fps, with the cap of 4:
 US-01 still holds: it counts 200 L in 10 s of simulated time. M1 decides between:
 - a higher liquid cap where the tank's pressure solve is cheap enough;
 - a wider nozzle by default (65 mm gives 6 m/s at 20 L/s, within the cap);
-- accepting the slowdown for strong jets.
+- accepting the slowdown for jets stronger than US-01's.
 
 ## Alternatives considered
 
