@@ -1,6 +1,6 @@
 # ENTROPY — Engine & Game Specification
 
-> Living document: https://claude.ai/artifact/RK3rxXqXVz6rBX78kGedLc — this file is its versioned mirror, exported 2026-11-20. When the two differ, the living document wins until the next export.
+> Living document: https://claude.ai/artifact/RK3rxXqXVz6rBX78kGedLc — exported here on 2026-11-20. Since then this file is the reference (ADR 0006): it changes through pull requests, and changes Matt makes in the living document are brought here by the maintainer when he reports them.
 
 ## 1. Vision & pillars
 
@@ -436,7 +436,7 @@ Arrows show the data flow within one frame. The renderer, interface and exporter
 
 ### 8.1 Module responsibilities
 
-Dependencies point downward only, and a test enforces the import rules.
+Dependencies point downward only, and a test enforces the import rules. "May depend on" is transitive: a module may also use what its dependencies may use (ADR 0005). The package root `entropy/__init__.py` imports no subpackage, and `app` together with `entropy/__main__.py` forms the composition root.
 
 | Module | Responsibility | May depend on |
 | --- | --- | --- |
@@ -452,6 +452,8 @@ Dependencies point downward only, and a test enforces the import rules.
 | `render` | OpenGL context, interop buffers, passes, camera | `sim`, read-only |
 | `ui` | Dear ImGui panels, HUD | `game`, `sim`, read-only |
 | `io` | Save, load, export | `sim`, `world` |
+| `audio` | Sound events (M9) | `sim`, read-only |
+| `app` | Composition root: window, main loop, wiring of game, renderer and interface; no logic of its own | everything; nothing depends on it |
 
 ### 8.2 Extension points
 
@@ -583,7 +585,7 @@ The code lives in the private GitHub repository [barbidoux/entropy](https://gith
 - Squash merge, Conventional Commits messages, a changelog entry per merged change.
 - Work is tracked as GitHub issues grouped by milestone; each user story is an issue.
 - Architecture decisions are short ADRs in `docs/adr/`, numbered, never edited after acceptance (a new ADR supersedes an old one).
-- This spec is mirrored in `docs/SPEC.md`, versioned with the code.
+- `docs/SPEC.md` is the reference copy of this spec (ADR 0006), versioned with the code.
 
 ```
 entropy/
@@ -601,6 +603,7 @@ entropy/
     ui/          Dear ImGui panels, HUD
     io/          save, export (PLY, OpenVDB, JSON)
     audio/       sound events (M9)
+    app/         composition root: window, main loop, wiring
   content/       materials, prefabs, tools, maps (TOML, JSON)
   tests/         unit, property, validation, golden, render, gameplay, perf
   bench/         benchmark scenarios
