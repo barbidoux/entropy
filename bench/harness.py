@@ -190,7 +190,7 @@ class Conditions:
     on_ac: bool | None
     power_mode: PowerMode
     warmup_s: float
-    energy_saver: bool | None = False
+    energy_saver: bool | None = None
 
     def reasons_not_official(self) -> list[str]:
         """Why results under these conditions cannot be official; empty if they can."""
@@ -446,6 +446,8 @@ class BenchSession:
 
     def record(self, name: str, metrics: Mapping[str, Any]) -> Path:
         """Write the result of `name`; `start(name)` must have been called."""
+        if name not in self._started:
+            raise RuntimeError(f"call bench_session.start({name!r}) before measuring {name!r}")
         before, power_before = self._started.pop(name)
         telemetry = {"before": before, "after": self.telemetry()}
         conditions = self.conditions.after(power_before).after(self.power_state())

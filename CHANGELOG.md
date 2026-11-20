@@ -12,9 +12,6 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the GPU up for 5 minutes, times work with CUDA events, and writes JSON results with
   GPU telemetry. Only runs meeting the SPEC 3 conditions are official and go to
   `docs/benchmarks/results/`. ADR 0007 records the method.
-  mains power and the Windows power mode, warms the GPU up for 5 minutes, times work
-  with CUDA events, and writes JSON results with GPU telemetry. Only runs meeting the
-  SPEC 3 conditions are official and go to `docs/benchmarks/results/`.
 - Test harness (#3): `device` fixture over CPU and, with `-m gpu`, CUDA; a test
   enforcing the module dependency rules of SPEC 8.1, with `app` as the composition
   root; coverage measured in CI with a 90 % floor, Warp kernels excluded; ruff enforces

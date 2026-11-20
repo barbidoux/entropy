@@ -40,7 +40,9 @@ BEST_PERFORMANCE_OVERLAY = "ded574b5-45a0-4f42-8737-46345c09c238"
 
 STAMP = datetime(2026, 11, 20, 15, 45, 0)
 PLUGGED_FAST = PowerState(on_ac=True, power_mode=PowerMode.BEST_PERFORMANCE, energy_saver=False)
-OFFICIAL = Conditions(on_ac=True, power_mode=PowerMode.BEST_PERFORMANCE, warmup_s=300.0)
+OFFICIAL = Conditions(
+    on_ac=True, power_mode=PowerMode.BEST_PERFORMANCE, warmup_s=300.0, energy_saver=False
+)
 
 
 def test_summarize_reports_median_spread_and_extremes() -> None:
@@ -130,7 +132,9 @@ def test_official_results_go_to_docs_and_others_to_out(tmp_path: Path) -> None:
 
 
 def test_write_result_records_metrics_conditions_and_environment(tmp_path: Path) -> None:
-    conditions = Conditions(on_ac=True, power_mode=PowerMode.BEST_PERFORMANCE, warmup_s=301.5)
+    conditions = Conditions(
+        on_ac=True, power_mode=PowerMode.BEST_PERFORMANCE, warmup_s=301.5, energy_saver=False
+    )
 
     path = write_result(
         "bandwidth",
@@ -234,6 +238,13 @@ def test_bench_session_rereads_power_around_each_result(tmp_path: Path) -> None:
         "after": {"temperature_c": 72.0},
     }
     assert data["conditions"]["reasons_not_official"] == ["not on mains power"]
+
+
+def test_bench_session_says_when_start_was_forgotten(tmp_path: Path) -> None:
+    session = BenchSession(conditions=OFFICIAL, repo_root=tmp_path, telemetry=dict)
+
+    with pytest.raises(RuntimeError, match=r"start\('stencil'\)"):
+        session.record("stencil", {})
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows power API")
