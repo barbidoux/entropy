@@ -73,6 +73,21 @@ def test_nested_opengl_stages_are_refused() -> None:
     queries.end(queries.begin())  # after the outer one ends, a new one may start
 
 
+def test_a_failed_end_does_not_block_later_stages() -> None:
+    ctx = FakeContext()
+    queries = GlQueries(ctx, lag_frames=0)  # type: ignore[arg-type]
+    token = queries.begin()
+
+    def broken_exit(*args: object) -> None:
+        raise RuntimeError("driver error")
+
+    ctx.made[0].__exit__ = broken_exit  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError, match="driver error"):
+        queries.end(token)
+
+    queries.end(queries.begin())
+
+
 @pytest.fixture(scope="module")
 def window(window_settings: WindowSettings) -> Iterator[GameWindow]:
     with GameWindow(window_settings, visible=False) as w:

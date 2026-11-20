@@ -37,8 +37,10 @@ class GlQueries:
         return query
 
     def end(self, token: moderngl.Query) -> None:
-        token.__exit__()  # moderngl's __exit__ takes *args and ignores them
-        self._active = None
+        try:
+            token.__exit__()  # moderngl's __exit__ takes *args and ignores them
+        finally:
+            self._active = None
 
     def ready(self, token: moderngl.Query, frames_ago: int) -> bool:
         return frames_ago >= self._lag_frames

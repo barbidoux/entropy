@@ -40,7 +40,9 @@ time OpenGL work.
 - **Raw `GL_QUERY_RESULT_AVAILABLE` through ctypes:** the cleanest non-blocking read.
   But moderngl does not expose the query's GL name, so it would mean managing queries
   outside moderngl with raw GL calls. In the review of #41, reads 3 frames late took at
-  most 0.08 ms over 600 frames with and without vsync, so the simpler path was kept.
+  most 0.08–0.13 ms over 600 frames, with and without vsync. That was a hidden window
+  under the light M0 load, so M1 checks it again under solver load. The simpler path
+  was kept.
 - **CUDA events around render passes, as the issue said:** they would time only the
   interop kernel, not the drawing.
 - **Nsight or other external profilers:** useful for deep dives, but they are not in the
