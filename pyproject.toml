@@ -29,6 +29,7 @@ packages = ["src/entropy"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
 addopts = "-ra --strict-markers -p pytester -m 'not gpu and not perf and not soak'"
 markers = [
     "gpu: needs a CUDA device (run on the laptop with -m gpu)",
@@ -53,7 +54,7 @@ banned-from = ["warp"]
 warp = "wp"
 
 [tool.pyright]
-include = ["src", "tests"]
+include = ["src", "tests", "bench"]
 pythonVersion = "3.12"
 typeCheckingMode = "standard"
 # Warp kernels declare arguments as `wp.array(dtype=float)`: a call in a type
