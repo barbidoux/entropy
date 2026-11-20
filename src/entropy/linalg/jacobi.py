@@ -20,11 +20,12 @@ def _jacobi_step_kernel(
     h2_m2: float,
     omega: float,
 ):
-    i, j, k = wp.tid()
+    # 3D launch: tid() returns three indices, which Warp's stubs do not express.
+    i, j, k = wp.tid()  # pyright: ignore[reportGeneralTypeIssues, reportAssignmentType]
     nx = p.shape[0]
     ny = p.shape[1]
     nz = p.shape[2]
-    total = float(0.0)
+    total = wp.float32(0.0)
     if i > 0:
         total += p[i - 1, j, k]
     if i < nx - 1:
