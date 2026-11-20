@@ -27,9 +27,11 @@ class FrameSummary:
     world_speed: float = 0.0
     """Simulated seconds per real second over the window (the effective time scale).
 
-    It includes the chosen time scale: compare it with that scale to tell a slowdown
-    under load from slow motion. After a stall it reads low for one window.
+    It includes the chosen time scale; to tell a slowdown under load, use `time_kept`.
     """
+    time_kept: float = 1.0
+    """Simulated time over the simulated time the frames asked for (frame time x time
+    scale), over frames that asked for some: below 1 when the 1/30 s clamp bit."""
 
 
 @dataclass(frozen=True)
@@ -38,6 +40,7 @@ class _Frame:
     stages_s: Mapping[str, float]
     advance_s: float
     real_s: float
+    requested_s: float
 
 
 class FrameStats:
@@ -55,11 +58,19 @@ class FrameStats:
         *,
         advance_s: float = 0.0,
         real_s: float | None = None,
+        requested_s: float | None = None,
     ) -> None:
         """One frame, in seconds: its duration, its stages, and the simulated time it
-        advanced over `real_s` of real time (by default the frame's duration)."""
+        advanced over `real_s` of real time (by default the frame's duration), out of
+        `requested_s` it asked for (by default all of it)."""
         self._frames.append(
-            _Frame(frame_s, dict(stages_s), advance_s, frame_s if real_s is None else real_s)
+            _Frame(
+                frame_s,
+                dict(stages_s),
+                advance_s,
+                frame_s if real_s is None else real_s,
+                advance_s if requested_s is None else requested_s,
+            )
         )
 
     def summary(self) -> FrameSummary:
@@ -75,6 +86,9 @@ class FrameStats:
         elapsed_s = sum(durations)
         real_s = sum(frame.real_s for frame in self._frames)
         simulated_s = sum(frame.advance_s for frame in self._frames)
+        asked = [frame for frame in self._frames if frame.requested_s > 0]
+        requested_s = sum(frame.requested_s for frame in asked)
+        kept_s = sum(frame.advance_s for frame in asked)
         return FrameSummary(
             frames=len(durations),
             fps=len(durations) / elapsed_s if elapsed_s > 0 else 0.0,
@@ -82,6 +96,7 @@ class FrameStats:
             frame_ms_worst=max(durations) * 1e3,
             stages_ms_mean={stage: totals[stage] / counts[stage] * 1e3 for stage in totals},
             world_speed=simulated_s / real_s if real_s > 0 else 0.0,
+            time_kept=kept_s / requested_s if requested_s > 0 else 1.0,
         )
 
 

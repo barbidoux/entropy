@@ -131,6 +131,7 @@ class FrameLoop:
             },
             advance_s=advance_s,
             real_s=frame_s,
+            requested_s=frame_s * scale,
         )
         return FrameReport(frame_s=frame_s, advance_s=advance_s, dropped_s=dropped_s)
 

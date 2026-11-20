@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import ctypes
 from collections.abc import Sequence
+from types import TracebackType
 from typing import Any
 
 from imgui_bundle import imgui
@@ -15,6 +16,8 @@ from imgui_bundle import imgui
 from entropy.core.profiler import FrameSummary, GpuMemory
 
 _GIB = 2**30
+SLOWDOWN_PREFIX = "world slowed"
+_WARNING_COLOUR = (1.0, 0.65, 0.2, 1.0)
 
 
 def hud_lines(
@@ -27,9 +30,10 @@ def hud_lines(
 ) -> list[str]:
     """The HUD text: rate, frame time, time per stage, VRAM, interop path, notes.
 
-    Stage times are CPU wall times (see `entropy.core.profiler`). When the world
-    runs more than 5 % slower than `time_scale` asks (frames below 30 fps hit the
-    1/30 s clamp, SPEC 5.9), a line says so.
+    Stage times are CPU wall times (see `entropy.core.profiler`). When frames
+    lose more than 5 % of the simulated time they asked for (frames below
+    30 fps hit the 1/30 s clamp, SPEC 5.9), a line starting with
+    `SLOWDOWN_PREFIX` says so; pausing or slow motion is not a slowdown.
     """
     lines = [
         f"{summary.fps:.1f} fps",
@@ -45,28 +49,58 @@ def hud_lines(
             f" GiB (ENTROPY {warp})"
         )
     lines.append(f"interop {interop}")
-    if time_scale != 1.0:
+    if time_scale == 0.0:
+        lines.append("paused")
+    elif time_scale != 1.0:
         lines.append(f"time scale {time_scale:.2f}x")
-    if summary.frames and summary.world_speed < 0.95 * time_scale:
-        lines.append(f"world slowed to {summary.world_speed:.2f}x (set {time_scale:.2f}x)")
+    if summary.frames and summary.time_kept < 0.95:
+        lines.append(
+            f"{SLOWDOWN_PREFIX}: {summary.time_kept:.0%} of the set speed".replace("%", " %")
+        )
     lines += list(notes)
     return lines
 
 
 class PerformanceHud:
-    """A Dear ImGui overlay on a GLFW window, drawn into the current framebuffer."""
+    """A Dear ImGui overlay on a GLFW window, drawn into the current framebuffer.
+
+    Release it (or leave its `with` block) before the window closes: the
+    backends need the window and its OpenGL context.
+    """
 
     def __init__(self, glfw_window: Any, *, glsl_version: str = "#version 450") -> None:
-        self.visible = True
-        self.last_vertex_count = 0
-        self._context = imgui.create_context()
-        imgui.get_io().set_ini_filename("")  # no imgui.ini next to the game
-        address = ctypes.cast(glfw_window, ctypes.c_void_p).value
+        address = ctypes.cast(glfw_window, ctypes.c_void_p).value if glfw_window else None
         if address is None:
             raise ValueError("the HUD needs an open GLFW window")
-        imgui.backends.glfw_init_for_opengl(address, False)
-        imgui.backends.opengl3_init(glsl_version)
+        self.visible = True
         self._released = False
+        self._context = imgui.create_context()
+        io = imgui.get_io()
+        io.set_ini_filename("")  # no imgui.ini next to the game
+        # The HUD takes no input, so it must not change the cursor the game manages.
+        io.config_flags |= imgui.ConfigFlags_.no_mouse_cursor_change
+        try:
+            imgui.backends.glfw_init_for_opengl(address, False)
+            try:
+                imgui.backends.opengl3_init(glsl_version)
+            except BaseException:
+                imgui.backends.glfw_shutdown()
+                raise
+        except BaseException:
+            imgui.destroy_context(self._context)
+            raise
+        try:
+            self._scale_for(glfw_window)
+        except BaseException:
+            self.release()
+            raise
+
+    def _scale_for(self, glfw_window: Any) -> None:
+        """Scale the text with the display's scaling (150 % in Windows: 1.5)."""
+        import glfw  # loaded by the window already; kept local to `ui`
+
+        x_scale, _ = glfw.get_window_content_scale(glfw_window)
+        imgui.get_style().font_scale_dpi = max(1.0, float(x_scale))
 
     def toggle(self) -> None:
         self.visible = not self.visible
@@ -88,12 +122,13 @@ class PerformanceHud:
             )
             imgui.begin("Performance", None, flags)
             for line in lines:
-                imgui.text_unformatted(line)
+                if line.startswith(SLOWDOWN_PREFIX):
+                    imgui.text_colored(_WARNING_COLOUR, line)
+                else:
+                    imgui.text_unformatted(line)
             imgui.end()
         imgui.render()
-        draw_data = imgui.get_draw_data()
-        self.last_vertex_count = draw_data.total_vtx_count
-        imgui.backends.opengl3_render_draw_data(draw_data)
+        imgui.backends.opengl3_render_draw_data(imgui.get_draw_data())
 
     def release(self) -> None:
         if self._released:
@@ -103,3 +138,14 @@ class PerformanceHud:
         imgui.backends.glfw_shutdown()
         imgui.destroy_context(self._context)
         self._released = True
+
+    def __enter__(self) -> PerformanceHud:
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        self.release()

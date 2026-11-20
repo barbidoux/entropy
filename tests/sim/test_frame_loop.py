@@ -229,6 +229,29 @@ def test_stage_times_and_world_speed_are_recorded_for_the_hud() -> None:
     assert summary.world_speed == pytest.approx(0.5, rel=0.05)
 
 
+def test_resuming_after_a_pause_is_not_a_slowdown() -> None:
+    """Over a window that spans a pause and a resume, no time was asked and lost."""
+    loop, _, clock = _loop(LoopSettings(time_scale=0.0, min_frame_s=0.0))
+    for _ in range(60):
+        clock.now_s += 1 / 60
+        loop.run_frame()
+    loop.settings = LoopSettings(time_scale=1.0, min_frame_s=0.0)
+    for _ in range(10):
+        clock.now_s += 1 / 60
+        loop.run_frame()
+
+    assert loop.stats.summary().time_kept == pytest.approx(1.0)
+
+
+def test_frames_beyond_the_clamp_lose_time() -> None:
+    loop, _, clock = _loop()
+    for _ in range(5):
+        clock.now_s += 0.1
+        loop.run_frame()
+
+    assert loop.stats.summary().time_kept == pytest.approx(1 / 3)
+
+
 @pytest.mark.parametrize(
     "kwargs",
     [
