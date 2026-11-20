@@ -273,4 +273,3 @@ def test_cuda_events_time_a_kernel() -> None:
 
     # 256 MiB written at no more than the 576 GB/s DRAM peak take at least 0.46 ms.
     assert 0.00046 < frame["fill"] < 0.1
-

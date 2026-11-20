@@ -20,11 +20,12 @@ import warp as wp
 
 from entropy.core.config import Settings, default_settings_path, load_settings
 from entropy.core.paths import out_dir
-from entropy.core.profiler import FrameStats, gpu_memory
+from entropy.core.profiler import FrameStats, StageTimer, cuda_stage_timer, gpu_memory
 from entropy.game.god_mode import GodMode
 from entropy.game.input import bindings_from_settings
 from entropy.render.camera import CameraView
 from entropy.render.context import GameWindow
+from entropy.render.gl_timer import GlQueries
 from entropy.render.interop import SharedBuffer
 from entropy.render.points import PointsRenderer, write_test_pattern
 from entropy.render.scene import SceneRenderer
@@ -52,6 +53,10 @@ class GameStages:
         self.device = "cuda:0" if wp.is_cuda_available() else "cpu"
         self._mouse_captured = False
         self._pattern_time_s = 0.0
+        # GPU time per stage for the HUD (SPEC 4.7): CUDA events around Warp work,
+        # OpenGL timer queries around render passes.
+        self.cuda_timer = cuda_stage_timer(self.device)
+        self.gl_timer = StageTimer(GlQueries(window.ctx))
 
         ctx = window.ctx
         # Everything made here is released in reverse order, also if a later step fails,
@@ -119,7 +124,10 @@ class GameStages:
         width, height = self.window.framebuffer_size_px()
         if width == 0 or height == 0:
             return  # minimised
-        with self.pattern.writable() as positions:
+        with (
+            self.pattern.writable() as positions,
+            self.cuda_timer.stage("test pattern (CUDA)"),
+        ):
             write_test_pattern(positions, time_s=self._pattern_time_s)
         camera = self.settings.camera
         pose = self.mode.pose
@@ -132,8 +140,10 @@ class GameStages:
             far_m=camera.far_m,
         )
         screen = self.window.ctx.screen
-        self.scene.render(screen, view, (width, height))
-        self.points.render(screen, view, (width, height))
+        with self.gl_timer.stage("scene (OpenGL)"):
+            self.scene.render(screen, view, (width, height))
+        with self.gl_timer.stage("points (OpenGL)"):
+            self.points.render(screen, view, (width, height))
         lines = hud_lines(
             self.stats.summary(),
             gpu_memory(self.device),
@@ -141,7 +151,12 @@ class GameStages:
             time_scale=self.loop_settings.time_scale,
             notes=self.hud_notes(),
         )
-        self.hud.draw(lines)
+        with self.gl_timer.stage("HUD (OpenGL)"):
+            self.hud.draw(lines)
+        for timer in (self.cuda_timer, self.gl_timer):
+            timer.end_frame()
+            for stages_s in timer.collect():
+                self.stats.record_gpu(stages_s)
 
     def present(self) -> None:
         self.window.swap_buffers()

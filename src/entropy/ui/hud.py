@@ -30,7 +30,9 @@ def hud_lines(
 ) -> list[str]:
     """The HUD text: rate, frame time, time per stage, VRAM, interop path, notes.
 
-    Stage times are CPU wall times (see `entropy.core.profiler`). When frames
+    Stage times come twice, labelled: CPU wall times, and GPU times measured by
+    CUDA events and OpenGL timer queries, which arrive a few frames late (see
+    `entropy.core.profiler`). When frames
     lose more than 5 % of the simulated time they asked for (frames below
     30 fps hit the 1/30 s clamp, SPEC 5.9), a line starting with
     `SLOWDOWN_PREFIX` says so; pausing or slow motion is not a slowdown.
@@ -39,7 +41,13 @@ def hud_lines(
         f"{summary.fps:.1f} fps",
         f"frame {summary.frame_ms_mean:.2f} ms (worst {summary.frame_ms_worst:.2f} ms)",
     ]
+    lines.append("CPU ms per stage")
     lines += [f"  {stage:<11}{ms:6.2f} ms" for stage, ms in summary.stages_ms_mean.items()]
+    if summary.gpu_ms_mean:
+        lines.append("GPU ms per stage")
+        lines += [f"  {stage:<20}{ms:6.2f} ms" for stage, ms in summary.gpu_ms_mean.items()]
+    else:
+        lines.append("GPU ms per stage: none yet")
     if memory is None:
         lines.append("VRAM n/a (no CUDA device)")
     else:
