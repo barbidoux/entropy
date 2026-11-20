@@ -22,9 +22,15 @@ def hud_lines(
     memory: GpuMemory | None,
     *,
     interop: str,
+    time_scale: float = 1.0,
     notes: Sequence[str] = (),
 ) -> list[str]:
-    """The HUD text: rate, frame time, time per stage, VRAM, interop path, notes."""
+    """The HUD text: rate, frame time, time per stage, VRAM, interop path, notes.
+
+    Stage times are CPU wall times (see `entropy.core.profiler`). When the world
+    runs more than 5 % slower than `time_scale` asks (frames below 30 fps hit the
+    1/30 s clamp, SPEC 5.9), a line says so.
+    """
     lines = [
         f"{summary.fps:.1f} fps",
         f"frame {summary.frame_ms_mean:.2f} ms (worst {summary.frame_ms_worst:.2f} ms)",
@@ -33,11 +39,16 @@ def hud_lines(
     if memory is None:
         lines.append("VRAM n/a (no CUDA device)")
     else:
+        warp = "n/a" if memory.warp_bytes is None else f"{memory.warp_bytes / _GIB:.2f} GiB"
         lines.append(
             f"VRAM {memory.device_used_bytes / _GIB:.2f} / {memory.device_total_bytes / _GIB:.2f}"
-            f" GiB (ENTROPY {memory.warp_bytes / _GIB:.2f} GiB)"
+            f" GiB (ENTROPY {warp})"
         )
     lines.append(f"interop {interop}")
+    if time_scale != 1.0:
+        lines.append(f"time scale {time_scale:.2f}x")
+    if summary.frames and summary.world_speed < 0.95 * time_scale:
+        lines.append(f"world slowed to {summary.world_speed:.2f}x (set {time_scale:.2f}x)")
     lines += list(notes)
     return lines
 

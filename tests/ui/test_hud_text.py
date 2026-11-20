@@ -1,5 +1,7 @@
 """Text of the performance HUD (`entropy.ui.hud`), SPEC 4.7."""
 
+import dataclasses
+
 from entropy.core.profiler import FrameSummary, GpuMemory
 from entropy.ui.hud import hud_lines
 
@@ -38,6 +40,30 @@ def test_hud_without_a_gpu_says_so() -> None:
     text = "\n".join(hud_lines(SUMMARY, None, interop="host-copy"))
 
     assert "VRAM n/a" in text
+
+
+def test_hud_says_when_the_world_runs_slower_than_asked() -> None:
+    """SPEC 5.9: below 30 fps the world slows down, and the HUD says so."""
+    slowed = dataclasses.replace(SUMMARY, world_speed=0.62)
+
+    text = "\n".join(hud_lines(slowed, MEMORY, interop="zero-copy", time_scale=1.0))
+
+    assert "world slowed to 0.62x (set 1.00x)" in text
+
+
+def test_slow_motion_is_not_reported_as_a_slowdown() -> None:
+    slow_motion = dataclasses.replace(SUMMARY, world_speed=0.1)
+
+    text = "\n".join(hud_lines(slow_motion, MEMORY, interop="zero-copy", time_scale=0.1))
+
+    assert "slowed" not in text
+    assert "time scale 0.10x" in text
+
+
+def test_hud_without_warp_pool_figures() -> None:
+    memory = dataclasses.replace(MEMORY, warp_bytes=None)
+
+    assert "ENTROPY n/a" in "\n".join(hud_lines(SUMMARY, memory, interop="zero-copy"))
 
 
 def test_hud_shows_extra_notes() -> None:
