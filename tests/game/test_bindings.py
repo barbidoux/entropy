@@ -97,6 +97,9 @@ def test_a_position_can_be_named_explicitly() -> None:
         (ControlsSettings(menu="UNKNOWN"), r"controls\.menu: unknown key name 'UNKNOWN'"),
         (ControlsSettings(menu="LAST"), r"controls\.menu: unknown key name 'LAST'"),
         (ControlsSettings(menu="@É"), r"controls\.menu: unknown key position '@É'"),
+        # Digits for str.isdigit() but not on the digit row: no silent fallback, no bare error.
+        (ControlsSettings(toggle_hud="²"), r"controls\.toggle_hud: no key labelled '²'"),
+        (ControlsSettings(toggle_hud="٣"), r"controls\.toggle_hud: no key labelled '٣'"),
     ],
 )
 def test_impossible_controls_are_errors_naming_the_setting(

@@ -9,6 +9,16 @@ from pathlib import Path
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
+def repo_root() -> Path:
+    """The git clone ENTROPY runs from."""
+    return _REPO_ROOT
+
+
+def out_dir() -> Path:
+    """`out/`: logs and unofficial results, ignored by git."""
+    return _REPO_ROOT / "out"
+
+
 def content_dir() -> Path:
     """`content/`: materials, maps, settings (SPEC 10.2)."""
     content = _REPO_ROOT / "content"

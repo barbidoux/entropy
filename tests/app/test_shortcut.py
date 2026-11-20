@@ -54,7 +54,7 @@ def test_main_runs_the_script_for_the_clone(monkeypatch: pytest.MonkeyPatch) -> 
     script = calls[-1][-1]
     assert rf"'{DESKTOP}\ENTROPY.lnk'" in script
     assert f".TargetPath = '{UV}'" in script
-    assert f".WorkingDirectory = '{PureWindowsPath(str(shortcut._REPO_ROOT))}'" in script
+    assert f".WorkingDirectory = '{PureWindowsPath(str(shortcut.repo_root()))}'" in script
 
 
 def test_main_prefers_the_uv_that_is_running(monkeypatch: pytest.MonkeyPatch) -> None:

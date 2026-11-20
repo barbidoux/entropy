@@ -19,6 +19,7 @@ import glfw
 import warp as wp
 
 from entropy.core.config import Settings, default_settings_path, load_settings
+from entropy.core.paths import out_dir
 from entropy.core.profiler import FrameStats, gpu_memory
 from entropy.game.god_mode import GodMode
 from entropy.game.input import bindings_from_settings
@@ -33,7 +34,7 @@ from entropy.ui.hud import PerformanceHud, hud_lines
 _log = logging.getLogger(__name__)
 
 PATTERN_POINTS = 200_000
-DEFAULT_LOG_PATH = Path(__file__).resolve().parents[3] / "out" / "entropy.log"
+DEFAULT_LOG_PATH = out_dir() / "entropy.log"
 """Where the game logs, next to the clone (`out/` is ignored by git)."""
 CONTROLS_HINT = "clic : regarder   Échap : libérer la souris   F3 : HUD"
 
@@ -172,7 +173,9 @@ def run(settings: Settings, *, visible: bool = True, max_frames: int | None = No
 def _show_error(title: str, text: str) -> None:
     """A message box on Windows (the console of the shortcut is minimised), stderr elsewhere."""
     if sys.platform == "win32":
-        ctypes.WinDLL("user32").MessageBoxW(None, text, title, 0x10)  # MB_ICONERROR
+        mb_iconerror, mb_setforeground, mb_topmost = 0x10, 0x10000, 0x40000
+        flags = mb_iconerror | mb_setforeground | mb_topmost
+        ctypes.WinDLL("user32").MessageBoxW(None, text, title, flags)
     else:
         print(f"{title}: {text}", file=sys.stderr)
 
@@ -180,16 +183,17 @@ def _show_error(title: str, text: str) -> None:
 def main(log_path: Path = DEFAULT_LOG_PATH) -> int:
     """Run the game; on a failure, log the details and tell Matt in French."""
     log_path.parent.mkdir(parents=True, exist_ok=True)
+    root = logging.getLogger()
+    level_before = root.level
+    formatter = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
     handlers: list[logging.Handler] = [
         logging.StreamHandler(),
         logging.FileHandler(log_path, mode="w", encoding="utf-8"),
     ]
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-        handlers=handlers,
-        force=True,
-    )
+    for handler in handlers:
+        handler.setFormatter(formatter)
+        root.addHandler(handler)
+    root.setLevel(logging.INFO)
     try:
         run(load_settings(default_settings_path()))
     except Exception as error:
@@ -201,5 +205,7 @@ def main(log_path: Path = DEFAULT_LOG_PATH) -> int:
         return 1
     finally:
         for handler in handlers:
-            handler.flush()
+            root.removeHandler(handler)
+            handler.close()
+        root.setLevel(level_before)
     return 0

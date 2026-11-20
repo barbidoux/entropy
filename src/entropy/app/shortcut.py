@@ -14,7 +14,8 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path, PurePath, PureWindowsPath
 
-_REPO_ROOT = Path(__file__).resolve().parents[3]
+from entropy.core.paths import repo_root
+
 _MINIMISED = 7
 
 
@@ -90,7 +91,7 @@ def main() -> int:
     if uv is None:
         print("uv is not on the PATH: install uv first.", file=sys.stderr)
         return 1
-    shortcut = shortcut_for(_REPO_ROOT, desktop=_desktop(), uv=Path(uv))
+    shortcut = shortcut_for(repo_root(), desktop=_desktop(), uv=Path(uv))
     subprocess.run(
         ["powershell", "-NoProfile", "-Command", powershell_script(shortcut)],
         check=True,

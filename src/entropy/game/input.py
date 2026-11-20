@@ -88,7 +88,9 @@ def _key_for(setting: str, name: str, key_label: Callable[[int], str | None]) ->
         for key in _PRINTABLE_KEYS:
             if (key_label(key) or "").upper() == name.upper():
                 return key
-        if name.isdigit():  # AZERTY prints & é " ... on the digit row: use that row
+        # AZERTY prints & é " ... on the digit row: use that row. Not str.isdigit(),
+        # which also accepts "²" and other scripts' digits.
+        if name in "0123456789":
             return glfw.KEY_0 + int(name)
         raise ValueError(f"controls.{setting}: no key labelled {name!r} on this keyboard")
     key = getattr(glfw, f"KEY_{name.upper()}", None)
