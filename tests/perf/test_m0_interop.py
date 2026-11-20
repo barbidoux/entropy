@@ -24,7 +24,7 @@ REPEATS = 100
 @wp.kernel
 def _positions(points: wp.array(dtype=wp.vec3), t: float):
     i = wp.tid()
-    x = float(i) * 1e-6
+    x = float(i) * 1e-6  # pyright: ignore[reportArgumentType] (1D tid is an int)
     points[i] = wp.vec3(wp.sin(x + t), wp.cos(x + t), x)
 
 

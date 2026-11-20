@@ -20,7 +20,7 @@ COUNT = 1000
 @wp.kernel
 def _fill(points: wp.array(dtype=wp.vec3)):
     i = wp.tid()
-    x = float(i)
+    x = float(i)  # pyright: ignore[reportArgumentType] (1D tid is an int)
     points[i] = wp.vec3(x, 2.0 * x, -x)
 
 
