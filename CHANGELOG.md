@@ -7,6 +7,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Performance HUD (#14): Dear ImGui overlay toggled with F3 (`entropy.ui.hud`) showing
+  fps, mean and worst frame time, time per stage (CPU wall times), VRAM (device and
+  ENTROPY's Warp pool), the interop path, the time scale or pause, and a highlighted line
+  when frames lose simulated time to the 1/30 s clamp (SPEC 5.9). pyGLFW is pointed at
+  imgui-bundle's GLFW library without importing imgui-bundle (ADR 0011).
 - Empty lit scene (#13): sky with a sun disk, ground with 1 m and 10 m grid lines, five
   reference cubes of known size, Lambert sun light plus a sky term, ACES tone mapping and
   sRGB output (`entropy.render.scene`), drawn at the window's real size; simplifications
