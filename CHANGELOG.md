@@ -7,6 +7,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Solver isolation (#21): the architecture test sees each solver in `solvers/` as its
+  own unit. A solver may not import another solver. The interface
+  (`solvers/interface.py`) and the package root name no solver. `coupling` may import
+  only the interface. SPEC 8.1 and 10.2 name the interface module.
 - M0 gate report (#18, `docs/benchmarks/2026-11-20-m0-gate.md`):
   - every gate criterion with its evidence;
   - a second official benchmark session at `68636eb`, with the first official interop

@@ -458,8 +458,8 @@ Dependencies point downward only, and a test enforces the import rules. "May dep
 | `core` | Units, configuration, logging, profiler | nothing |
 | `fields` | Grids (staggered, cell-centred, later sparse), interpolation, advection | `core` |
 | `linalg` | Poisson solvers: Jacobi, PCG, MGPCG | `fields` |
-| `solvers/*` | One solver per phenomenon, each implementing the solver interface | `fields`, `linalg` |
-| `coupling` | Ordered exchanges between solvers, conservation checks | solver interfaces only |
+| `solvers/*` | One solver per phenomenon, each implementing the solver interface of `solvers/interface.py`; a solver never imports another | `fields`, `linalg`, `solvers/interface.py` |
+| `coupling` | Ordered exchanges between solvers, conservation checks | solver interfaces only (`solvers/interface.py`) |
 | `world` | Entities, materials, prefabs, map loader and migrations, generators, SDF and spatial queries | `core` |
 | `sim` | Frame loop and frame order (stages behind a protocol, ADR 0010), substeps, time scale, checkpoints, recorder, NaN guard | `solvers`, `coupling`, `world` |
 | `game` | Modes, player controller, tools, input mapping | `sim`, `world` |
@@ -608,7 +608,7 @@ entropy/
     core/        units, config, math helpers, logging, profiler
     fields/      grids, interpolation, advection
     linalg/      Poisson solvers (Jacobi, PCG, MGPCG)
-    solvers/     liquid, gas, rigid, fracture, granular, blast, swe
+    solvers/     interface (the solver interface), liquid, gas, rigid, fracture, granular, blast, swe
     coupling/    exchanges between solvers
     world/       entities, materials, prefabs, map loader, generators
     sim/         orchestrator, time control, checkpoints, recorder

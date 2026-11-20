@@ -7,12 +7,18 @@ interface together and may import anything, while nothing may import it. The
 package root `entropy/__init__.py` runs on every import, so it may import no
 subpackage.
 
+Inside `solvers`, each solver (a module or subpackage of `solvers`) is its own
+unit, named `solvers.<name>` (SPEC 8: solvers talk to each other only through
+the coupling layer). A solver may import `solvers.interface`, the package root
+`solvers` and what `solvers` may import, never another solver; the interface
+and the package root name no solver; `coupling` may import the interface and
+the package root only (SPEC 8.1: solver interfaces only). Other packages see
+`solvers` as one package.
+
 Known limits, checked by review instead:
 - Imports are read statically; `importlib.import_module` and attribute access
   through an imported `entropy` are not seen.
 - "Read-only" in the `render`, `ui` and `audio` rows is about writes, not imports.
-- Subpackages are the unit, so imports between two solvers inside `solvers` are
-  not checked yet (issue #21, before the first two solvers land in M1).
 """
 
 import ast
@@ -25,6 +31,8 @@ SRC = Path(__file__).parents[1] / "src" / "entropy"
 ROOT = "entropy"
 COMPOSITION_ROOTS = frozenset({"app", "__main__"})
 NOT_IN_SPEC = "<no row in SPEC 8.1>"
+SOLVERS = "solvers"
+SOLVER_INTERFACE = "solvers.interface"
 
 # SPEC 8.1, "May depend on" column. Direct dependencies only; the closure is computed.
 ALLOWED: Mapping[str, frozenset[str]] = MappingProxyType(
@@ -69,32 +77,69 @@ def violations(
     so a new package cannot slip in without its row in SPEC 8.1.
     """
     found: list[tuple[str, str]] = []
-    for package, targets in sorted(imports.items()):
+    for unit, targets in sorted(imports.items()):
+        package = _package(unit)
         is_root = package in COMPOSITION_ROOTS
         if not is_root and package not in allowed:
-            found.append((package, NOT_IN_SPEC))
+            found.append((unit, NOT_IN_SPEC))
             continue
-        for target in sorted(targets - {package}):
-            if target in COMPOSITION_ROOTS:
+        for target in sorted(targets - {unit}):
+            if _breaks_solver_isolation(unit, target):
+                found.append((unit, target))
+            elif _package(target) == package:
+                continue
+            elif target in COMPOSITION_ROOTS:
                 if not is_root:
-                    found.append((package, target))
-            elif not is_root and target not in reachable(package, allowed):
-                found.append((package, target))
+                    found.append((unit, target))
+            elif not is_root and _package(target) not in reachable(package, allowed):
+                found.append((unit, target))
     return found
 
 
-def collect_imports(src: Path) -> dict[str, set[str]]:
-    """Map each top-level subpackage or module of `src` to the siblings it imports.
+def _package(unit: str) -> str:
+    """`solvers.liquid` belongs to `solvers`; a top-level unit to itself."""
+    return unit.split(".")[0]
 
+
+def _breaks_solver_isolation(unit: str, target: str) -> bool:
+    """A specific solver imported from another solver, the interface, the root or coupling."""
+    names_a_solver = target.startswith(f"{SOLVERS}.") and target != SOLVER_INTERFACE
+    return names_a_solver and _package(unit) in (SOLVERS, "coupling")
+
+
+def _module_names(directory: Path) -> set[str]:
+    """Modules and subpackages directly in `directory`."""
+    return {path.name.removesuffix(".py") for path in directory.iterdir()} - {
+        "__init__",
+        "__pycache__",
+    }
+
+
+def collect_imports(src: Path) -> dict[str, set[str]]:
+    """Map each unit of `src` to the units it imports.
+
+    Units are the top-level subpackages and modules, except inside `solvers`,
+    where each solver is `solvers.<name>` and `solvers/__init__.py` is `solvers`.
     The package root `src/__init__.py` is reported under ROOT.
     """
-    siblings = {path.name.removesuffix(".py") for path in src.iterdir()} - {"__init__"}
+    siblings = _module_names(src)
+    solvers = _module_names(src / SOLVERS) if (src / SOLVERS).is_dir() else set()
+
+    def unit_of(package: str, below: list[str]) -> str:
+        """The unit of `entropy.<package>.<below...>`."""
+        if package == SOLVERS and below and below[0] in solvers:
+            return f"{SOLVERS}.{below[0]}"
+        return package
+
     imports: dict[str, set[str]] = {}
     for path in src.rglob("*.py"):
         relative = path.relative_to(src)
-        package = ROOT if relative.parts == ("__init__.py",) else relative.parts[0]
-        package = package.removesuffix(".py")
-        targets = imports.setdefault(package, set())
+        if relative.parts == ("__init__.py",):
+            importer = ROOT
+        else:
+            package, *below = (part.removesuffix(".py") for part in relative.parts)
+            importer = unit_of(package, below)
+        targets = imports.setdefault(importer, set())
         containing = relative.parts[:-1]
         for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
             names: list[str] = []
@@ -111,7 +156,7 @@ def collect_imports(src: Path) -> dict[str, set[str]]:
             for name in names:
                 parts = name.split(".")
                 if parts[0] == "entropy" and len(parts) > 1 and parts[1] in siblings:
-                    targets.add(parts[1])
+                    targets.add(unit_of(parts[1], parts[2:]))
     return imports
 
 
@@ -140,6 +185,43 @@ def test_composition_root_imports_anything_but_nothing_imports_it() -> None:
 def test_package_root_may_not_import_subpackages() -> None:
     """`entropy/__init__.py` runs on every import, so it would make everything depend on it."""
     assert violations({ROOT: {"render"}}, ALLOWED) == [(ROOT, "render")]
+
+
+def test_a_solver_may_not_import_another_solver() -> None:
+    """SPEC 8: solvers talk to each other only through the coupling layer."""
+    assert violations({"solvers.liquid": {"solvers.gas"}}, ALLOWED) == [
+        ("solvers.liquid", "solvers.gas")
+    ]
+
+
+def test_a_solver_may_import_the_interface_and_the_layers_below() -> None:
+    imports = {"solvers.liquid": {"solvers", "solvers.interface", "linalg", "fields", "core"}}
+
+    assert violations(imports, ALLOWED) == []
+
+
+def test_the_interface_and_the_package_root_name_no_solver() -> None:
+    imports = {"solvers.interface": {"solvers.rigid"}, "solvers": {"solvers.liquid"}}
+
+    assert violations(imports, ALLOWED) == [
+        ("solvers", "solvers.liquid"),
+        ("solvers.interface", "solvers.rigid"),
+    ]
+
+
+def test_coupling_may_import_only_the_solver_interface() -> None:
+    """SPEC 8.1: `coupling` depends on solver interfaces only."""
+    imports = {"coupling": {"solvers", "solvers.interface", "solvers.liquid"}}
+
+    assert violations(imports, ALLOWED) == [("coupling", "solvers.liquid")]
+
+
+def test_sim_may_import_any_solver() -> None:
+    assert violations({"sim": {"solvers.liquid", "solvers.gas"}}, ALLOWED) == []
+
+
+def test_a_solver_still_obeys_its_package_rules() -> None:
+    assert violations({"solvers.liquid": {"render"}}, ALLOWED) == [("solvers.liquid", "render")]
 
 
 def _write(root: Path, relative: str, text: str = "") -> None:
@@ -172,6 +254,35 @@ def test_collect_imports_ignores_names_that_are_not_modules(tmp_path: Path) -> N
     _write(tmp_path, "core/a.py", "from entropy import __version__\nfrom .. import __version__\n")
 
     assert collect_imports(tmp_path)["core"] == set()
+
+
+def test_collect_imports_sees_each_solver_as_its_own_unit(tmp_path: Path) -> None:
+    _write(tmp_path, "solvers/__init__.py", "from .interface import Solver\n")
+    _write(tmp_path, "solvers/interface.py")
+    _write(tmp_path, "solvers/gas.py", "from . import liquid\n")
+    _write(tmp_path, "solvers/liquid/__init__.py", "from . import step\n")
+    _write(
+        tmp_path,
+        "solvers/liquid/step.py",
+        "from ..interface import Solver\n"
+        "from entropy.solvers import gas\n"
+        "import entropy.solvers.rigid\n",
+    )
+    _write(tmp_path, "solvers/rigid/__init__.py")
+    _write(tmp_path, "coupling/a.py", "from entropy.solvers import Solver\n")
+
+    imports = collect_imports(tmp_path)
+
+    assert imports["solvers"] == {"solvers.interface"}
+    assert imports["solvers.gas"] == {"solvers", "solvers.liquid"}
+    assert imports["solvers.liquid"] == {
+        "solvers",
+        "solvers.interface",
+        "solvers.liquid",  # `from . import step`: imports of its own modules, ignored later
+        "solvers.gas",
+        "solvers.rigid",
+    }
+    assert imports["coupling"] == {"solvers"}
 
 
 def test_source_tree_respects_spec_8_1() -> None:
