@@ -7,6 +7,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Game loop (#11): `entropy.sim.loop.FrameLoop` runs input, logic, fixed 1/60 s
+  simulation steps scaled by the time scale (at most 4 per frame, excess time dropped
+  and reported) and rendering; `entropy.core.profiler` keeps rolling frame and stage
+  statistics and reads GPU memory for the HUD.
 - Free camera (#12): God mode flight in the Z-up frame (`entropy.game.free_camera`),
   keys and mouse mapped to actions per SPEC 4.5 (`entropy.game.input`), view and
   projection matrices (`entropy.render.camera`).
