@@ -4,6 +4,7 @@ import dataclasses
 
 import glfw
 import pytest
+import warp as wp
 
 from entropy.app import main as app_main
 from entropy.app.main import GameStages, run
@@ -22,6 +23,18 @@ def test_the_game_runs_a_few_frames_headless(window_settings: WindowSettings) ->
     summary = stats.summary()
     assert summary.frames == 5
     assert summary.frame_ms_mean > 0.0
+
+
+def test_the_game_records_gpu_time_per_stage(window_settings: WindowSettings) -> None:
+    """Render passes get OpenGL times, and the Warp test pattern CUDA times on a GPU."""
+    settings = dataclasses.replace(Settings(), window=window_settings)
+
+    stats = run(settings, visible=False, max_frames=10)
+
+    gpu = stats.summary().gpu_ms_mean
+    assert {"scene (OpenGL)", "points (OpenGL)", "HUD (OpenGL)"} <= gpu.keys()
+    assert ("test pattern (CUDA)" in gpu) == wp.is_cuda_available()
+    assert all(ms >= 0.0 for ms in gpu.values())
 
 
 def test_drawing_follows_a_resized_window(window_settings: WindowSettings) -> None:

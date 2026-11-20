@@ -32,6 +32,34 @@ def test_hud_shows_rate_frame_times_and_every_stage() -> None:
     assert "time scale" not in text
 
 
+def test_hud_labels_cpu_and_gpu_stage_times() -> None:
+    """SPEC 4.7: GPU time per stage, next to the CPU stage times, labelled as such."""
+    summary = dataclasses.replace(
+        SUMMARY, gpu_ms_mean={"test pattern (CUDA)": 0.05, "scene (OpenGL)": 0.35}
+    )
+
+    lines = hud_lines(summary, MEMORY, interop="zero-copy")
+
+    cpu, gpu = lines.index("CPU ms per stage"), lines.index("GPU ms per stage")
+    assert cpu < lines.index(next(line for line in lines if "rendering" in line)) < gpu
+    assert any("scene (OpenGL)" in line and "0.35 ms" in line for line in lines[gpu:])
+    assert any("test pattern (CUDA)" in line and "0.05 ms" in line for line in lines[gpu:])
+
+
+def test_cpu_and_gpu_times_line_up() -> None:
+    summary = dataclasses.replace(SUMMARY, gpu_ms_mean={"scene (OpenGL)": 0.35})
+
+    lines = hud_lines(summary, MEMORY, interop="zero-copy")
+
+    cpu = next(line for line in lines if "logic" in line)
+    gpu = next(line for line in lines if "scene (OpenGL)" in line)
+    assert len(cpu) == len(gpu)
+
+
+def test_hud_says_when_no_gpu_time_has_come_yet() -> None:
+    assert "GPU ms per stage: none yet" in hud_lines(SUMMARY, MEMORY, interop="zero-copy")
+
+
 def test_hud_shows_vram_and_the_interop_path() -> None:
     text = "\n".join(hud_lines(SUMMARY, MEMORY, interop="host-copy"))
 
