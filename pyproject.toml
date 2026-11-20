@@ -29,7 +29,7 @@ packages = ["src/entropy"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra --strict-markers -m 'not gpu and not perf and not soak'"
+addopts = "-ra --strict-markers -p pytester -m 'not gpu and not perf and not soak'"
 markers = [
     "gpu: needs a CUDA device (run on the laptop with -m gpu)",
     "perf: performance benchmark against SPEC section 3 budgets (GPU only)",
@@ -57,3 +57,11 @@ reportInvalidTypeForm = false
 [tool.coverage.run]
 source = ["entropy"]
 branch = true
+
+[tool.coverage.report]
+# SPEC 9.3: at least 90 % of Python orchestration lines. Warp kernels and functions
+# are compiled, so line coverage cannot see inside them; each kernel module has its
+# own behavioural tests instead.
+fail_under = 90
+show_missing = true
+exclude_also = ["@wp\\.kernel", "@wp\\.func"]

@@ -55,6 +55,7 @@ uv sync                     # environment (Python 3.12)
 uv run pytest               # CPU suite (default markers exclude gpu, perf, soak)
 uv run pytest -m gpu        # GPU suite, laptop only
 uv run pytest -m perf       # benchmarks against SPEC section 3 budgets, laptop only
+uv run coverage run -m pytest && uv run coverage report   # 90 % floor, as in CI
 uv run ruff check . && uv run ruff format --check .
 uv run pyright
 ```

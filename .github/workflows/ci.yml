@@ -19,4 +19,6 @@ jobs:
       - name: Types
         run: uv run pyright
       - name: Tests
-        run: uv run pytest
+        run: uv run coverage run -m pytest
+      - name: Coverage (SPEC 9.3, at least 90 %)
+        run: uv run coverage report

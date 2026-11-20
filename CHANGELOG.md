@@ -7,6 +7,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Test harness (#3): `device` fixture over CPU and, with `-m gpu`, CUDA; a test
+  enforcing the module dependency rules of SPEC 8.1, with `app` as the composition
+  root; coverage measured in CI with a 90 % floor, Warp kernels excluded.
 - Specification v0.1 (`docs/SPEC.md`), mirrored from the living document.
 - Walking skeleton: `entropy` package, Warp toolchain tests (CPU float atomics,
   bit-reproducible CPU sums, CUDA availability on the laptop).
