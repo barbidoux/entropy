@@ -34,7 +34,7 @@ def _copy_vec4(src: wp.array(dtype=wp.vec4), dst: wp.array(dtype=wp.vec4)):
 def _read_vec4(src: wp.array(dtype=wp.vec4), sink: wp.array(dtype=float)):
     i = wp.tid()
     v = src[i]
-    # Never true for the zero-filled input, but the compiler cannot know: every load stays.
+    # Never true for the input of ones, but the compiler cannot know: every load stays.
     if v[0] + v[1] + v[2] + v[3] == -1.0:
         sink[0] = v[0]
 
@@ -47,7 +47,8 @@ def test_memory_bandwidth(bench_session: BenchSession) -> None:
     floats = BUFFER_BYTES // 4
     src = wp.zeros(floats, dtype=float, device=DEVICE)
     dst = wp.zeros(floats, dtype=float, device=DEVICE)
-    src4 = wp.zeros(floats // 4, dtype=wp.vec4, device=DEVICE)
+    # Non-zero data, so no compression of zero pages can flatter the read pass.
+    src4 = wp.full(floats // 4, wp.vec4(1.0, 1.0, 1.0, 1.0), dtype=wp.vec4, device=DEVICE)
     dst4 = wp.zeros(floats // 4, dtype=wp.vec4, device=DEVICE)
     sink = wp.zeros(1, dtype=float, device=DEVICE)
 

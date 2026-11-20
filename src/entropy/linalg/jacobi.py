@@ -17,8 +17,9 @@ import warp as wp
 CHUNK = 8
 """Cells each thread updates along i, keeping p[i-1] and p[i] in registers.
 
-About 1.7x (192³) to 2.4x (128³) faster than one thread per cell, and as fast as
-a pure streaming pass with the same traffic: docs/benchmarks/2026-11-20-m0-laptop.md.
+Measured 1.7x (192³) to 2.4x (128³) faster than one thread per cell in the review
+of PR #22; the M0 benchmark puts it at 92-109 % of a streaming pass with the same
+traffic (docs/benchmarks/2026-11-20-m0-laptop.md).
 """
 
 

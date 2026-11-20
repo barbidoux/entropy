@@ -1,6 +1,6 @@
 """M0 measurement: cost of a Jacobi sweep of the 7-point Poisson stencil (issue #6).
 
-SPEC 11 asks for the pressure solve cost at 128³ and 192³ (the gas box of
+SPEC 11 asks for pressure-solve costs at 128³ and 192³ (the gas box of
 SPEC 3 and 5.3). A pressure solve is a number of stencil sweeps; this measures
 one sweep of `entropy.linalg.jacobi`, three ways:
 
@@ -13,7 +13,7 @@ Ideal traffic is 12 bytes per cell (read p and rhs, write the result; the six
 neighbours come from cache), which gives the effective bandwidth. At 128³ the three
 arrays (24 MiB) fit in the 64 MiB L2 cache, so that figure can exceed the DRAM
 peak. A streaming pass with the same traffic and no stencil (read p and rhs,
-write once) is measured alongside as the ceiling for this kernel.
+write once) is measured alongside as a reference for this kernel.
 """
 
 from collections.abc import Callable

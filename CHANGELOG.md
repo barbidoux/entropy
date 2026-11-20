@@ -44,7 +44,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
-- SPEC 3 recalibrated from the M0 measurements: gas box 128³ (192³ does not fit in
-  6 ms), measured hardware limits (500 GB/s, sustained GPU state, kernel launches from
-  CUDA graphs only, at most about 2,000 kernels per frame). ADR 0008: frame target 60 fps
-  with a 30 fps floor, simulation and rendering together (SPEC 13).
+- SPEC 3 recalibrated from the M0 measurements: gas box 96³ to 128³ and at risk (192³
+  out of reach), liquid pressure solve at risk on the full house grid, measured hardware
+  limits (450 GB/s planning bandwidth, provisional sustained GPU state, kernel launches
+  from CUDA graphs only, host and GPU per-kernel costs). SPEC 5.3, 5.9 and 11 aligned.
+- ADR 0008: one simulation advance per frame of the frame time × time scale, clamped to
+  1/30 s, frame rate capped at 60 fps (SPEC 13, SPEC 5.9).
+- Benchmarks re-heat the GPU for 10 s before each run and read a non-zero buffer.
