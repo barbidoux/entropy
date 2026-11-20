@@ -47,6 +47,23 @@ def test_world_speed_is_simulated_over_real_time() -> None:
     assert stats.summary().world_speed == pytest.approx(0.5)
 
 
+def test_time_kept_compares_simulated_with_requested_time() -> None:
+    """Frames that hit the 1/30 s clamp keep less time than they asked for."""
+    stats = FrameStats(window=10)
+    stats.record(0.1, {}, advance_s=1 / 30, requested_s=0.1)
+    stats.record(0.1, {}, advance_s=1 / 30, requested_s=0.1)
+
+    assert stats.summary().time_kept == pytest.approx(1 / 3)
+
+
+def test_paused_frames_do_not_count_against_time_kept() -> None:
+    stats = FrameStats(window=10)
+    stats.record(1 / 60, {}, advance_s=0.0, requested_s=0.0)
+    stats.record(1 / 60, {}, advance_s=1 / 60, requested_s=1 / 60)
+
+    assert stats.summary().time_kept == pytest.approx(1.0)
+
+
 def test_world_speed_defaults_to_zero_without_advances() -> None:
     stats = FrameStats(window=10)
     stats.record(0.02, {})
