@@ -34,8 +34,24 @@ def test_old_frames_leave_the_window() -> None:
 
     summary = stats.summary()
 
+    assert summary.frames == 3
     assert summary.frame_ms_worst == pytest.approx(10.0)
     assert summary.stages_ms_mean["simulation"] == pytest.approx(1.0)
+
+
+def test_world_speed_is_simulated_over_real_time() -> None:
+    stats = FrameStats(window=10)
+    stats.record(0.02, {}, advance_s=0.01)
+    stats.record(0.02, {}, advance_s=0.01)
+
+    assert stats.summary().world_speed == pytest.approx(0.5)
+
+
+def test_world_speed_defaults_to_zero_without_advances() -> None:
+    stats = FrameStats(window=10)
+    stats.record(0.02, {})
+
+    assert stats.summary().world_speed == 0.0
 
 
 def test_a_stage_missing_from_some_frames_averages_over_its_own_frames() -> None:
@@ -69,7 +85,9 @@ def test_gpu_memory_counts_warp_allocations() -> None:
     after = gpu_memory("cuda:0")
 
     assert before is not None and after is not None
+    assert before.warp_bytes is not None and after.warp_bytes is not None
     assert after.warp_bytes - before.warp_bytes >= 64 * 2**20
+    assert after.warp_high_bytes is not None and after.warp_high_bytes >= after.warp_bytes
     assert 0 < after.device_used_bytes < after.device_total_bytes
-    assert after.device_total_bytes > 15 * 2**30
+    assert after.device_total_bytes == wp.get_device("cuda:0").total_memory
     del block

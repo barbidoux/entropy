@@ -453,14 +453,14 @@ Dependencies point downward only, and a test enforces the import rules. "May dep
 | `solvers/*` | One solver per phenomenon, each implementing the solver interface | `fields`, `linalg` |
 | `coupling` | Ordered exchanges between solvers, conservation checks | solver interfaces only |
 | `world` | Entities, materials, prefabs, map loader and migrations, generators, SDF and spatial queries | `core` |
-| `sim` | Frame order, substeps, time scale, checkpoints, recorder, NaN guard | `solvers`, `coupling`, `world` |
+| `sim` | Frame loop and frame order (stages behind a protocol, ADR 0010), substeps, time scale, checkpoints, recorder, NaN guard | `solvers`, `coupling`, `world` |
 | `game` | Modes, player controller, tools, input mapping | `sim`, `world` |
 | `editor` | Build mode | `world` |
 | `render` | OpenGL context, interop buffers, passes, camera | `sim`, read-only |
 | `ui` | Dear ImGui panels, HUD | `game`, `sim`, read-only |
 | `io` | Save, load, export | `sim`, `world` |
 | `audio` | Sound events (M9) | `sim`, read-only |
-| `app` | Composition root: window, main loop, wiring of game, renderer and interface; no logic of its own | everything; nothing depends on it |
+| `app` | Composition root: window, wiring of game, renderer and interface into the frame loop's stages; no logic of its own | everything; nothing depends on it |
 
 ### 8.2 Extension points
 
@@ -610,7 +610,7 @@ entropy/
     ui/          Dear ImGui panels, HUD
     io/          save, export (PLY, OpenVDB, JSON)
     audio/       sound events (M9)
-    app/         composition root: window, main loop, wiring
+    app/         composition root: window, wiring of the frame loop
   content/       materials, prefabs, tools, maps (TOML, JSON)
   tests/         unit, property, validation, golden, render, gameplay, perf
   bench/         benchmark scenarios
