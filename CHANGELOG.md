@@ -7,6 +7,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Free camera (#12): God mode flight in the Z-up frame (`entropy.game.free_camera`),
+  keys and mouse mapped to actions per SPEC 4.5 (`entropy.game.input`), view and
+  projection matrices (`entropy.render.camera`).
 - M0 laptop benchmarks (#5, #6, #7, #8): memory bandwidth, Jacobi sweep at 128³, 192³
   and the house grid with a streaming reference, kernel launch overhead with and without
   CUDA graphs. First official results in `docs/benchmarks/results/` and the report
