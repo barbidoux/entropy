@@ -67,9 +67,11 @@ class CameraView:
     far_m: float
 
     def view(self) -> np.ndarray:
+        """World to camera space (float32 4x4)."""
         return view_matrix(self.position_m, self.forward)
 
     def projection(self, aspect: float) -> np.ndarray:
+        """Camera to clip space for a width/height `aspect` (float32 4x4)."""
         return perspective(self.fov_y_rad, aspect, self.near_m, self.far_m)
 
 

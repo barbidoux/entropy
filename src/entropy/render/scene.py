@@ -1,11 +1,17 @@
 """The empty lit scene of M0: sky, ground with a metre grid, sun, reference cubes.
 
-Lighting is computed in linear RGB: Lambert diffuse from one directional sun
-plus a sky term that is brighter from above (a hemisphere approximation).
-The result is scaled by an exposure, tone-mapped with the ACES fit of
-Narkowicz (2015) and encoded as sRGB. Values are relative (the sun irradiance
-is 3, the sky 0.6); physically calibrated light units come with the HDR
-pipeline of SPEC 7.2. Shaders are GLSL 4.50 (ADR 0009).
+A simple placeholder renderer until the passes of SPEC 7.2. Lighting is
+computed in linear RGB: Lambert diffuse from one directional sun plus a sky
+term that is brighter from above (a hemisphere approximation). The result is
+scaled by an exposure, tone-mapped with the ACES fit of Narkowicz (2015) and
+encoded as sRGB. Shaders are GLSL 4.50 (ADR 0009).
+
+Simplifications, named (CLAUDE.md rule 7):
+- light values are relative, not calibrated physical units (SPEC 7.2 brings HDR);
+- no shadows, and no light bounced from the ground, so faces turned down are black;
+- distance haze: exponential over 300 m towards the horizon colour;
+- the sun disk is drawn about 1° wide, larger than the real 0.27°, to be visible;
+- the ground is a one-sided 20 km square; seen from below it is invisible.
 """
 
 from __future__ import annotations
@@ -17,8 +23,15 @@ from entropy.render.camera import CameraView, gl_bytes
 
 SUN_DIRECTION = tuple(float(c) for c in np.array([0.4, 0.3, 0.8]) / np.linalg.norm([0.4, 0.3, 0.8]))
 """Unit vector towards the sun: high in the sky, from +X and +Y."""
+SUN_IRRADIANCE = (3.0, 2.9, 2.7)
+"""Relative irradiance from the sun on a surface facing it, linear RGB."""
+SKY_IRRADIANCE = (0.45, 0.55, 0.75)
+"""Relative irradiance from the sky on a surface facing up, linear RGB."""
+HORIZON = (0.60, 0.72, 0.90)
+"""Sky colour at the horizon, also the colour distant ground fades to."""
+EXPOSURE = 0.5
 
-GROUND_HALF_SIZE_M = 500.0
+GROUND_HALF_SIZE_M = 10_000.0
 
 REFERENCE_CUBES = (
     # (centre of the base in m, edge in m, linear albedo)
@@ -32,7 +45,10 @@ REFERENCE_CUBES = (
 
 
 def srgb_from_linear(value: float) -> float:
-    """The sRGB transfer function (IEC 61966-2-1), linear [0, 1] to encoded [0, 1]."""
+    """The sRGB transfer function (IEC 61966-2-1), linear [0, 1] to encoded [0, 1].
+
+    The reference the render tests compare the shader's encoding with.
+    """
     if value <= 0.0031308:
         return 12.92 * value
     return 1.055 * value ** (1.0 / 2.4) - 0.055
@@ -56,14 +72,12 @@ vec3 display(vec3 radiance) {
 
 _SKY = """
 uniform vec3 sun_direction;
+uniform vec3 horizon;
 
 vec3 sky(vec3 d) {
     vec3 zenith = vec3(0.10, 0.25, 0.70);
-    vec3 horizon = vec3(0.60, 0.72, 0.90);
+    // Above the horizon a gradient; below it, the hazed ground far away: continuous at 0.
     vec3 colour = mix(horizon, zenith, pow(clamp(d.z, 0.0, 1.0), 0.5));
-    if (d.z < 0.0) {
-        colour = mix(horizon * 0.7, vec3(0.25, 0.24, 0.22), clamp(-d.z * 4.0, 0.0, 1.0));
-    }
     float sun = smoothstep(0.9995, 0.99985, dot(d, sun_direction));
     return colour + sun * vec3(30.0, 28.0, 24.0);
 }
@@ -84,13 +98,13 @@ vec3 lit(vec3 albedo, vec3 normal) {
 _SKY_PROGRAM = (
     """
 #version 450 core
-uniform mat4 inverse_view_projection;
+uniform mat4 inverse_rotation_projection;
 out vec3 ray;
 void main() {
     vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2) * 2.0 - 1.0;
-    vec4 near = inverse_view_projection * vec4(p, -1.0, 1.0);
-    vec4 far = inverse_view_projection * vec4(p, 1.0, 1.0);
-    ray = far.xyz / far.w - near.xyz / near.w;
+    // Inverse of projection x rotation only: rays do not depend on where the camera is.
+    vec4 far = inverse_rotation_projection * vec4(p, 1.0, 1.0);
+    ray = far.xyz / far.w;
     gl_Position = vec4(p, 1.0, 1.0);
 }
 """,
@@ -122,13 +136,17 @@ void main() {
     + _LIGHTING
     + """
 uniform vec3 eye_m;
+uniform vec3 horizon;
 in vec3 world_m;
 out vec4 colour;
 
 float grid(vec2 p, float spacing) {
     vec2 q = p / spacing;
-    vec2 distance = abs(fract(q - 0.5) - 0.5) / fwidth(q);
-    return 1.0 - min(min(distance.x, distance.y), 1.0);
+    vec2 width = fwidth(q);
+    vec2 distance = abs(fract(q - 0.5) - 0.5) / width;
+    float line = 1.0 - min(min(distance.x, distance.y), 1.0);
+    // Fade lines out where they get thinner than a pixel can show, to avoid moire.
+    return line * (1.0 - smoothstep(0.1, 0.5, max(width.x, width.y)));
 }
 
 void main() {
@@ -136,7 +154,7 @@ void main() {
     vec3 albedo = mix(vec3(0.22), vec3(0.08), lines);
     vec3 radiance = lit(albedo, vec3(0.0, 0.0, 1.0));
     float haze = 1.0 - exp(-length(world_m - eye_m) / 300.0);
-    radiance = mix(radiance, vec3(0.60, 0.72, 0.90), haze);
+    radiance = mix(radiance, horizon, haze);
     colour = vec4(display(radiance), 1.0);
 }
 """,
@@ -192,7 +210,6 @@ class SceneRenderer:
 
     def __init__(self, ctx: moderngl.Context) -> None:
         self.ctx = ctx
-        self.exposure = 0.5
         self._sky = ctx.program(vertex_shader=_SKY_PROGRAM[0], fragment_shader=_SKY_PROGRAM[1])
         self._ground = ctx.program(
             vertex_shader=_GROUND_PROGRAM[0], fragment_shader=_GROUND_PROGRAM[1]
@@ -214,24 +231,42 @@ class SceneRenderer:
         )
         for program in (self._sky, self._ground, self._cube):
             program["sun_direction"].value = SUN_DIRECTION  # type: ignore[union-attr]
-            program["exposure"].value = self.exposure  # type: ignore[union-attr]
+            program["exposure"].value = EXPOSURE  # type: ignore[union-attr]
+        for program in (self._sky, self._ground):
+            program["horizon"].value = HORIZON  # type: ignore[union-attr]
         for program in (self._ground, self._cube):
-            program["sun_irradiance"].value = (3.0, 2.9, 2.7)  # type: ignore[union-attr]
-            program["sky_irradiance"].value = (0.45, 0.55, 0.75)  # type: ignore[union-attr]
+            program["sun_irradiance"].value = SUN_IRRADIANCE  # type: ignore[union-attr]
+            program["sky_irradiance"].value = SKY_IRRADIANCE  # type: ignore[union-attr]
 
-    def render(self, target: moderngl.Framebuffer, view: CameraView) -> None:
+    def render(
+        self,
+        target: moderngl.Framebuffer,
+        view: CameraView,
+        size_px: tuple[int, int] | None = None,
+    ) -> None:
+        """Draw into `target` over `size_px` (default: the target's size).
+
+        Pass the window's framebuffer size for the screen: moderngl keeps the
+        screen's size from when the context was created. A zero size (a
+        minimised window) draws nothing.
+        """
+        width, height = size_px or target.size
+        if width <= 0 or height <= 0:
+            return
         ctx = self.ctx
         target.use()
-        width, height = target.size
         ctx.viewport = (0, 0, width, height)
-        view_projection = view.projection(width / height) @ view.view()
-        matrix = gl_bytes(view_projection)
+        projection = view.projection(width / height).astype(np.float64)
+        camera = view.view().astype(np.float64)
+        rotation = camera.copy()
+        rotation[:3, 3] = 0.0
+        matrix = gl_bytes(projection @ camera)
 
-        target.clear(depth=1.0)
+        target.clear(depth=1.0, viewport=(0, 0, width, height))
         # The sky covers the whole frame; with the depth test off it writes no depth.
         ctx.disable(moderngl.DEPTH_TEST | moderngl.CULL_FACE)
-        self._sky["inverse_view_projection"].write(  # type: ignore[union-attr]
-            gl_bytes(np.linalg.inv(view_projection.astype(np.float64)).astype(np.float32))
+        self._sky["inverse_rotation_projection"].write(  # type: ignore[union-attr]
+            gl_bytes(np.linalg.inv(projection @ rotation))
         )
         self._sky_vao.render(moderngl.TRIANGLES, vertices=3)
 
