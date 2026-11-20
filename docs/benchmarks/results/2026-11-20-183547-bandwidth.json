@@ -1,0 +1,88 @@
+{
+  "name": "bandwidth",
+  "timestamp": "2026-11-20T18:35:47",
+  "metrics": {
+    "buffer_mib": 512.0,
+    "peak_gb_per_s": 576.0,
+    "copy_float": {
+      "median_ms": 2.1324800252914424,
+      "p10_ms": 2.117324709892273,
+      "p90_ms": 2.6419200897216797,
+      "min_ms": 2.061311960220337,
+      "max_ms": 3.324928045272827,
+      "n": 50,
+      "gb_per_s": 503.51788118308565,
+      "fraction_of_peak": 0.8741629881650792
+    },
+    "copy_vec4": {
+      "median_ms": 2.135040044784546,
+      "p10_ms": 2.1213183403015137,
+      "p90_ms": 2.5806848764419557,
+      "min_ms": 2.1022720336914062,
+      "max_ms": 2.717695951461792,
+      "n": 50,
+      "gb_per_s": 502.9141381319407,
+      "fraction_of_peak": 0.8731148231457304
+    },
+    "memcpy": {
+      "median_ms": 2.152959942817688,
+      "p10_ms": 2.1390336751937866,
+      "p90_ms": 2.6019840240478516,
+      "min_ms": 2.116607904434204,
+      "max_ms": 3.257344007492066,
+      "n": 50,
+      "gb_per_s": 498.7281939833677,
+      "fraction_of_peak": 0.8658475589989023
+    },
+    "read_vec4": {
+      "median_ms": 0.9579520225524902,
+      "p10_ms": 0.9564160108566284,
+      "p90_ms": 1.4317568302154542,
+      "min_ms": 0.9553920030593873,
+      "max_ms": 2.165760040283203,
+      "n": 50,
+      "gb_per_s": 560.4361172175327,
+      "fraction_of_peak": 0.9729793701693276
+    },
+    "peak_from_clock_gb_per_s": 576.064
+  },
+  "conditions": {
+    "on_ac": true,
+    "power_mode": "best_performance",
+    "energy_saver": false,
+    "warmup_s": 300.01317969999945,
+    "official": true,
+    "reasons_not_official": []
+  },
+  "telemetry": {
+    "before": {
+      "gpu": "NVIDIA GeForce RTX 4090 Laptop GPU",
+      "driver": "596.71",
+      "sm_clock_mhz": 1425.0,
+      "memory_clock_mhz": 9001.0,
+      "temperature_c": 84.0,
+      "power_w": 98.17,
+      "power_limit_w": 110.0,
+      "pstate": "P0",
+      "clock_event_reasons": "0x0000000000000020"
+    },
+    "after": {
+      "gpu": "NVIDIA GeForce RTX 4090 Laptop GPU",
+      "driver": "596.71",
+      "sm_clock_mhz": 1545.0,
+      "memory_clock_mhz": 9001.0,
+      "temperature_c": 83.0,
+      "power_w": 93.42,
+      "power_limit_w": 110.0,
+      "pstate": "P0",
+      "clock_event_reasons": "0x0000000000000020"
+    }
+  },
+  "environment": {
+    "python": "3.12.12",
+    "warp": "1.19.0",
+    "numpy": "2.5.5",
+    "platform": "Windows-11-10.0.26200-SP0",
+    "git": "68636eb"
+  }
+}

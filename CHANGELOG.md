@@ -7,6 +7,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- M0 gate report (#18, `docs/benchmarks/2026-11-20-m0-gate.md`):
+  - every gate criterion with its evidence;
+  - a second official benchmark session at `68636eb`, with the first official interop
+    measurement (0.23 ms zero-copy against 6.7 ms through host memory for 1 M
+    particles);
+  - a 10-minute soak at 60 fps with no memory growth.
+  Nothing changes in SPEC 3. Only Matt's play session remains.
 - The game (#16): `uv run entropy` (or `python -m entropy`) opens the window and runs
   the M0 scene with free flight (click to look, Esc to release), the F3 HUD and a
   200,000-point interop test pattern written by Warp each frame (not physics; it follows
