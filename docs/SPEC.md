@@ -72,7 +72,7 @@ The game targets one machine: a Dell Precision 7780 laptop with an RTX 4090 Lapt
 
 **Solver capacities**
 
-Recalibrated by the M0 measurements (`docs/benchmarks/2026-11-20-m0-laptop.md`); later milestones measure each solver against its row. A house of 10 × 8 × 6 m at the 6.25 cm liquid cell size is 160 × 128 × 96 ≈ 2.0 million cells, so the whole house fits in the liquid grid.
+Recalibrated by the M0 measurements (`docs/benchmarks/2026-11-20-m0-laptop.md`, `docs/benchmarks/2026-11-20-m0-gate.md`); later milestones measure each solver against its row. A house of 10 × 8 × 6 m at the 6.25 cm liquid cell size is 160 × 128 × 96 ≈ 2.0 million cells, so the whole house fits in the liquid grid.
 
 | Solver | Capacity | Time budget (ms) |
 | --- | --- | --- |
@@ -86,7 +86,7 @@ Recalibrated by the M0 measurements (`docs/benchmarks/2026-11-20-m0-laptop.md`);
 **Measured hardware limits (M0, provisional until the Dell thermal profile is confirmed)**
 
 - Planning bandwidth (estimate): 450 GB/s for read-write streaming in the sustained state, the 503 GB/s copy measured at the full 9001 MHz memory clock scaled to the 8001 MHz seen under the power cap (the 192³ streaming pass measured 462 GB/s during a run in which the memory clock fell to 8001 MHz). A kernel moving B bytes per cell over N cells costs at least B·N / 450 GB/s. Grids that fit in the 64 MiB L2 cache run up to twice as fast; solvers with many live fields should not count on it.
-- Sustained GPU state after warm-up, over the two M0 sessions: 82–93 °C, enforced power limit 110–122 W, thermal and power capped; SM clock 1.05–2.3 GHz, memory clock 7001–9001 MHz (7001 MHz seen once, at the start of a benchmark). Estimates use the DRAM rate of 28 ps per cell per sweep for planning and the slower of the two L2 rates measured, 15 ps, as the optimistic end.
+- Sustained GPU state after warm-up, over the two M0 sessions: 82–93 °C, enforced power limit 110–122 W, thermal and power capped; SM clock 1.05–2.3 GHz, memory clock 7001–9001 MHz (7001 MHz seen once, at the start of a benchmark). Estimates use the DRAM rate of 28 ps per cell per sweep for planning and each grid's slower L2 rate (house 15.0 ps, 128³ 15.2 ps) as the optimistic end.
 - A kernel launched from Python costs about 15 µs of CPU time (measured), so solver frames launch their kernels from CUDA graphs only (median 0.2–0.7 µs of CPU per kernel depending on graph size, up to 1.1 µs at p90 for large graphs): at most about 1,800 graph kernels per frame on the CPU side if launches had the whole 2 ms orchestration budget, which they share with game logic and the interface. Iterative solver loops run as conditional graph nodes, so CPU launches do not grow with iterations (support checked, cost to be measured in M1). On the GPU every executed kernel costs about 1.2 µs on top of its work (measured on tiny kernels; estimate for others) and is counted in the solver's budget (2,000 kernels = 2.4 ms).
 - CPU and GPU work concurrently (reasoned, measured from M1): Python enqueues while the GPU runs earlier work, so the orchestration budget is the CPU time the GPU has to wait for: synchronisation points such as CUDA–OpenGL map and unmap, read-backs, and OpenGL and interface calls on the same thread.
 
