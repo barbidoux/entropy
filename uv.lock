@@ -77,6 +77,9 @@ name = "entropy"
 version = "0.0.1"
 source = { editable = "." }
 dependencies = [
+    { name = "glfw" },
+    { name = "imgui-bundle" },
+    { name = "moderngl" },
     { name = "numpy" },
     { name = "warp-lang" },
 ]
@@ -94,6 +97,9 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "glfw", specifier = ">=2.11.0" },
+    { name = "imgui-bundle", specifier = ">=1.93.0" },
+    { name = "moderngl", specifier = ">=5.13.0" },
     { name = "numpy", specifier = ">=2.0" },
     { name = "warp-lang", specifier = ">=1.19" },
 ]
@@ -125,6 +131,41 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/52/aa/8ccff8da9a27e089727fcffd3c5b61708383217e47eb1e1b8af37b1dd166/filelock-4.2.12.tar.gz", hash = "sha256:7e7da24d3ac39268b0f156e56870001de44886318f092f9d851e692f7114d6dd", size = 680837, upload-time = "2026-11-18T01:20:03.951Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/8a/c9/eb6b6528c7edb958d4c24ac47a8b94113d9de36e4cfc6eecd599b1a4f349/filelock-4.2.12-py3-none-any.whl", hash = "sha256:21decfec02f116ed4c954433cdb31f28c3b346b784543177b6d7059da2702ee9", size = 222442, upload-time = "2026-11-18T01:20:02.439Z" },
+]
+
+[[package]]
+name = "glcontext"
+version = "3.1.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/5f/99/e877a962bfa5783f6c01116483471f0666b53d5f805ea0ebdbb0c66d159b/glcontext-3.1.0.tar.gz", hash = "sha256:754d33f73aaf07e016e503b722e44c6ef914d9f101643be524cb185e1d55717f", size = 16536, upload-time = "2026-10-07T10:22:51.302Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/43/ed/d8494c981c9f84736d887a64440e205f51aaa528e286dd6c94fc608ef913/glcontext-3.1.0-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:68b37321eee368ba878f2dcef14222e9383e94f3454493ad70ac0b98201a1cb4", size = 9933, upload-time = "2026-10-07T10:23:12.31Z" },
+    { url = "https://files.pythonhosted.org/packages/81/24/7bdeab738393d80adbadc5df8d04737e5c0e1b86dab38200d1173dabf456/glcontext-3.1.0-cp312-cp312-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl", hash = "sha256:1f5678b1dc331f13b50f81a9fa09d5abc52f4be736920e12abe3f8078f2213dd", size = 47463, upload-time = "2026-10-07T10:23:13.944Z" },
+    { url = "https://files.pythonhosted.org/packages/c2/47/1dd230080356f5d648bcba45c007854bfc40f2066d64185b9dd018aa619b/glcontext-3.1.0-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:efab9360c45e2e31b97a492a3e71e9f666cacbb4c90f0db3004c8a28c633cefa", size = 46562, upload-time = "2026-10-07T10:23:15.379Z" },
+    { url = "https://files.pythonhosted.org/packages/6e/86/80ca4fb5165a5a0ec1440db9fb214571493ece173065b2ef7cb717d4af5b/glcontext-3.1.0-cp312-cp312-win32.whl", hash = "sha256:d41e942ff263e5c0dab5447094b0342af23c2b8e5f9c03a8c4153dc1dde55ea4", size = 11799, upload-time = "2026-10-07T10:23:16.606Z" },
+    { url = "https://files.pythonhosted.org/packages/61/f0/09054b47c443da4425932aea76167a89ee0b0b321f36bc46c182630403a0/glcontext-3.1.0-cp312-cp312-win_amd64.whl", hash = "sha256:ce2efe49e41b11aa4c621e636adf493a3fa19157b2b0be1d2d73312f4a396f25", size = 12604, upload-time = "2026-10-07T10:23:17.737Z" },
+    { url = "https://files.pythonhosted.org/packages/e7/7a/da27321e7929cc5a803c570a238850a00e8d41fd7a9b635ed5185d6c68c6/glcontext-3.1.0-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:575b4c91093d07af0a95e0fa1432c3f3e5e5a6b023e3515db391314ebd9fea07", size = 9936, upload-time = "2026-10-07T10:23:18.86Z" },
+    { url = "https://files.pythonhosted.org/packages/81/be/1beaf74335b509f450e721b9df7a1e6d9c772672f5ff5cba3ccfae2d9f10/glcontext-3.1.0-cp313-cp313-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl", hash = "sha256:eae7b6e07d11220672514cc0cd4ab4067685614796b459e4047838384c84c1fd", size = 53008, upload-time = "2026-10-07T10:23:20.19Z" },
+    { url = "https://files.pythonhosted.org/packages/45/63/15808833a732ed210cb4a8cd37de8c4363aac1ca2ea93fec8d7ecee456f5/glcontext-3.1.0-cp313-cp313-musllinux_1_2_x86_64.whl", hash = "sha256:1a4bbf6b785c111ddec97ef17ee829e6beabd27d9aca0478e33d2baf99dc3b2d", size = 46398, upload-time = "2026-10-07T10:23:21.829Z" },
+    { url = "https://files.pythonhosted.org/packages/d6/b4/8d8ae1e2bb8236d664d337615bb7db1e90fa3d2fa221d020d970ee07c438/glcontext-3.1.0-cp313-cp313-win32.whl", hash = "sha256:26972317f03270d278a98bd7ad756e8950e72f28ab854e9ccdc79553c3f0063e", size = 11800, upload-time = "2026-10-07T10:23:23.058Z" },
+    { url = "https://files.pythonhosted.org/packages/ec/ea/9cb78c8ea5171c1af8c4a9e39a354e6ebbe775068a37644e3e6d6ccedee0/glcontext-3.1.0-cp313-cp313-win_amd64.whl", hash = "sha256:6e8817e66221a9c2a7a22147307a0b1305bfe1ce860832464a06a8c08d0d1f61", size = 12606, upload-time = "2026-10-07T10:23:24.184Z" },
+]
+
+[[package]]
+name = "glfw"
+version = "2.11.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/b2/89/fa9cb2611314b84ffa68d76f154e1e508971d6e402b14bd2152684e35e5d/glfw-2.11.0.tar.gz", hash = "sha256:4bd3a462ed02ae25455dceaeb76d154faf08b48962c0cb2cf685419a34a71305", size = 36404, upload-time = "2026-10-16T20:18:53.75Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/0c/65/c728be098d0a2fb1c81070386384640e577ec2db096e885d14ba8c3a0ffd/glfw-2.11.0-py2.py3-none-macosx_10_6_intel.whl", hash = "sha256:4f40b141657b014148893f3b8950906389f9d4d3b2bced41fbefcdcda776e9ad", size = 110341, upload-time = "2026-10-16T08:46:24.538Z" },
+    { url = "https://files.pythonhosted.org/packages/ac/2c/dc36e841a6a0db69c19db71a8fb4bbb211924bcf587735caea8afdd230ed/glfw-2.11.0-py2.py3-none-macosx_11_0_arm64.whl", hash = "sha256:7405d3e3041add442e40a15ef5a880178ff90f486d576a82e112240c66f59555", size = 107194, upload-time = "2026-10-16T08:46:25.797Z" },
+    { url = "https://files.pythonhosted.org/packages/b5/ab/59bfd8fb895c28f7a7c3504307d73b3eb18b85ec53a7025f9463400c4699/glfw-2.11.0-py2.py3-none-manylinux2014_aarch64.whl", hash = "sha256:de02fcb11126242a27f5f711b31ab83ae4dfe3567caa32dc2380e1f6050c59f1", size = 235053, upload-time = "2026-10-16T08:46:27.1Z" },
+    { url = "https://files.pythonhosted.org/packages/b2/09/e3a95b97b4b174686e1b0340f9ee5b283ed65bb7cc09089fb228d36c351b/glfw-2.11.0-py2.py3-none-manylinux2014_x86_64.whl", hash = "sha256:a08e1135d02c9408d7622db3d391e3e33e4187754ec45633e9a482c775f4846c", size = 247001, upload-time = "2026-10-16T08:46:28.442Z" },
+    { url = "https://files.pythonhosted.org/packages/ca/36/ca10753be547d78250aed12532ec8839f19bbeb5adac11ee8153ef59ce4f/glfw-2.11.0-py2.py3-none-manylinux_2_28_aarch64.whl", hash = "sha256:e2f6be6bb463f98b7468386ec2e5328ee5975800580c28816ec549b4c62825c4", size = 236068, upload-time = "2026-10-16T08:46:29.587Z" },
+    { url = "https://files.pythonhosted.org/packages/cc/b2/ee7afd7e84bc1a8a490710c3c0a7ad472b57f17909549dc7400d17f19c8b/glfw-2.11.0-py2.py3-none-manylinux_2_28_x86_64.whl", hash = "sha256:76484fae4a4ef0f778a05e02422ecbe6960ae23039087fe2e0ad9742ab8c7bbe", size = 248539, upload-time = "2026-10-16T08:46:30.8Z" },
+    { url = "https://files.pythonhosted.org/packages/be/b2/feb54341a0ad2c3a57ba462bcdef5543569a7d2a1b8751a9c46050c0e255/glfw-2.11.0-py2.py3-none-win32.whl", hash = "sha256:9aac61d97f71088b16322a4a75cdf72ac44ea3f1c4e7e326e5dd7c427e020903", size = 557704, upload-time = "2026-10-16T08:46:32.228Z" },
+    { url = "https://files.pythonhosted.org/packages/78/d6/b0d9d83177397c018efa3579c54990f8d9b3af17fdcf97b0e549609a0571/glfw-2.11.0-py2.py3-none-win_amd64.whl", hash = "sha256:bd39c1adb57b7273813e33b9768bed88d1ea656abfc914b4a6424ec0c5d62674", size = 564482, upload-time = "2026-10-16T08:46:34.015Z" },
+    { url = "https://files.pythonhosted.org/packages/03/29/5c890d0da8258c64ec7a2fb76eb4c9aebe89a38abf1aecd8683b0b4c40e6/glfw-2.11.0-py3-none-win_arm64.whl", hash = "sha256:b986dfb457d27852593686fd934c8808986ae2e4cae44ec1e8e89b1e46fc36ee", size = 174351, upload-time = "2026-10-16T08:46:35.244Z" },
 ]
 
 [[package]]
@@ -203,12 +244,55 @@ wheels = [
 ]
 
 [[package]]
+name = "imgui-bundle"
+version = "1.93.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/64/78/b5e7bf047f6202711d2bd9f9ffde31c28ca47a6c1cb0d9a744763ac6e749/imgui_bundle-1.93.0.tar.gz", hash = "sha256:10ad1dab8258a6787b4f07bb926b08d0efc648a7906242568c8dd778c5e719bf", size = 53834676, upload-time = "2026-10-21T19:14:13.943Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/3f/d8/425def218700b73b22b6b84033f1f6ac207d5ba1c08f2edfb4d813a04a45/imgui_bundle-1.93.0-cp312-cp312-macosx_14_0_arm64.whl", hash = "sha256:14c4c20c4008d0afa62bb18dade248bc06113c2963f7cdf42856caf0e04eeeb2", size = 11256387, upload-time = "2026-10-21T19:13:14.025Z" },
+    { url = "https://files.pythonhosted.org/packages/96/4a/2b0044cf4b6dc68225cfcdf07631d3fe81ac53a35aab9abc83b8bd9b97a4/imgui_bundle-1.93.0-cp312-cp312-manylinux_2_28_aarch64.whl", hash = "sha256:64a38df08478d5305723700e92efba6ecc58d508598908b299ee949d79a7150e", size = 13273381, upload-time = "2026-10-21T19:13:15.789Z" },
+    { url = "https://files.pythonhosted.org/packages/35/05/744138ae49b9946b1e11b28a3d15dd59a8eb1c63cae2d1fe4f8d982166b5/imgui_bundle-1.93.0-cp312-cp312-manylinux_2_28_x86_64.whl", hash = "sha256:e994bfacb423468419ff25aac26e6c88af83d4a7c5b24209a24f3796340256c1", size = 14440334, upload-time = "2026-10-21T19:13:17.787Z" },
+    { url = "https://files.pythonhosted.org/packages/40/ea/a67d838435533c02afa2766a6cd68d63bc3ff50232bb5a15095b6ac6874e/imgui_bundle-1.93.0-cp312-cp312-musllinux_1_2_aarch64.whl", hash = "sha256:980146a51352068fbdaec4a14e24eafc32f4e8c54a93d856bd202c225221f4ee", size = 14230535, upload-time = "2026-10-21T19:13:19.975Z" },
+    { url = "https://files.pythonhosted.org/packages/83/07/20286c4043e3ca32d4d224dece857936b9d18eb41ae1a4107507d4e51ae8/imgui_bundle-1.93.0-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:3d05e6c603d61344b727e0338fe7435d72c33ea2e6ce6e11b7fb5b09dc4ea674", size = 15276702, upload-time = "2026-10-21T19:13:21.869Z" },
+    { url = "https://files.pythonhosted.org/packages/26/da/af1f3e03d0cf8603ac2fde387cc5092fa108b090788978b2614aef97b6ea/imgui_bundle-1.93.0-cp312-cp312-win_amd64.whl", hash = "sha256:25f47367823867803d14aab95b3cfbb4f3df34a04727b4b9f8ee34c913fae178", size = 12495274, upload-time = "2026-10-21T19:13:23.634Z" },
+    { url = "https://files.pythonhosted.org/packages/d8/d0/d1f429c9ed03b043b934fd8d9c7d317b3ebf452885ce2e3418c046717eaf/imgui_bundle-1.93.0-cp312-cp312-win_arm64.whl", hash = "sha256:5a4e5f4136ca086eebae54c9a8bd2462d3f63b3141b01b344b8290701caf923c", size = 12182058, upload-time = "2026-10-21T19:13:25.716Z" },
+    { url = "https://files.pythonhosted.org/packages/03/39/482437a7918d391728349a8033a1ea164593a9141a2d0f0b20be264db61d/imgui_bundle-1.93.0-cp313-cp313-macosx_14_0_arm64.whl", hash = "sha256:9b824da603152871263db7cb104d9567ef9fd676e8ab3f18eb6d613a1ba663be", size = 11256180, upload-time = "2026-10-21T19:13:27.541Z" },
+    { url = "https://files.pythonhosted.org/packages/0a/e3/7bd620a45c017f3a6f56435f5adfa475875b0391fa7ed88ec188b6cca7a9/imgui_bundle-1.93.0-cp313-cp313-manylinux_2_28_aarch64.whl", hash = "sha256:c48fce21da7ee7b6fb3930db83aef02075867c707788e60e65d3d685537e83a7", size = 13273359, upload-time = "2026-10-21T19:13:29.391Z" },
+    { url = "https://files.pythonhosted.org/packages/08/83/cd40e29081a33a1b500acaac3c7f16b11aae038b750480f73c18943e8c9d/imgui_bundle-1.93.0-cp313-cp313-manylinux_2_28_x86_64.whl", hash = "sha256:dfdfbe34ddf22845992bc6c32fb699c2a05baa08eb08f7070cb3510067b10660", size = 14440527, upload-time = "2026-10-21T19:13:31.438Z" },
+    { url = "https://files.pythonhosted.org/packages/ff/47/4d331992b03e6a816a7e3b8812d8b23343d483aa14e5bddc78da6fe88660/imgui_bundle-1.93.0-cp313-cp313-musllinux_1_2_aarch64.whl", hash = "sha256:3ef1ad76011b8592db5f0cbac00d191bc3f2268e6ba8e5fcb46005b0aa49589d", size = 14230143, upload-time = "2026-10-21T19:13:33.288Z" },
+    { url = "https://files.pythonhosted.org/packages/27/8b/239802ec753cf9c9af7ef4e1f479053fb1900109363afcf1b27158055f75/imgui_bundle-1.93.0-cp313-cp313-musllinux_1_2_x86_64.whl", hash = "sha256:795655d98d7d6ee244e8772fd28882986284e67f65a9772d85e9c834cf9dfedf", size = 15276963, upload-time = "2026-10-21T19:13:35.667Z" },
+    { url = "https://files.pythonhosted.org/packages/7e/cf/0bde10a4662d965ab54b3345853a5740d4f0422bfae27e0dd7d3eab0a02d/imgui_bundle-1.93.0-cp313-cp313-win_amd64.whl", hash = "sha256:dfdb35df9eb43ba1d637dda9f089c0ac6c45f46abe3b3d0737a2710e4d1f5b9a", size = 12495226, upload-time = "2026-10-21T19:13:37.595Z" },
+    { url = "https://files.pythonhosted.org/packages/2f/16/0bb811e0c4b00b2246c6af41790838d1f360fe09f14327dd1d4f83052a1a/imgui_bundle-1.93.0-cp313-cp313-win_arm64.whl", hash = "sha256:457ef643b8d024a09da4e63b7f7975e9fa6685c735302aa9be412a5f96074db8", size = 12182074, upload-time = "2026-10-21T19:13:39.469Z" },
+]
+
+[[package]]
 name = "iniconfig"
 version = "2.3.1"
 source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/01/e1/2069291243c926a2ff1cd706c7f3eeb9b62144bf60f77c9fb9ff2fb26bd3/iniconfig-2.3.1.tar.gz", hash = "sha256:67f4b9c50da0dedf52af349e7749a80a9057a5031199791b906c3bb3ae878960", size = 21209, upload-time = "2026-10-06T22:48:38.076Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/56/43/4ca9e49d27a1fcf6bece6f6aec0ea46bb9112489b93d4b688fb415457bdb/iniconfig-2.3.1-py3-none-any.whl", hash = "sha256:9121e2c1fdb355232495be3194c8dfe87ccc2d5dee45947b78e68f499790d7a7", size = 7552, upload-time = "2026-10-06T22:48:36.959Z" },
+]
+
+[[package]]
+name = "moderngl"
+version = "5.13.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "glcontext" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/92/8a/c39cf051226c51105aac20bbe613a0ef05d006c2f2b2403fad25ca80a23c/moderngl-5.13.0.tar.gz", hash = "sha256:7e8b39e85702e097c4d680f6cc0c51aabf0c1eac741719a159ac405d37c95404", size = 204155, upload-time = "2026-10-07T11:56:26.639Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/bd/bd/32c67061d42bace3d3ae2af449d857ab16a4b91e5e836c27fc851b545ada/moderngl-5.13.0-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:16c403575ef4a654e6b063f8475df693d4e0ec8ae188ce22bfe27ccd1ed84e77", size = 113605, upload-time = "2026-10-07T11:55:25.096Z" },
+    { url = "https://files.pythonhosted.org/packages/08/26/a1d82541c8d7601222df0ab2aeb6574911d9d56ff206e930fe06909b05a8/moderngl-5.13.0-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:99a3b90929f11a2311328e6edac08fc70f1d6fe73f0f42ce222e1adfcaebd484", size = 305422, upload-time = "2026-10-07T11:55:26.727Z" },
+    { url = "https://files.pythonhosted.org/packages/cc/28/bcdf1f518afc81a84667df9824eec33d6377bff1489c86f5e83707dd0bd5/moderngl-5.13.0-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:e328b8465635de39e133bd3069a9ce4b0e230845f6b279e5bd9d3392b7bf1575", size = 1331172, upload-time = "2026-10-07T11:55:28.98Z" },
+    { url = "https://files.pythonhosted.org/packages/43/67/bb1e4e43b85dc1eb3b04172a02e3f8f499ab76303ecc9483fe0bc5bf3b45/moderngl-5.13.0-cp312-cp312-win32.whl", hash = "sha256:4d715f876b1cd430d76ca12aa2744ff2e120a6ef9e89446777bd8e1cddb96fce", size = 103266, upload-time = "2026-10-07T11:55:30.724Z" },
+    { url = "https://files.pythonhosted.org/packages/50/c2/36775568c48af98997d8abfdcc3ea0af254af1ef2d1128b152f948207ea6/moderngl-5.13.0-cp312-cp312-win_amd64.whl", hash = "sha256:9fa18165d2e1d4c2e7587540fb7938b45f576c66cf14dc2ca672dc63dd124d64", size = 110202, upload-time = "2026-10-07T11:55:32.259Z" },
+    { url = "https://files.pythonhosted.org/packages/f5/d9/20b29f42c93be74b1d1e75671da5f0a810570083957c249d7841debd0e6f/moderngl-5.13.0-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:b761331c16ceee58139ad51f8d5d72bb95803e58daecc8f217b52c8de24c2812", size = 113590, upload-time = "2026-10-07T11:55:33.691Z" },
+    { url = "https://files.pythonhosted.org/packages/61/e7/48c53d6907de40777c702929616ac78cb5bccc9bb80d7bcd3f5ee558a540/moderngl-5.13.0-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:998b368bc9c0c153b13c5edefd8d42642f5f80b3c07e5cb026984b09066fcb9a", size = 308291, upload-time = "2026-10-07T11:55:35.332Z" },
+    { url = "https://files.pythonhosted.org/packages/f0/62/dce81ef3ae3695eb87aa6fb165518ef32b20e0afa0f47ea5c62c6bc1751f/moderngl-5.13.0-cp313-cp313-musllinux_1_2_x86_64.whl", hash = "sha256:ba5096819a158dce5460e5ec97c735a807cf1790dd8a3bcb42f334e7fe084877", size = 1331111, upload-time = "2026-10-07T11:55:37.29Z" },
+    { url = "https://files.pythonhosted.org/packages/42/70/d2254b0fe628eea0b62664ac50801d49da6959fdf1917b059430a7604662/moderngl-5.13.0-cp313-cp313-win32.whl", hash = "sha256:9d01be9f0442b992d480336e5dd2d8456673b5018ceda86d341cf4ba46b08cc9", size = 103257, upload-time = "2026-10-07T11:55:38.907Z" },
+    { url = "https://files.pythonhosted.org/packages/09/04/16dcab39dc56a0ba6164a37e7c521725130edfe1104df3efc5ce9b2ac417/moderngl-5.13.0-cp313-cp313-win_amd64.whl", hash = "sha256:72dfa490288eceb2400b402e1a853e005a26cfc3643ad630488bf463d9cdfce3", size = 110179, upload-time = "2026-10-07T11:55:40.759Z" },
 ]
 
 [[package]]

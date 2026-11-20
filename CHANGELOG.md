@@ -7,6 +7,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Game window (#9): GLFW window with an OpenGL 4.6 core context wrapped by moderngl
+  (`entropy.render.context`); settings as immutable dataclasses loaded from
+  `content/settings.toml` (`entropy.core.config`). CI runs the `render` tests headless
+  with Mesa software OpenGL under Xvfb (#15).
 - `entropy.linalg.jacobi` (#6): weighted Jacobi sweep for the 7-point Poisson stencil
   with zero values outside the grid, tested against NumPy and the exact discrete
   solution of a manufactured problem on CPU and CUDA. Each thread marches 8 cells along

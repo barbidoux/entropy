@@ -1,0 +1,16 @@
+# ENTROPY settings. Any key left out keeps its default (src/entropy/core/config.py).
+
+[window]
+width_px = 1600
+height_px = 900
+title = "ENTROPY"
+vsync = true
+gl_version = [4, 6]
+
+[camera]
+fov_y_deg = 70.0
+speed_m_per_s = 5.0              # free flight, metres per second
+mouse_rad_per_px = 0.0025         # look sensitivity, radians per mouse pixel
+start_position_m = [-8.0, -10.0, 4.0]
+start_yaw_deg = 50.0              # from +X towards +Y
+start_pitch_deg = -15.0           # negative looks down

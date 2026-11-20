@@ -12,13 +12,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
+      - name: Software OpenGL for render tests (Mesa llvmpipe, SPEC 9.2)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends xvfb libgl1 libegl1 libgl1-mesa-dri
       - name: Install
         run: uv sync --python 3.12
       - name: Lint
         run: uv run ruff check . && uv run ruff format --check .
       - name: Types
         run: uv run pyright
+      - name: OpenGL available to the tests
+        run: >-
+          xvfb-run -a uv run python -c "from entropy.core.config import WindowSettings;
+          from entropy.render.context import GameWindow;
+          w = GameWindow(WindowSettings(), visible=False); i = w.ctx.info;
+          print(i['GL_VERSION'], '|', i['GL_RENDERER']); w.close()"
       - name: Tests
-        run: uv run coverage run -m pytest
+        run: xvfb-run -a uv run coverage run -m pytest
       - name: Coverage (SPEC 9.3, at least 90 %)
         run: uv run coverage report
