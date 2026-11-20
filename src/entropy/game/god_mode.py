@@ -8,6 +8,7 @@ by surprise.
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 from entropy.core.config import CameraSettings
@@ -23,13 +24,16 @@ class GodMode:
     hud_visible: bool = True
 
     @classmethod
-    def from_settings(cls, settings: CameraSettings) -> GodMode:
+    def from_settings(
+        cls, settings: CameraSettings, bindings: Mapping[int, Action] | None = None
+    ) -> GodMode:
         pose = CameraPose(
             settings.start_position_m,
             math.radians(settings.start_yaw_deg),
             math.radians(settings.start_pitch_deg),
         )
-        return cls(settings=settings, pose=pose)
+        state = InputState(bindings) if bindings is not None else InputState()
+        return cls(settings=settings, pose=pose, input=state)
 
     def on_mouse_button(self, *, pressed: bool) -> None:
         """A click in the window captures the mouse for looking around."""

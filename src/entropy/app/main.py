@@ -17,6 +17,7 @@ import warp as wp
 from entropy.core.config import Settings, default_settings_path, load_settings
 from entropy.core.profiler import FrameStats, gpu_memory
 from entropy.game.god_mode import GodMode
+from entropy.game.input import bindings_from_settings
 from entropy.render.camera import CameraView
 from entropy.render.context import GameWindow
 from entropy.render.interop import SharedBuffer
@@ -38,7 +39,8 @@ class GameStages:
         self.settings = settings
         self.stats = stats
         self.loop_settings = LoopSettings()
-        self.mode = GodMode.from_settings(settings.camera)
+        bindings = bindings_from_settings(settings.controls)  # needs GLFW running
+        self.mode = GodMode.from_settings(settings.camera, bindings)
         self.device = "cuda:0" if wp.is_cuda_available() else "cpu"
         self._mouse_captured = False
         self._pattern_time_s = 0.0
