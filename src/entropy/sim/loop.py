@@ -4,8 +4,10 @@ Each frame: poll input, update game logic with the real frame time (capped
 against stalls), advance the world once by the frame time multiplied by the
 time scale, clamped to `max_advance_s` (1/30 s), render, present, then wait
 until the frame's deadline. Below 30 fps the clamp makes the world slow down
-instead of taking huge steps; the report and the statistics say by how much.
-Solvers split each advance into CFL substeps themselves.
+instead of taking huge steps. The simulation may advance less still, when a
+solver's substep cap shrinks the shared advance (ADR 0013); the report and the
+statistics count the time actually advanced, so both slowdowns show. Solvers
+split each advance into CFL substeps themselves.
 
 Frames are paced against a deadline that advances by `min_frame_s` (1/60 s)
 each frame, so a sleep that wakes up late is made up on the next frame instead
@@ -33,8 +35,12 @@ class FrameStages(Protocol):
     def update(self, frame_dt_s: float) -> None:
         """Game logic and camera, once per frame, with real time (not simulated)."""
 
-    def step_simulation(self, dt_s: float) -> None:
-        """Advance the world by `dt_s` simulated seconds."""
+    def step_simulation(self, dt_s: float) -> float:
+        """Advance the world by up to `dt_s` simulated seconds; return the time advanced.
+
+        It may be less than `dt_s` when a solver's substep cap shrinks the advance
+        (ADR 0013, `entropy.sim.simulation`), never more."""
+        ...
 
     def render(self) -> None: ...
 
@@ -107,10 +113,15 @@ class FrameLoop:
         logic_end_s = self._clock()
 
         scale = settings.time_scale
-        advance_s = min(frame_s * scale, settings.max_advance_s)
+        asked_s = min(frame_s * scale, settings.max_advance_s)
+        advance_s = 0.0
+        if asked_s > 0.0:
+            advance_s = self.stages.step_simulation(asked_s)
+            if advance_s > asked_s * (1.0 + 1e-9):
+                raise RuntimeError(
+                    f"the simulation advanced more than asked: {advance_s} s for {asked_s} s"
+                )
         dropped_s = frame_s - advance_s / scale if scale > 0.0 else 0.0
-        if advance_s > 0.0:
-            self.stages.step_simulation(advance_s)
         sim_end_s = self._clock()
 
         self.stages.render()

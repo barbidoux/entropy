@@ -30,6 +30,7 @@ from entropy.render.interop import SharedBuffer
 from entropy.render.points import PointsRenderer, write_test_pattern
 from entropy.render.scene import SceneRenderer
 from entropy.sim.loop import FrameLoop, LoopSettings
+from entropy.sim.simulation import Simulation
 from entropy.ui.hud import PerformanceHud, hud_lines
 
 _log = logging.getLogger(__name__)
@@ -53,6 +54,7 @@ class GameStages:
         self.device = "cuda:0" if wp.is_cuda_available() else "cpu"
         self._mouse_captured = False
         self._pattern_time_s = 0.0
+        self.simulation = Simulation([])  # M0 scene: no solver yet; the liquid joins in M1
         # GPU time per stage for the HUD (SPEC 4.7): CUDA events around Warp work,
         # OpenGL timer queries around render passes.
         self.cuda_timer = cuda_stage_timer(self.device)
@@ -117,8 +119,10 @@ class GameStages:
             self._mouse_captured = captured
         self.hud.visible = self.mode.hud_visible
 
-    def step_simulation(self, dt_s: float) -> None:
-        self._pattern_time_s += dt_s
+    def step_simulation(self, dt_s: float) -> float:
+        advanced_s = self.simulation.step(dt_s)
+        self._pattern_time_s += advanced_s
+        return advanced_s
 
     def render(self) -> None:
         width, height = self.window.framebuffer_size_px()

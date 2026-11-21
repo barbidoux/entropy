@@ -37,6 +37,8 @@ class FakeStages:
     calls: list[str] = field(default_factory=list)
     advances_s: list[float] = field(default_factory=list)
     logic_dt_s: list[float] = field(default_factory=list)
+    kept_fraction: float = 1.0
+    """Share of each requested advance the world takes, as when a solver's cap shrinks it."""
 
     def _run(self, name: str) -> None:
         self.calls.append(name)
@@ -49,9 +51,10 @@ class FakeStages:
         self.logic_dt_s.append(frame_dt_s)
         self._run("update")
 
-    def step_simulation(self, dt_s: float) -> None:
+    def step_simulation(self, dt_s: float) -> float:
         self.advances_s.append(dt_s)
         self._run("step_simulation")
+        return dt_s * self.kept_fraction
 
     def render(self) -> None:
         self._run("render")
@@ -275,3 +278,26 @@ def test_run_stops_when_asked() -> None:
     loop.run(lambda: next(answers))
 
     assert stages.calls.count("present") == 3
+
+
+def test_the_world_advances_only_what_the_simulation_reports() -> None:
+    """ADR 0013: when a solver's substep cap shrinks the advance, the HUD sees the slowdown."""
+    loop, stages, clock = _loop()
+    stages.kept_fraction = 0.5
+    clock.now_s = 1 / 60
+
+    report = loop.run_frame()
+
+    assert stages.advances_s == [pytest.approx(1 / 60)]
+    assert report.advance_s == pytest.approx(1 / 120)
+    assert report.dropped_s == pytest.approx(1 / 120)
+    assert loop.stats.summary().time_kept == pytest.approx(0.5)
+
+
+def test_a_simulation_that_advances_more_than_asked_is_a_bug() -> None:
+    loop, stages, clock = _loop()
+    stages.kept_fraction = 2.0
+    clock.now_s = 1 / 60
+
+    with pytest.raises(RuntimeError, match="advanced more than asked"):
+        loop.run_frame()
