@@ -1,0 +1,6 @@
+# Liquid water at 20 °C and 101.325 kPa (SPEC 5.1). SI units; every value cites its source.
+name = "Water"
+density_kg_per_m3 = 998.21
+
+[source]
+density_kg_per_m3 = "IAPWS-95 formulation (Wagner & Pruß 2002, J. Phys. Chem. Ref. Data 31, 387), 998.21 kg/m³ at 293.15 K and 0.101325 MPa, as tabulated by the NIST Chemistry WebBook (SRD 69), Thermophysical Properties of Fluid Systems: water"
