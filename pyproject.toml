@@ -66,7 +66,10 @@ pythonVersion = "3.12"
 typeCheckingMode = "standard"
 # Warp kernels declare arguments as `wp.array(dtype=float)`: a call in a type
 # position, which is Warp's documented syntax but not valid typing. Only this
-# rule is relaxed; every other check stays on.
+# rule is relaxed globally. Kernel-only modules (`_*_kernels.py`, such as
+# `world/_sdf_kernels.py`) also relax the operator and argument rules in their
+# own header, because Warp's stubs cannot type kernel maths; the host code
+# beside them stays fully checked.
 reportInvalidTypeForm = false
 
 [tool.coverage.run]

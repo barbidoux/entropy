@@ -1,0 +1,6 @@
+# Plain normal-weight concrete, the floor of the Test Tank (SPEC 5.1).
+name = "Concrete"
+density_kg_per_m3 = 2450.0
+
+[source]
+density_kg_per_m3 = "EN 1991-1-1:2002 (Eurocode 1), Table A.1: normal-weight concrete 24.0 kN/m³; divided by standard gravity 9.80665 m/s² (CGPM 1901) that is 2,447 kg/m³, rounded to the source's three figures. EN 1991-1-1:2025 supersedes this edition."

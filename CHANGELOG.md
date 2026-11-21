@@ -7,6 +7,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Materials and static solids (#47):
+  - `content/materials/water.toml`, `glass.toml` and `concrete.toml`, each density with
+    its source;
+  - `entropy.world.materials`, which refuses unknown keys, unsourced constants and
+    impossible values;
+  - `entropy.world.sdf`: static solids as signed distance fields with outward
+    normals. Primitives are boxes, open boxes (the Test Tank: outer box minus a cavity
+    open at the top, exact inside the glass) and half-spaces; there is also sampling
+    at grid cell centres, with its thin-wall limit named.
+  - SPEC 5.1: concrete is 2,450 kg/m³ (sourced).
 - Staggered MAC grid (#45, `entropy.fields.mac`):
   - `GridSpec` and face-centred `MacVelocity`;
   - trilinear sampling of velocity and cell scalars: exact on linear fields, clamped
