@@ -21,6 +21,10 @@ PQ = wp.constant(1)  # p·Ap
 RZ_NEW = wp.constant(2)  # r·z of this iteration
 RR = wp.constant(3)  # r·r, for the convergence check
 BB = wp.constant(4)  # b·b over fluid cells, for the relative residual
+ANY_AIR = wp.constant(5)  # 1 if some cell is air, else 0: A is then singular (ADR 0021)
+FLUID_CELLS = wp.constant(6)  # how many cells are fluid, counted only with no air
+FLUID_SUM = wp.constant(7)  # a vector's sum over the fluid cells, for its mean
+SCALARS = 8
 
 
 @wp.kernel
@@ -455,3 +459,70 @@ def step_p(z: wp.array(dtype=float), scalars: wp.array(dtype=wp.float64), p: wp.
 @wp.kernel
 def roll(scalars: wp.array(dtype=wp.float64)):
     scalars[RZ] = scalars[RZ_NEW]
+
+
+@wp.kernel
+def mask_finding_air(
+    labels: wp.array3d(dtype=wp.int32),
+    x: wp.array3d(dtype=float),
+    scalars: wp.array(dtype=wp.float64),
+):
+    """Zero on every cell that is not fluid, and scalars[ANY_AIR] = 1 if any cell is air
+    (every air cell writes the same 1; the caller clears it first)."""
+    i, j, k = wp.tid()
+    label = labels[i, j, k]
+    if label != FLUID:
+        x[i, j, k] = 0.0
+    if label == AIR:
+        scalars[ANY_AIR] = wp.float64(1.0)
+
+
+@wp.kernel
+def count_partial(
+    labels: wp.array(dtype=wp.int32),
+    label: int,
+    stride: int,
+    partials: wp.array(dtype=wp.float64),
+):
+    """partials[t] = how many of the cells t, t + stride, ... carry `label`."""
+    t = wp.tid()
+    s = wp.float64(0.0)
+    i = t
+    while i < labels.shape[0]:
+        if labels[i] == label:
+            s += wp.float64(1.0)
+        i += stride
+    partials[t] = s
+
+
+@wp.kernel
+def fluid_sum_partial(
+    labels: wp.array(dtype=wp.int32),
+    a: wp.array(dtype=float),
+    stride: int,
+    scalars: wp.array(dtype=wp.float64),
+    partials: wp.array(dtype=wp.float64),
+):
+    """partials[t] = Σ a over the fluid cells t, t + stride, ... in float64, and FLUID_SUM
+    cleared for `sum_partials` to fill (no thread of this kernel reads it)."""
+    t = wp.tid()
+    if t == 0:
+        scalars[FLUID_SUM] = wp.float64(0.0)
+    s = wp.float64(0.0)
+    i = t
+    while i < labels.shape[0]:
+        if labels[i] == FLUID:
+            s += wp.float64(a[i])
+        i += stride
+    partials[t] = s
+
+
+@wp.kernel
+def subtract_fluid_mean(
+    labels: wp.array(dtype=wp.int32), scalars: wp.array(dtype=wp.float64), a: wp.array(dtype=float)
+):
+    """a -= FLUID_SUM / FLUID_CELLS on the fluid cells, the difference taken in float64."""
+    i = wp.tid()
+    if labels[i] != FLUID:
+        return
+    a[i] = float(wp.float64(a[i]) - scalars[FLUID_SUM] / scalars[FLUID_CELLS])

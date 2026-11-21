@@ -35,14 +35,27 @@ for the CPU. The residual is read back once every `check_every` iterations. On
 CUDA those iterations replay as one CUDA graph (SPEC 3: solver loops launch
 from graphs). Iterations past convergence only lower the residual further.
 
-Named limit: every connected body of fluid must touch air, or A is singular. A
-sealed pocket whose right-hand side does not sum to zero does not converge
-(`converged` is false after `max_iterations`). When it does sum to zero, as a
-projection's divergence does inside closed walls, the solve usually converges with
-the pocket's pressure fixed only up to a constant. An isolated fluid cell gets an
-arbitrary pressure through the diagonal's 1e-12 floor. The liquid's projection handles
-a grid with no air at all (ADR 0021); pockets sealed by solids while air remains are not
-detected.
+No air at all (ADR 0021): A is then singular, its null space the constant over the
+fluid cells (one connected body), and the pressure is fixed only up to a constant. The
+solve counts the air cells on the device, and when there are none:
+- x loses its mean over the fluid cells first, so the answer's mean is 0;
+- r = b - A x loses its mean: b's part along the constant cannot be reached, so the
+  answer is the least-squares one (that of b minus its mean);
+- z = M r loses its mean after every iteration's V-cycle, before r·z: the V-cycle's
+  sweeps and its singular coarsest grid put constants into z, and float32's A p never
+  sums to exactly 0, so without this x drifts along the constant and CG slows or fails
+  (from rest: up to 52 iterations, or none converging, at 32 x 32 x 40). The first
+  V-cycle's constant moves the level by about 1e-8 of the pressure's range only.
+Means are summed and subtracted in float64. The first read-back says whether any cell
+is air: only without air does the solve take this path, at the cost of one more
+read-back. With air the check costs one store per air cell.
+
+Named limits: every connected body of fluid must touch air, or be the only body in a
+grid with no air. A pocket sealed by solids while air remains elsewhere, or several
+bodies separated by solids in a grid with no air, is singular with a null space this
+solve does not remove: if its right-hand side does not sum to zero over each body it
+does not converge (`converged` is false after `max_iterations`), and its level drifts.
+An isolated fluid cell gets an arbitrary pressure through the diagonal's 1e-12 floor.
 """
 
 from __future__ import annotations
@@ -288,7 +301,7 @@ class Mgpcg:
             name: wp.zeros(self.system.shape, dtype=float, device=device)
             for name in ("r", "z", "p", "q")
         }
-        vectors["scalars"] = wp.zeros(5, dtype=wp.float64, device=device)
+        vectors["scalars"] = wp.zeros(_k.SCALARS, dtype=wp.float64, device=device)
         partials = min(_DOT_PARTIALS, int(np.prod(self.system.shape)))
         vectors["partials"] = wp.zeros(partials, dtype=wp.float64, device=device)
         systems = [self.system]
@@ -401,13 +414,36 @@ class Mgpcg:
             inputs=[a.flatten(), b.flatten(), threads, partials],
             device=device,
         )
-        groups = (threads + _DOT_GROUP - 1) // _DOT_GROUP
+        self._sum_partials(slot)
+
+    def _sum_partials(self, slot: int) -> None:
+        """scalars[slot] += the sum of the partials (the dot product's second stage)."""
+        partials = self._vectors["partials"]
+        groups = (partials.shape[0] + _DOT_GROUP - 1) // _DOT_GROUP
         wp.launch(
-            _k.sum_partials, dim=groups, inputs=[partials, _DOT_GROUP, scalars, slot], device=device
+            _k.sum_partials,
+            dim=groups,
+            inputs=[partials, _DOT_GROUP, self._vectors["scalars"], slot],
+            device=self.system.device,
         )
 
-    def _iterate(self, x: wp.array) -> None:
-        """One CG iteration, entirely on the device."""
+    def _remove_fluid_mean(self, a: wp.array) -> None:
+        """a -= its mean over the fluid cells (FLUID_CELLS counted), summed in float64."""
+        scalars, partials = self._vectors["scalars"], self._vectors["partials"]
+        labels, device = self.system.labels.flatten(), self.system.device
+        wp.launch(
+            _k.fluid_sum_partial,
+            dim=partials.shape[0],
+            inputs=[labels, a.flatten(), partials.shape[0], scalars, partials],
+            device=device,
+        )
+        self._sum_partials(int(_k.FLUID_SUM))
+        wp.launch(
+            _k.subtract_fluid_mean, dim=a.size, inputs=[labels, scalars, a.flatten()], device=device
+        )
+
+    def _iterate(self, x: wp.array, sealed: bool) -> None:
+        """One CG iteration, entirely on the device; `sealed` when no cell is air."""
         v, s = self._vectors, self.system
         n = int(np.prod(s.shape))
         wp.launch(
@@ -427,6 +463,10 @@ class Mgpcg:
             device=s.device,
         )
         self.precondition(v["r"], v["z"])
+        if sealed:
+            # z itself loses its mean, before r·z: float32's A p does not sum to exactly 0,
+            # so r carries a small constant that r·z must not see (ADR 0021).
+            self._remove_fluid_mean(v["z"])
         self._dot(v["r"], v["z"], int(_k.RZ_NEW))
         wp.launch(
             _k.step_p,
@@ -458,9 +498,13 @@ class Mgpcg:
         wp.capture_launch(cached[0])
 
     def _start(self, b: wp.array, x: wp.array) -> None:
-        """r = b - A x, z = M r, p = z, and r·z, r·r and b·b, all on the device."""
+        """r = b - A x, z = M r, p = z, and r·z, r·r and b·b, all on the device; and
+        whether any cell is air."""
         v, s = self._vectors, self.system
-        wp.launch(_k.mask, dim=s.shape, inputs=[s.labels, x], device=s.device)
+        wp.launch(_k.clear, dim=1, inputs=[v["scalars"], int(_k.ANY_AIR)], device=s.device)
+        wp.launch(
+            _k.mask_finding_air, dim=s.shape, inputs=[s.labels, x, v["scalars"]], device=s.device
+        )
         wp.launch(
             _k.residual, dim=s.shape, inputs=[*s.operator_args(), x, b, v["r"]], device=s.device
         )
@@ -472,10 +516,30 @@ class Mgpcg:
         self._dot(v["r"], v["z"], int(_k.RZ))
         self._dot(v["r"], v["r"], int(_k.RR))
 
-    def _batch(self, x: wp.array, iterations: int) -> None:
+    def _seal(self, x: wp.array) -> None:
+        """With no air (ADR 0021): x and r lose their means over the fluid cells (A·1 = 0, so
+        r stays b - A x), then z = M r, p = z, r·z and r·r again."""
+        v, s = self._vectors, self.system
+        scalars, partials = v["scalars"], v["partials"]
+        wp.launch(_k.clear, dim=1, inputs=[scalars, int(_k.FLUID_CELLS)], device=s.device)
+        wp.launch(
+            _k.count_partial,
+            dim=partials.shape[0],
+            inputs=[s.labels.flatten(), CELL_FLUID, partials.shape[0], partials],
+            device=s.device,
+        )
+        self._sum_partials(int(_k.FLUID_CELLS))
+        self._remove_fluid_mean(x)
+        self._remove_fluid_mean(v["r"])
+        self.precondition(v["r"], v["z"])
+        wp.copy(v["p"], v["z"])
+        self._dot(v["r"], v["z"], int(_k.RZ))
+        self._dot(v["r"], v["r"], int(_k.RR))
+
+    def _batch(self, x: wp.array, iterations: int, sealed: bool) -> None:
         """`iterations` CG iterations, then r·r for the convergence check."""
         for _ in range(iterations):
-            self._iterate(x)
+            self._iterate(x, sealed)
         self._dot(self._vectors["r"], self._vectors["r"], int(_k.RR))
 
     def solve(
@@ -508,11 +572,16 @@ class Mgpcg:
         if b_norm == 0.0:
             x.zero_()
             return SolveResult(iterations=0, relative_residual=0.0, converged=True)
+        sealed = float(values[int(_k.ANY_AIR)]) == 0.0
+        if sealed:  # the corner case pays one more read-back
+            self._run("seal", (x,), lambda: self._seal(x))
+            values = scalars.numpy()
         relative = math.sqrt(max(float(values[int(_k.RR)]), 0.0)) / b_norm
         done = 0
+        suffix = "-sealed" if sealed else ""
         while relative > tolerance and done < max_iterations:
             batch = min(check_every, max_iterations - done)
-            self._run(f"batch{batch}", (x,), lambda n=batch: self._batch(x, n))
+            self._run(f"batch{batch}{suffix}", (x,), lambda n=batch: self._batch(x, n, sealed))
             done += batch
             relative = math.sqrt(max(float(scalars.numpy()[int(_k.RR)]), 0.0)) / b_norm
         return SolveResult(

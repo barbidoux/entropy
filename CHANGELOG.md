@@ -5,13 +5,6 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-### Fixed
-
-- Water sealed from air (#69, ADR 0021): when no cell is air, the projection removes
-  the right-hand side's mean and sets the pressure's level (mean 0), on the device. A
-  grid filled to the lid now stays still; on a lattice it used to run to the
-  iteration cap with pressures near 10⁹ Pa.
-
 ### Added
 
 - Water on screen (#52, SPEC 7.2):
@@ -248,3 +241,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
     iteration).
   - M1 issues #34–#36.
 - README: how to play M0.
+
+### Fixed
+
+- Water sealed from air (#69, ADR 0021): when no cell is air, the pressure solve
+  (MGPCG) drops the right-hand side's part along the constant, removes the constant from
+  its preconditioned residual every iteration, and sets the pressure's mean to 0. A grid
+  filled to the lid now stays still, every solve within 8 iterations at the Test Tank's
+  size; before, solves ran to the 200-iteration cap with pressures up to 10¹⁰ Pa. Grids
+  with air pay nothing measurable: the first read-back says whether any cell is air.

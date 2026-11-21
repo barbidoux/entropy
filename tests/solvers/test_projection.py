@@ -255,9 +255,9 @@ def test_a_target_divergence_is_what_the_fluid_cells_get(device: str) -> None:
 
 def test_water_sealed_from_air_is_projected_up_to_its_pressure_level(device: str) -> None:
     """#69: a closed box full of water has no free surface, so its pressure is fixed only
-    up to a constant. The projection removes the right-hand side's mean (the system is
-    then consistent even after rounding), keeps the water still under gravity, and sets
-    the level so the mean pressure is 0."""
+    up to a constant. The solve drops the right-hand side's mean (the system is then
+    consistent even after rounding), keeps the water still under gravity, and sets the
+    level so the mean pressure is 0, whatever the last pressure's level was."""
     spec = GridSpec(shape=(8, 8, 16), dx_m=1.0 / 16.0)
     projection = Projection(spec, WATER.density_kg_per_m3, device)
     projection.labels.fill_(CELL_FLUID)
@@ -266,6 +266,7 @@ def test_water_sealed_from_air_is_projected_up_to_its_pressure_level(device: str
     velocity.w.fill_(-GRAVITY_M_PER_S2 * DT_S)
     # A target divergence with a non-zero mean, as the volume correction may ask for.
     projection.target_divergence_per_s.fill_(0.01)
+    projection.pressure_pa.fill_(1e4)  # the warm start's level is not the answer's
 
     result = projection.project(velocity, DT_S)
 
