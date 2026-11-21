@@ -344,3 +344,15 @@ def test_a_stage_timed_within_the_window_stays() -> None:
         stats.record(1 / 60, {})
 
     assert stats.summary().gpu_ms_mean == pytest.approx({"liquid": 2.0})
+
+
+def test_a_stage_that_comes_back_starts_a_fresh_mean() -> None:
+    """Old samples from before a long gap must not mix into the new mean."""
+    stats = FrameStats(window=4)
+    stats.record(1 / 60, {})
+    stats.record_gpu({"liquid": 0.010})
+    for _ in range(5):
+        stats.record(1 / 60, {})
+    stats.record_gpu({"liquid": 0.001})
+
+    assert stats.summary().gpu_ms_mean == pytest.approx({"liquid": 1.0})

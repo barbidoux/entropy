@@ -72,7 +72,11 @@ class FrameStats:
         Each stage keeps its own window, since CUDA and OpenGL results arrive
         separately and at different lags."""
         for stage, seconds in stages_s.items():
-            self._gpu_s.setdefault(stage, deque(maxlen=self._window)).append(seconds)
+            last = self._gpu_last_frame.get(stage)
+            if last is None or self._frame_count - last >= self._window:
+                # New, or back after a gap: start afresh rather than mix in old samples.
+                self._gpu_s[stage] = deque(maxlen=self._window)
+            self._gpu_s[stage].append(seconds)
             self._gpu_last_frame[stage] = self._frame_count
 
     def record(
