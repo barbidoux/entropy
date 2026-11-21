@@ -7,6 +7,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- One shared advance per frame (#34, ADR 0013):
+  - `entropy.sim.simulation.Simulation` shrinks the frame's advance to the tightest
+    solver limit (`max_advance_s()`, from the previous frame's speeds) before any solver
+    steps, then steps every solver by it, in order;
+  - `step_simulation` returns the time actually advanced, and the frame loop counts
+    only that, so a slowdown forced by a substep cap shows in the HUD;
+  - SPEC 8.2 adds `max_advance_s()` to the solver contract.
 - Map files, format v1, and the Test Tank (#51):
   - `entropy.world.maps`: `map.toml` (schema version, name, environment) and
     `scene.json` (entities), with load, save and a migration registry that refuses

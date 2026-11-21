@@ -476,7 +476,7 @@ Dependencies point downward only, and a test enforces the import rules. "May dep
 
 The game grows by adding content and plug-ins, not by rewiring the engine.
 
-- **Solver:** a class implementing `allocate(world, device)`, `step(dt, ctx)`, `fields()` for coupling and rendering, `checkpoint()`, `restore()` and `diagnostics()`.
+- **Solver:** a class implementing `allocate(world, device)`, `step(dt, ctx)`, `fields()` for coupling and rendering, `checkpoint()`, `restore()` and `diagnostics()`, and `max_advance_s()`, the largest advance its substep cap allows from the previous frame's speeds, so the frame can fix one shared advance first (ADR 0013).
 - **Tool:** a class implementing `on_press`, `on_hold(dt)` and `on_release`, with its parameters, limits and icon declared in a content file.
 - **Prefab:** a parametric builder function plus a content file; the Build mode library lists it automatically.
 - **Material:** one TOML file, no code.
