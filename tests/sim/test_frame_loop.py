@@ -299,5 +299,30 @@ def test_a_simulation_that_advances_more_than_asked_is_a_bug() -> None:
     stages.kept_fraction = 2.0
     clock.now_s = 1 / 60
 
-    with pytest.raises(RuntimeError, match="advanced more than asked"):
+    with pytest.raises(RuntimeError, match="advanced"):
         loop.run_frame()
+
+
+@pytest.mark.parametrize("kept", [math.nan, -0.5])
+def test_an_impossible_advance_from_the_simulation_is_a_bug(kept: float) -> None:
+    loop, stages, clock = _loop()
+    stages.kept_fraction = kept
+    clock.now_s = 1 / 60
+
+    with pytest.raises(RuntimeError, match="advanced"):
+        loop.run_frame()
+
+
+def test_slow_motion_and_a_cap_shrink_add_up() -> None:
+    """At 0.5x with half the advance kept, a 1/60 s frame simulates 1/240 s."""
+    loop, stages, clock = _loop(LoopSettings(min_frame_s=0.0, time_scale=0.5))
+    stages.kept_fraction = 0.5
+    clock.now_s = 1 / 60
+
+    report = loop.run_frame()
+
+    assert report.advance_s == pytest.approx(1 / 240)
+    assert report.dropped_s == pytest.approx(1 / 120)  # real time not simulated, at 0.5x
+    summary = loop.stats.summary()
+    assert summary.time_kept == pytest.approx(0.5)
+    assert summary.world_speed == pytest.approx(0.25)

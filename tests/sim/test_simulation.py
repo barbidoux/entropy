@@ -53,14 +53,23 @@ def test_no_solver_steps_when_there_is_nothing_to_advance() -> None:
     assert log == []
 
 
-def test_a_solver_that_cannot_advance_holds_the_world_this_frame() -> None:
-    solvers, log = _solvers(math.inf, 0.0)
+def test_limits_are_all_read_before_any_solver_steps() -> None:
+    """A solver stepping first must not change the advance the others get."""
+    solvers, log = _solvers(math.inf, 0.01)
+    original_step = solvers[0].step
 
-    assert Simulation(solvers).step(1 / 60) == 0.0
-    assert log == []
+    def step_and_tighten(dt_s: float, ctx: object) -> None:
+        original_step(dt_s, ctx)
+        solvers[1].limit_s = 0.001
+
+    solvers[0].step = step_and_tighten  # type: ignore[method-assign]
+
+    Simulation(solvers).step(1 / 30)
+
+    assert [dt for _, dt in log] == [pytest.approx(0.01)] * 2
 
 
-@pytest.mark.parametrize("limit", [-1.0, math.nan])
+@pytest.mark.parametrize("limit", [0.0, -1.0, math.nan])
 def test_an_impossible_limit_names_the_solver(limit: float) -> None:
     solvers, _ = _solvers(math.inf, limit)
 

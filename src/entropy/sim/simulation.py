@@ -17,9 +17,14 @@ from typing import Any, Protocol
 
 
 class PacedSolver(Protocol):
+    """What the simulation needs from a solver. It lives here until the liquid (#50)
+    adds `max_advance_s` to `entropy.solvers.interface.Solver` (SPEC 8.2)."""
+
     def max_advance_s(self) -> float:
         """Largest advance (s) this solver can take within its substep cap; math.inf if
-        unlimited. From the previous frame's speeds: never waits for the GPU."""
+        unlimited. From the previous frame's speeds: never waits for the GPU. Always
+        positive for a finite state: 0 would hold the world for good, since a held
+        world never updates the speeds the limit comes from."""
         ...
 
     def step(self, dt_s: float, ctx: Any) -> None: ...
@@ -40,7 +45,7 @@ class Simulation:
         advance_s = requested_s
         for solver in self.solvers:
             limit_s = solver.max_advance_s()
-            if math.isnan(limit_s) or limit_s < 0.0:
+            if not limit_s > 0.0:  # also refuses NaN
                 name = type(solver).__name__
                 raise ValueError(f"{name}.max_advance_s() gave {limit_s}: a bug, or NaN upstream")
             advance_s = min(advance_s, limit_s)

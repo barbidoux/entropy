@@ -117,11 +117,11 @@ class FrameLoop:
         advance_s = 0.0
         if asked_s > 0.0:
             advance_s = self.stages.step_simulation(asked_s)
-            if advance_s > asked_s * (1.0 + 1e-9):
+            if not 0.0 <= advance_s <= asked_s * (1.0 + 1e-9):  # also refuses NaN
                 raise RuntimeError(
-                    f"the simulation advanced more than asked: {advance_s} s for {asked_s} s"
+                    f"the simulation advanced {advance_s} s when asked for {asked_s} s"
                 )
-        dropped_s = frame_s - advance_s / scale if scale > 0.0 else 0.0
+        dropped_s = max(frame_s - advance_s / scale, 0.0) if scale > 0.0 else 0.0
         sim_end_s = self._clock()
 
         self.stages.render()
