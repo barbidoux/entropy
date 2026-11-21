@@ -267,6 +267,7 @@ Water uses the Affine Particle-In-Cell method (APIC): particles carry the water,
 - **Step:** transfer particles to grid with quadratic B-spline weights; add gravity, tool and coupling forces; enforce solid boundaries; solve for pressure; transfer back to particles; move particles with a second-order integrator and push them out of solids.
 - **Pressure:** a Poisson equation solved by multigrid-preconditioned conjugate gradient (MGPCG), with a second-order free-surface boundary condition.
 - **Solids:** static geometry enters as a signed distance field (SDF). Moving rigid bodies use variational solid–fluid coupling, so pressure pushes on bodies and bodies push on water in one solve.
+- **Boundaries in M1 (ADR 0017):** the Test Tank's walls are the grid's walls, and static solids inside the water are voxelized. Named limits: water cannot spill over the rim, and the grid's top is a closed wall too, so a splash that reaches it stops there. A body of water sealed from air is not handled yet (#69).
 - **Detail below the grid:** spray, foam and bubbles are secondary particles spawned where air is trapped, crests break or kinetic energy is high. They only affect the look, never the main flow.
 - **Not modelled:** viscosity of water, which is negligible at house scale (Reynolds numbers around 10⁶), and surface tension below the cell size.
 
