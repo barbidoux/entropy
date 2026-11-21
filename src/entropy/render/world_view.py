@@ -1,7 +1,8 @@
 """The world's static solids as the renderer draws them (#51).
 
-- A box is opaque, with its material's albedo (`albedo_linear_rgb`). A material
-  without one is drawn neutral grey.
+- A box is opaque, with its material's albedo (`albedo_linear_rgb`) and a metre
+  grid on its top face, for scale (a look choice). A material without an albedo
+  is drawn neutral grey.
 - A tank (open box) is a floor and four walls. Made of a material with a
   refractive index, such as glass, they are transparent panels; otherwise they are
   opaque boxes.
@@ -15,7 +16,6 @@ Simplifications, named (CLAUDE.md rule 7):
 - no refraction: what lies behind the glass is not shifted;
 - no absorption or tint in the glass (2 cm of clear glass absorbs a few per cent);
 - only the sky is reflected, not the scene;
-- blending happens after tone mapping, not in linear light;
 - half-spaces are not drawn (the Test Tank has none).
 """
 
@@ -29,8 +29,6 @@ import numpy as np
 
 from entropy.render.camera import CameraView, gl_bytes
 from entropy.render.scene import (
-    DISPLAY_GLSL,
-    EXPOSURE,
     HORIZON,
     SKY_GLSL,
     SUN_DIRECTION,
@@ -81,7 +79,7 @@ def opaque_boxes(world: World) -> tuple[SceneBox, ...]:
     boxes: list[SceneBox] = []
     for shape, material in world.solids:
         if isinstance(shape, Box):
-            boxes.append(SceneBox(shape.centre_m, shape.half_size_m, _albedo(material)))
+            boxes.append(SceneBox(shape.centre_m, shape.half_size_m, _albedo(material), grid_m=1.0))
         elif isinstance(shape, OpenBox) and material.refractive_index is None:
             boxes.extend(SceneBox(c, h, _albedo(material)) for c, h in tank_panels(shape))
     return tuple(boxes)
@@ -128,7 +126,6 @@ void main() {
 }
 """,
     "#version 450 core\n"
-    + DISPLAY_GLSL
     + SKY_GLSL
     + """
 uniform vec3 eye_m;
@@ -142,7 +139,7 @@ void main() {
     n = dot(n, v) < 0.0 ? -n : n;  // a back face is the pane's other surface
     float c = clamp(dot(n, v), 0.0, 1.0);
     float fresnel = f0 + (1.0 - f0) * pow(1.0 - c, 5.0);
-    colour = vec4(display(sky(reflect(-v, n))), fresnel);
+    colour = vec4(sky(reflect(-v, n)), fresnel);
 }
 """,
 )
@@ -166,7 +163,6 @@ class GlassRenderer:
         self._vao = ctx.vertex_array(self._program, [(self._buffer, "3f 3f", "corner", "normal")])
         self._program["sun_direction"].value = SUN_DIRECTION  # type: ignore[union-attr]
         self._program["horizon"].value = HORIZON  # type: ignore[union-attr]
-        self._program["exposure"].value = EXPOSURE  # type: ignore[union-attr]
 
     def render(
         self,

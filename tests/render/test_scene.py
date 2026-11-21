@@ -8,14 +8,13 @@ import pytest
 from entropy.core.config import WindowSettings
 from entropy.render.camera import CameraView
 from entropy.render.context import GameWindow
+from entropy.render.frame import EXPOSURE, HdrTarget, ToneMapper, srgb_from_linear
 from entropy.render.scene import (
-    EXPOSURE,
     REFERENCE_CUBES,
     SKY_IRRADIANCE,
     SUN_DIRECTION,
     SUN_IRRADIANCE,
     SceneRenderer,
-    srgb_from_linear,
 )
 
 pytestmark = pytest.mark.render
@@ -36,15 +35,21 @@ def _view(
 
 
 def _render(window: GameWindow, view: CameraView, size: tuple[int, int] = SIZE) -> np.ndarray:
-    """RGB image as floats from 0 to 255, row 0 at the top."""
+    """RGB image as floats from 0 to 255, row 0 at the top: the scene in linear light,
+    then tone-mapped for the display."""
+    hdr = HdrTarget(window.ctx, size)
     target = window.ctx.simple_framebuffer(size)
     renderer = SceneRenderer(window.ctx)
+    mapper = ToneMapper(window.ctx)
     try:
-        renderer.render(target, view, size)
+        renderer.render(hdr.framebuffer, view, size)
+        mapper.render(target, hdr, size)
         image = np.frombuffer(target.read(components=3), dtype=np.uint8)
     finally:
+        mapper.release()
         renderer.release()
         target.release()
+        hdr.release()
     return image.reshape(size[1], size[0], 3)[::-1].astype(float)
 
 

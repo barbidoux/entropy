@@ -5,9 +5,9 @@ ground height (`entropy.render.world_view`, #51).
 
 A simple placeholder renderer until the passes of SPEC 7.2. Lighting is
 computed in linear RGB: Lambert diffuse from one directional sun plus a sky
-term that is brighter from above (a hemisphere approximation). The result is
-scaled by an exposure, tone-mapped with the ACES fit of Narkowicz (2015) and
-encoded as sRGB. Shaders are GLSL 4.50 (ADR 0009).
+term that is brighter from above (a hemisphere approximation). It draws linear
+radiance into an HDR target; `entropy.render.frame` tone-maps it for the display.
+Shaders are GLSL 4.50 (ADR 0009).
 
 Simplifications, named (CLAUDE.md rule 7):
 - light values are relative, not calibrated physical units (SPEC 7.2 brings HDR);
@@ -35,7 +35,6 @@ SKY_IRRADIANCE = (0.45, 0.55, 0.75)
 """Relative irradiance from the sky on a surface facing up, linear RGB."""
 HORIZON = (0.60, 0.72, 0.90)
 """Sky colour at the horizon, also the colour distant ground fades to."""
-EXPOSURE = 0.5
 
 GROUND_HALF_SIZE_M = 10_000.0
 
@@ -57,6 +56,8 @@ class SceneBox:
     centre_m: tuple[float, float, float]
     half_size_m: tuple[float, float, float]
     albedo_linear_rgb: tuple[float, float, float]
+    grid_m: float = 0.0
+    """Spacing of grid lines drawn on its top face (m); 0 draws none."""
 
 
 M0_BOXES = tuple(
@@ -69,32 +70,6 @@ M0_BOXES = tuple(
 )
 """The M0 scene's reference cubes as boxes."""
 
-
-def srgb_from_linear(value: float) -> float:
-    """The sRGB transfer function (IEC 61966-2-1), linear [0, 1] to encoded [0, 1].
-
-    The reference the render tests compare the shader's encoding with.
-    """
-    if value <= 0.0031308:
-        return 12.92 * value
-    return 1.055 * value ** (1.0 / 2.4) - 0.055
-
-
-DISPLAY_GLSL = """
-uniform float exposure;
-
-vec3 aces(vec3 x) {
-    return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0);
-}
-
-vec3 srgb(vec3 c) {
-    return mix(12.92 * c, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(0.0031308, c));
-}
-
-vec3 display(vec3 radiance) {
-    return srgb(aces(radiance * exposure));
-}
-"""
 
 SKY_GLSL = """
 uniform vec3 sun_direction;
@@ -135,16 +110,26 @@ void main() {
 }
 """,
     "#version 450 core\n"
-    + DISPLAY_GLSL
     + SKY_GLSL
     + """
 in vec3 ray;
 out vec4 colour;
 void main() {
-    colour = vec4(display(sky(normalize(ray))), 1.0);
+    colour = vec4(sky(normalize(ray)), 1.0);
 }
 """,
 )
+
+GRID_GLSL = """
+float grid(vec2 p, float spacing) {
+    vec2 q = p / spacing;
+    vec2 width = fwidth(q);
+    vec2 distance = abs(fract(q - 0.5) - 0.5) / width;
+    float line = 1.0 - min(min(distance.x, distance.y), 1.0);
+    // Fade lines out where they get thinner than a pixel can show, to avoid moire.
+    return line * (1.0 - smoothstep(0.1, 0.5, max(width.x, width.y)));
+}
+"""
 
 _GROUND_PROGRAM = (
     """
@@ -158,22 +143,13 @@ void main() {
 }
 """,
     "#version 450 core\n"
-    + DISPLAY_GLSL
     + _LIGHTING
+    + GRID_GLSL
     + """
 uniform vec3 eye_m;
 uniform vec3 horizon;
 in vec3 world_m;
 out vec4 colour;
-
-float grid(vec2 p, float spacing) {
-    vec2 q = p / spacing;
-    vec2 width = fwidth(q);
-    vec2 distance = abs(fract(q - 0.5) - 0.5) / width;
-    float line = 1.0 - min(min(distance.x, distance.y), 1.0);
-    // Fade lines out where they get thinner than a pixel can show, to avoid moire.
-    return line * (1.0 - smoothstep(0.1, 0.5, max(width.x, width.y)));
-}
 
 void main() {
     float lines = max(0.5 * grid(world_m.xy, 1.0), grid(world_m.xy, 10.0));
@@ -181,7 +157,7 @@ void main() {
     vec3 radiance = lit(albedo, vec3(0.0, 0.0, 1.0));
     float haze = 1.0 - exp(-length(world_m - eye_m) / 300.0);
     radiance = mix(radiance, horizon, haze);
-    colour = vec4(display(radiance), 1.0);
+    colour = vec4(radiance, 1.0);
 }
 """,
 )
@@ -195,20 +171,26 @@ uniform vec3 size_m;
 in vec3 corner;
 in vec3 normal;
 out vec3 face_normal;
+out vec3 world_m;
 void main() {
     face_normal = normal;
-    gl_Position = view_projection * vec4(base_m + corner * size_m, 1.0);
+    world_m = base_m + corner * size_m;
+    gl_Position = view_projection * vec4(world_m, 1.0);
 }
 """,
     "#version 450 core\n"
-    + DISPLAY_GLSL
     + _LIGHTING
+    + GRID_GLSL
     + """
 uniform vec3 albedo;
+uniform float grid_m;
 in vec3 face_normal;
+in vec3 world_m;
 out vec4 colour;
 void main() {
-    colour = vec4(display(lit(albedo, normalize(face_normal))), 1.0);
+    vec3 n = normalize(face_normal);
+    float lines = grid_m > 0.0 && n.z > 0.5 ? grid(world_m.xy, grid_m) : 0.0;
+    colour = vec4(lit(mix(albedo, 0.35 * albedo, lines), n), 1.0);
 }
 """,
 )
@@ -264,7 +246,6 @@ class SceneRenderer:
         )
         for program in (self._sky, self._ground, self._cube):
             program["sun_direction"].value = SUN_DIRECTION  # type: ignore[union-attr]
-            program["exposure"].value = EXPOSURE  # type: ignore[union-attr]
         for program in (self._sky, self._ground):
             program["horizon"].value = HORIZON  # type: ignore[union-attr]
         for program in (self._ground, self._cube):
@@ -314,6 +295,7 @@ class SceneRenderer:
             self._cube["base_m"].value = (cx, cy, cz - hz)  # type: ignore[union-attr]
             self._cube["size_m"].value = (2 * hx, 2 * hy, 2 * hz)  # type: ignore[union-attr]
             self._cube["albedo"].value = box.albedo_linear_rgb  # type: ignore[union-attr]
+            self._cube["grid_m"].value = box.grid_m  # type: ignore[union-attr]
             self._cube_vao.render(moderngl.TRIANGLES)
         ctx.disable(moderngl.DEPTH_TEST | moderngl.CULL_FACE)
 

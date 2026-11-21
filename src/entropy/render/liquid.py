@@ -1,0 +1,430 @@
+"""The liquid pass (SPEC 7.2): screen-space water from the liquid's particles (#52).
+
+It reads the scene already drawn in linear light (an HDR target with its depth),
+and writes the scene with the water over it into another HDR target, with the
+water's depth, so later passes (glass) are hidden behind it.
+
+1. **Depth.** Each particle is a sphere of `radius_m`, drawn as a point sprite.
+   The nearest sphere surface per pixel gives the water's eye depth (m). Spheres
+   behind the scene's solids are dropped.
+2. **Thickness.** Each sphere adds its chord, 2·√(r² - d²), along the view ray.
+   The sum is scaled by the particle's volume over its sphere's volume, so that in
+   bulk water the thickness is the length of water crossed.
+3. **Smoothing.** A narrow-range filter (Truong & Yuksel 2018): a separable
+   Gaussian over the eye depth, in which neighbours far behind are skipped
+   (another surface) and neighbours far in front are clamped. It turns the bumps
+   of the spheres into a smooth surface while keeping silhouettes.
+4. **Shading.** Normals come from the smoothed depth. The surface reflects the sky
+   by Fresnel's law (Schlick, F0 from the refractive index) and lets the rest
+   through. What it lets through is the scene behind, shifted by refraction and
+   absorbed by Beer-Lambert's law, exp(-a·thickness) per primary, a from the
+   water's material file.
+
+Simplifications, named (CLAUDE.md rule 7):
+- spheres are drawn as camera-facing sprites (their depth is exact, their outline
+  is the sprite's disc);
+- refraction bends the view ray once at the surface (Snell's law) and follows it
+  for the water's thickness; the image behind shifts by how far that lands from
+  the straight ray. It is not traced further, and it never brings in what lies in
+  front of the water;
+- only the sky is reflected, not the scene;
+- absorption uses one wavelength per sRGB primary (`water.toml`);
+- no foam, spray or caustics (later passes, SPEC 7.2).
+"""
+
+from __future__ import annotations
+
+import math
+
+import moderngl
+import numpy as np
+
+from entropy.render.camera import CameraView, gl_bytes
+from entropy.render.frame import HdrTarget
+from entropy.render.interop import SharedBuffer
+from entropy.render.scene import HORIZON, SKY_GLSL, SUN_DIRECTION
+from entropy.render.world_view import fresnel_f0
+from entropy.world.materials import Material
+
+__all__ = ["LiquidRenderer", "fresnel_f0"]
+
+FAR_M = 1.0e6
+"""Eye depth meaning "no water here"."""
+SMOOTHING_RADIUS_PARTICLES = 4.0
+"""The smoothing filter's radius, in particle radii."""
+SMOOTHING_ITERATIONS = 3
+SMOOTHING_RANGE_PARTICLES = 8.0
+"""Neighbours further than this (in particle radii) in depth are another surface."""
+MAX_FILTER_PX = 24
+
+_SPRITE_VERTEX = """
+#version 450 core
+uniform mat4 view;
+uniform mat4 projection;
+uniform float radius_m;
+uniform float viewport_height_px;
+in vec3 position_m;
+out vec3 centre_view;
+void main() {
+    vec4 v = view * vec4(position_m, 1.0);
+    centre_view = v.xyz;
+    gl_Position = projection * v;
+    float diameter_px = radius_m * projection[1][1] * viewport_height_px / max(-v.z, 1e-4);
+    gl_PointSize = max(diameter_px, 1.0);
+}
+"""
+
+_SPRITE_COMMON = """
+uniform mat4 projection;
+uniform float radius_m;
+uniform sampler2D scene_depth;
+in vec3 centre_view;
+
+// The sphere's point under this fragment, in view space; false outside the disc.
+bool sphere_point(out vec3 p, out float nz) {
+    vec2 c = gl_PointCoord * 2.0 - 1.0;
+    c.y = -c.y;
+    float r2 = dot(c, c);
+    if (r2 > 1.0) return false;
+    nz = sqrt(1.0 - r2);
+    p = centre_view + radius_m * vec3(c, nz);
+    return true;
+}
+
+float window_depth(vec3 p) {
+    vec4 clip = projection * vec4(p, 1.0);
+    return clip.z / clip.w * 0.5 + 0.5;
+}
+
+bool behind_scene(float depth) {
+    return depth >= texelFetch(scene_depth, ivec2(gl_FragCoord.xy), 0).r;
+}
+"""
+
+_DEPTH_FRAGMENT = (
+    "#version 450 core\n"
+    + _SPRITE_COMMON
+    + """
+out float eye_depth;
+void main() {
+    vec3 p;
+    float nz;
+    if (!sphere_point(p, nz)) discard;
+    float depth = window_depth(p);
+    if (behind_scene(depth)) discard;
+    gl_FragDepth = depth;
+    eye_depth = -p.z;
+}
+"""
+)
+
+_THICKNESS_FRAGMENT = (
+    "#version 450 core\n"
+    + _SPRITE_COMMON
+    + """
+uniform float thickness_scale;
+out float thickness;
+void main() {
+    vec3 p;
+    float nz;
+    if (!sphere_point(p, nz)) discard;
+    if (behind_scene(window_depth(p))) discard;
+    thickness = 2.0 * nz * radius_m * thickness_scale;
+}
+"""
+)
+
+_FULL_SCREEN = """
+#version 450 core
+void main() {
+    vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2) * 2.0 - 1.0;
+    gl_Position = vec4(p, 0.0, 1.0);
+}
+"""
+
+_SMOOTH_FRAGMENT = f"""
+#version 450 core
+uniform sampler2D depth_in;
+uniform ivec2 direction;
+uniform float projection_y;
+uniform float viewport_height_px;
+uniform float filter_radius_m;
+uniform float range_m;
+out float depth_out;
+const float FAR = {FAR_M:.1f};
+void main() {{
+    ivec2 p = ivec2(gl_FragCoord.xy);
+    ivec2 last = textureSize(depth_in, 0) - 1;
+    float z = texelFetch(depth_in, p, 0).r;
+    if (z >= FAR) {{ depth_out = z; return; }}
+    float radius_px = filter_radius_m * projection_y * 0.5 * viewport_height_px / z;
+    radius_px = clamp(radius_px, 1.0, {MAX_FILTER_PX:.1f});
+    float sigma = radius_px / 2.0;
+    int n = int(ceil(radius_px));
+    float sum = 0.0;
+    float weights = 0.0;
+    for (int i = -n; i <= n; ++i) {{
+        float zq = texelFetch(depth_in, clamp(p + direction * i, ivec2(0), last), 0).r;
+        if (zq >= FAR || zq > z + range_m) continue;
+        zq = max(zq, z - range_m);
+        float w = exp(-float(i * i) / (2.0 * sigma * sigma));
+        sum += w * zq;
+        weights += w;
+    }}
+    depth_out = sum / weights;
+}}
+"""
+
+_COMPOSITE_FRAGMENT = (
+    f"""
+#version 450 core
+const float FAR = {FAR_M:.1f};
+"""
+    + SKY_GLSL
+    + """
+uniform sampler2D scene_colour;
+uniform sampler2D scene_depth;
+uniform sampler2D fluid_depth;
+uniform sampler2D fluid_thickness;
+uniform mat4 projection;
+uniform mat3 view_to_world;
+uniform float f0;
+uniform float eta;
+uniform vec3 absorption_per_m;
+out vec4 colour;
+
+vec2 size_px() { return vec2(textureSize(fluid_depth, 0)); }
+
+vec3 view_position(ivec2 p, float z) {
+    vec2 ndc = (vec2(p) + 0.5) / size_px() * 2.0 - 1.0;
+    return vec3(ndc.x * z / projection[0][0], ndc.y * z / projection[1][1], -z);
+}
+
+// The neighbour's view position along `step`, or the opposite one, whichever is
+// nearer in depth: a silhouette does not bend the normal.
+vec3 tangent(ivec2 p, vec3 centre, ivec2 step) {
+    ivec2 last = textureSize(fluid_depth, 0) - 1;
+    ivec2 a = clamp(p + step, ivec2(0), last);
+    ivec2 b = clamp(p - step, ivec2(0), last);
+    float za = texelFetch(fluid_depth, a, 0).r;
+    float zb = texelFetch(fluid_depth, b, 0).r;
+    vec3 forward = za < FAR ? view_position(a, za) - centre : vec3(0.0);
+    vec3 backward = zb < FAR ? centre - view_position(b, zb) : vec3(0.0);
+    if (za >= FAR) return backward;
+    if (zb >= FAR) return forward;
+    return abs(forward.z) < abs(backward.z) ? forward : backward;
+}
+
+float window_depth(vec3 p) {
+    vec4 clip = projection * vec4(p, 1.0);
+    return clip.z / clip.w * 0.5 + 0.5;
+}
+
+void main() {
+    ivec2 p = ivec2(gl_FragCoord.xy);
+    float behind_depth = texelFetch(scene_depth, p, 0).r;
+    vec3 behind = texelFetch(scene_colour, p, 0).rgb;
+    float z = texelFetch(fluid_depth, p, 0).r;
+    if (z >= FAR) {
+        colour = vec4(behind, 1.0);
+        gl_FragDepth = behind_depth;
+        return;
+    }
+    vec3 centre = view_position(p, z);
+    vec3 n = cross(tangent(p, centre, ivec2(1, 0)), tangent(p, centre, ivec2(0, 1)));
+    n = dot(n, n) > 0.0 ? normalize(n) : vec3(0.0, 0.0, 1.0);
+    vec3 v = normalize(-centre);
+    n = dot(n, v) < 0.0 ? -n : n;
+    float c = clamp(dot(n, v), 0.0, 1.0);
+    float fresnel = f0 + (1.0 - f0) * pow(1.0 - c, 5.0);
+    vec3 reflected = sky(normalize(view_to_world * reflect(-v, n)));
+
+    float thickness = texelFetch(fluid_thickness, p, 0).r;
+    float depth = window_depth(centre);
+    vec3 straight = -v;
+    vec3 bent = refract(straight, n, eta);
+    vec2 shift_m = (bent - straight).xy * thickness;
+    vec2 shift_px = shift_m * projection[1][1] * 0.5 * size_px().y / z;
+    vec2 at = vec2(p) + 0.5 + shift_px;
+    ivec2 q = clamp(ivec2(at), ivec2(0), textureSize(scene_colour, 0) - 1);
+    if (texelFetch(scene_depth, q, 0).r < depth) {
+        at = vec2(p) + 0.5;  // never refract what is in front
+    }
+    vec3 behind_bent = texture(scene_colour, at / size_px()).rgb;
+    vec3 transmitted = behind_bent * exp(-absorption_per_m * thickness);
+
+    colour = vec4(fresnel * reflected + (1.0 - fresnel) * transmitted, 1.0);
+    gl_FragDepth = depth;
+}
+"""
+)
+
+
+class LiquidRenderer:
+    """Draws the liquid's particles from a SharedBuffer as water (see the module doc)."""
+
+    def __init__(
+        self,
+        ctx: moderngl.Context,
+        particles: SharedBuffer,
+        *,
+        radius_m: float,
+        particle_volume_m3: float,
+        water: Material,
+    ) -> None:
+        if water.refractive_index is None or water.absorption_per_m_rgb is None:
+            raise ValueError(f"{water.name} needs a refractive index and an absorption")
+        if not (radius_m > 0 and particle_volume_m3 > 0):
+            raise ValueError("radius_m and particle_volume_m3 must be positive")
+        self.ctx = ctx
+        self.particles = particles
+        self.radius_m = radius_m
+        self.refractive_index = water.refractive_index
+        self.absorption_per_m_rgb = water.absorption_per_m_rgb
+        self.thickness_scale = particle_volume_m3 / (4.0 / 3.0 * math.pi * radius_m**3)
+        self._depth = ctx.program(vertex_shader=_SPRITE_VERTEX, fragment_shader=_DEPTH_FRAGMENT)
+        self._thickness = ctx.program(
+            vertex_shader=_SPRITE_VERTEX, fragment_shader=_THICKNESS_FRAGMENT
+        )
+        self._smooth = ctx.program(vertex_shader=_FULL_SCREEN, fragment_shader=_SMOOTH_FRAGMENT)
+        self._composite = ctx.program(
+            vertex_shader=_FULL_SCREEN, fragment_shader=_COMPOSITE_FRAGMENT
+        )
+        self._depth_vao = ctx.vertex_array(self._depth, [(particles.buffer, "3f", "position_m")])
+        self._thickness_vao = ctx.vertex_array(
+            self._thickness, [(particles.buffer, "3f", "position_m")]
+        )
+        self._smooth_vao = ctx.vertex_array(self._smooth, [])
+        self._composite_vao = ctx.vertex_array(self._composite, [])
+        for program in (self._depth, self._thickness):
+            program["radius_m"].value = radius_m  # type: ignore[union-attr]
+            program["scene_depth"].value = 0  # type: ignore[union-attr]
+        self._thickness["thickness_scale"].value = self.thickness_scale  # type: ignore[union-attr]
+        self._smooth["depth_in"].value = 0  # type: ignore[union-attr]
+        composite = self._composite
+        for name, unit in (
+            ("scene_colour", 0),
+            ("scene_depth", 1),
+            ("fluid_depth", 2),
+            ("fluid_thickness", 3),
+        ):
+            composite[name].value = unit  # type: ignore[union-attr]
+        composite["sun_direction"].value = SUN_DIRECTION  # type: ignore[union-attr]
+        composite["horizon"].value = HORIZON  # type: ignore[union-attr]
+        composite["f0"].value = fresnel_f0(self.refractive_index)  # type: ignore[union-attr]
+        composite["eta"].value = 1.0 / self.refractive_index  # type: ignore[union-attr]
+        composite["absorption_per_m"].value = self.absorption_per_m_rgb  # type: ignore[union-attr]
+        self._size: tuple[int, int] | None = None
+        self._textures: list[moderngl.Texture] = []
+        self._framebuffers: list[moderngl.Framebuffer] = []
+        self._depth_buffer: moderngl.Renderbuffer | None = None
+
+    def _resize(self, size: tuple[int, int]) -> None:
+        if size == self._size:
+            return
+        self._release_targets()
+        ctx = self.ctx
+        self._textures = [ctx.texture(size, 1, dtype="f4") for _ in range(3)]
+        for texture in self._textures:
+            texture.filter = (moderngl.NEAREST, moderngl.NEAREST)
+        self._depth_buffer = ctx.depth_renderbuffer(size)
+        depth_a, depth_b, thickness = self._textures
+        self._framebuffers = [
+            ctx.framebuffer([depth_a], self._depth_buffer),
+            ctx.framebuffer([depth_b]),
+            ctx.framebuffer([thickness]),
+            ctx.framebuffer([depth_a]),
+        ]
+        self._size = size
+
+    def render(self, out: HdrTarget, scene: HdrTarget, view: CameraView, *, count: int) -> None:
+        """Draw the first `count` particles as water over `scene` into `out`."""
+        if out.size_px != scene.size_px:
+            raise ValueError(f"out is {out.size_px}, scene is {scene.size_px}")
+        if not 0 <= count <= self.particles.count:
+            raise ValueError(f"count must be between 0 and {self.particles.count}, got {count}")
+        width, height = size = scene.size_px
+        if width <= 0 or height <= 0:
+            return
+        self._resize(size)
+        ctx = self.ctx
+        ctx.viewport = (0, 0, width, height)
+        projection = view.projection(width / height).astype(np.float64)
+        camera = view.view().astype(np.float64)
+        depth_a, _, thickness = self._textures
+        sprites_fb, _, thickness_fb, _ = self._framebuffers
+        scene.depth.compare_func = ""
+        sprites_fb.clear(FAR_M, 0.0, 0.0, 0.0, depth=1.0)
+        thickness_fb.clear(0.0, 0.0, 0.0, 0.0)
+        if count:
+            for program in (self._depth, self._thickness):
+                program["view"].write(gl_bytes(camera))  # type: ignore[union-attr]
+                program["projection"].write(gl_bytes(projection))  # type: ignore[union-attr]
+                program["viewport_height_px"].value = float(height)  # type: ignore[union-attr]
+            scene.depth.use(location=0)
+            ctx.enable(moderngl.PROGRAM_POINT_SIZE | moderngl.DEPTH_TEST)
+            sprites_fb.use()
+            self._depth_vao.render(moderngl.POINTS, vertices=count)
+            ctx.disable(moderngl.DEPTH_TEST)
+            ctx.enable(moderngl.BLEND)
+            ctx.blend_func = moderngl.ONE, moderngl.ONE
+            thickness_fb.use()
+            self._thickness_vao.render(moderngl.POINTS, vertices=count)
+            ctx.disable(moderngl.BLEND | moderngl.PROGRAM_POINT_SIZE)
+            self._smooth_depth(projection, height)
+
+        composite = self._composite
+        composite["projection"].write(gl_bytes(projection))  # type: ignore[union-attr]
+        rotation = np.ascontiguousarray(camera[:3, :3], dtype=np.float32)  # view_to_world = Rᵀ
+        composite["view_to_world"].write(rotation.tobytes())  # type: ignore[union-attr]
+        scene.colour.use(location=0)
+        scene.depth.use(location=1)
+        depth_a.use(location=2)
+        thickness.use(location=3)
+        out.framebuffer.use()
+        ctx.enable(moderngl.DEPTH_TEST)
+        ctx.depth_func = "1"  # always: the pass writes every pixel's depth
+        try:
+            self._composite_vao.render(moderngl.TRIANGLES, vertices=3)
+        finally:
+            ctx.depth_func = "<"
+            ctx.disable(moderngl.DEPTH_TEST)
+
+    def _smooth_depth(self, projection: np.ndarray, height: int) -> None:
+        depth_a, depth_b, _ = self._textures
+        _, smooth_b_fb, _, smooth_a_fb = self._framebuffers
+        program = self._smooth
+        program["projection_y"].value = float(projection[1, 1])  # type: ignore[union-attr]
+        program["viewport_height_px"].value = float(height)  # type: ignore[union-attr]
+        program["filter_radius_m"].value = SMOOTHING_RADIUS_PARTICLES * self.radius_m  # type: ignore[union-attr]
+        program["range_m"].value = SMOOTHING_RANGE_PARTICLES * self.radius_m  # type: ignore[union-attr]
+        for _ in range(SMOOTHING_ITERATIONS):
+            for source, target, direction in (
+                (depth_a, smooth_b_fb, (1, 0)),
+                (depth_b, smooth_a_fb, (0, 1)),
+            ):
+                program["direction"].value = direction  # type: ignore[union-attr]
+                source.use(location=0)
+                target.use()
+                self._smooth_vao.render(moderngl.TRIANGLES, vertices=3)
+
+    def _release_targets(self) -> None:
+        for resource in (*self._framebuffers, *self._textures):
+            resource.release()
+        if self._depth_buffer is not None:
+            self._depth_buffer.release()
+        self._framebuffers, self._textures, self._depth_buffer = [], [], None
+
+    def release(self) -> None:
+        self._release_targets()
+        for resource in (
+            self._depth_vao,
+            self._thickness_vao,
+            self._smooth_vao,
+            self._composite_vao,
+            self._depth,
+            self._thickness,
+            self._smooth,
+            self._composite,
+        ):
+            resource.release()

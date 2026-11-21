@@ -10,14 +10,13 @@ from entropy.core.config import WindowSettings
 from entropy.core.paths import content_dir
 from entropy.render.camera import CameraView
 from entropy.render.context import GameWindow
+from entropy.render.frame import HdrTarget, ToneMapper, display_reference
 from entropy.render.scene import (
-    EXPOSURE,
     HORIZON,
     SKY_IRRADIANCE,
     SUN_DIRECTION,
     SUN_IRRADIANCE,
     SceneRenderer,
-    srgb_from_linear,
 )
 from entropy.render.world_view import (
     GlassRenderer,
@@ -54,19 +53,24 @@ def _view(eye_m, target_m) -> CameraView:
 
 
 def _render(window: GameWindow, world: World, view: CameraView, *, glass: bool) -> np.ndarray:
-    """RGB floats 0-255, row 0 at the top."""
+    """RGB floats 0-255, row 0 at the top (linear light, then tone-mapped)."""
+    hdr = HdrTarget(window.ctx, SIZE)
     target = window.ctx.simple_framebuffer(SIZE)
     scene = SceneRenderer(window.ctx, opaque_boxes(world), ground_z_m=ground_height_m(world))
     panes = GlassRenderer(window.ctx, glass_panels(world))
+    mapper = ToneMapper(window.ctx)
     try:
-        scene.render(target, view, SIZE)
+        scene.render(hdr.framebuffer, view, SIZE)
         if glass:
-            panes.render(target, view, SIZE)
+            panes.render(hdr.framebuffer, view, SIZE)
+        mapper.render(target, hdr, SIZE)
         image = np.frombuffer(target.read(components=3), dtype=np.uint8)
     finally:
+        mapper.release()
         panes.release()
         scene.release()
         target.release()
+        hdr.release()
     return image.reshape(SIZE[1], SIZE[0], 3)[::-1].astype(float)
 
 
@@ -81,14 +85,13 @@ def _lit_from_above(albedo: tuple[float, float, float]) -> np.ndarray:
     radiance = np.asarray(albedo) * (
         np.asarray(SUN_IRRADIANCE) * direct + np.asarray(SKY_IRRADIANCE)
     )
-    x = radiance * EXPOSURE
-    aces = np.clip((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0)
-    return 255.0 * np.array([srgb_from_linear(float(c)) for c in aces])
+    return 255.0 * display_reference(radiance)
 
 
 def test_the_floor_has_its_material_s_colour(window: GameWindow, test_tank: World) -> None:
-    """The concrete slab beside the tank, seen from above: concrete's albedo, lit."""
-    view = _view((5.0, 0.0, 3.0), (5.003, 0.0, -0.02))  # down, 3 m beside the tank
+    """The concrete slab beside the tank, seen from above between its grid lines:
+    concrete's albedo, lit."""
+    view = _view((5.5, 0.5, 3.0), (5.503, 0.5, -0.02))  # down, 3 m beside the tank
 
     pixel = _centre(_render(window, test_tank, view, glass=True))
 
@@ -97,40 +100,41 @@ def test_the_floor_has_its_material_s_colour(window: GameWindow, test_tank: Worl
     np.testing.assert_allclose(pixel, _lit_from_above(albedo), atol=3.0)
 
 
-BACKGROUND = (0.2, 0.2, 0.2)
+BACKGROUND = (0.1, 0.1, 0.1)
+"""A uniform radiance behind the glass, linear."""
 
 
 def _glass_only(window: GameWindow, world: World, view: CameraView) -> np.ndarray:
-    """The panels alone, over a uniform grey: RGB floats 0-255 at the image centre."""
+    """The panels alone, over a uniform background: RGB floats 0-255 at the centre."""
+    hdr = HdrTarget(window.ctx, SIZE)
     target = window.ctx.simple_framebuffer(SIZE)
     panes = GlassRenderer(window.ctx, glass_panels(world))
+    mapper = ToneMapper(window.ctx)
     try:
-        target.clear(*BACKGROUND, 1.0, depth=1.0)
-        panes.render(target, view, SIZE)
+        hdr.framebuffer.clear(*BACKGROUND, 1.0, depth=1.0)
+        panes.render(hdr.framebuffer, view, SIZE)
+        mapper.render(target, hdr, SIZE)
         image = np.frombuffer(target.read(components=3), dtype=np.uint8)
     finally:
+        mapper.release()
         panes.release()
         target.release()
+        hdr.release()
     return _centre(image.reshape(SIZE[1], SIZE[0], 3)[::-1].astype(float))
-
-
-def _horizon_on_display() -> np.ndarray:
-    x = np.asarray(HORIZON) * EXPOSURE
-    aces = np.clip((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0)
-    return np.array([srgb_from_linear(float(c)) for c in aces])
 
 
 def test_glass_square_on_reflects_four_percent_per_surface(
     window: GameWindow, test_tank: World
 ) -> None:
     """Level through both x walls, square on: four surfaces, each reflecting F0 = 4 %
-    (n = 1.5) of the horizon behind the camera and passing the rest."""
+    (n = 1.5) of the horizon behind the camera and passing the rest, in linear light."""
     view = _view((5.0, 0.0, 1.0), (0.0, 0.0, 1.0))
     passed = (1.0 - fresnel_f0(1.5)) ** 4
 
     pixel = _glass_only(window, test_tank, view)
 
-    expected = 255.0 * (np.asarray(BACKGROUND) * passed + _horizon_on_display() * (1 - passed))
+    radiance = np.asarray(BACKGROUND) * passed + np.asarray(HORIZON) * (1 - passed)
+    expected = 255.0 * display_reference(radiance)
     np.testing.assert_allclose(pixel, expected, atol=3.0)
 
 
@@ -140,13 +144,25 @@ def test_glass_reflects_more_at_a_grazing_angle(window: GameWindow, test_tank: W
     square = _glass_only(window, test_tank, _view((5.0, 0.0, 1.0), (0.0, 0.0, 1.0)))
     grazing = _glass_only(window, test_tank, _view((2.6, -6.0, 1.0), (2.0, 0.0, 1.0)))
 
-    background = 255.0 * np.asarray(BACKGROUND)
+    background = 255.0 * display_reference(np.asarray(BACKGROUND))
     assert np.abs(grazing - background).sum() > 3.0 * np.abs(square - background).sum()
 
 
 def test_fresnel_reflectance_square_on() -> None:
     assert fresnel_f0(1.5) == pytest.approx(0.04)
     assert fresnel_f0(1.0) == 0.0
+
+
+def test_the_floor_shows_a_metre_grid(window: GameWindow, test_tank: World) -> None:
+    """Lines on whole metres give the scale, and show refraction through water."""
+    on_line = _centre(
+        _render(window, test_tank, _view((5.0, 0.5, 3.0), (5.003, 0.5, -0.02)), glass=False)
+    )
+    between = _centre(
+        _render(window, test_tank, _view((5.5, 0.5, 3.0), (5.503, 0.5, -0.02)), glass=False)
+    )
+
+    assert on_line.sum() < between.sum() - 30.0
 
 
 def test_glass_panels_wrap_the_cavity() -> None:
@@ -177,6 +193,7 @@ def test_opaque_boxes_carry_their_material_s_albedo(test_tank: World) -> None:
     (slab,) = opaque_boxes(test_tank)
 
     assert slab.albedo_linear_rgb == load_material("concrete").albedo_linear_rgb
+    assert slab.grid_m == 1.0
     np.testing.assert_allclose(slab.half_size_m, (10.0, 10.0, 0.15))
 
 

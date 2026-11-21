@@ -36,19 +36,19 @@ def test_the_game_starts_in_the_test_tank(stages: GameStages) -> None:
     assert stages.world.name == "Test Tank"
     assert stages.liquid is not None
     assert stages.simulation.solvers == (stages.liquid,)
-    assert len(stages.scene.boxes) == 1  # the concrete slab
-    assert len(stages.glass.panels) == 5  # the tank's floor and walls
+    assert len(stages.frame.scene.boxes) == 1  # the concrete slab
+    assert len(stages.frame.glass.panels) == 5  # the tank's floor and walls
     assert any("Test Tank" in note for note in stages.hud_notes())
 
 
-def test_the_liquid_s_particles_are_drawn(stages: GameStages) -> None:
+def test_the_liquid_s_particles_are_drawn_as_water(stages: GameStages) -> None:
     assert stages.liquid is not None
     stages.liquid.add_particles(fill_box((-0.5, -0.5, 0.0), (0.5, 0.5, 0.5), 0.0625, 8, seed=1))
 
     stages.step_simulation(1.0 / 60.0)
     stages.render()
 
-    assert stages.points_drawn == stages.liquid.diagnostics()["particles"] == 16 * 16 * 8 * 8
+    assert stages.particles_drawn == stages.liquid.diagnostics()["particles"] == 16 * 16 * 8 * 8
     assert any(f"{16 * 16 * 8 * 8:,}" in note for note in stages.hud_notes())
 
 
@@ -87,7 +87,8 @@ def test_the_game_records_gpu_time_per_stage(window_settings: WindowSettings) ->
     stats = run(settings, visible=False, max_frames=10)
 
     gpu = stats.summary().gpu_ms_mean
-    assert {"scene (OpenGL)", "glass (OpenGL)", "points (OpenGL)", "HUD (OpenGL)"} <= gpu.keys()
+    passes = {"scene", "liquid", "glass", "tone map", "HUD"}
+    assert {f"{name} (OpenGL)" for name in passes} <= gpu.keys()
     assert ("liquid (CUDA)" in gpu) == wp.is_cuda_available()
     assert all(ms >= 0.0 for ms in gpu.values())
 

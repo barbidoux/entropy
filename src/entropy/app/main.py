@@ -33,15 +33,14 @@ from entropy.render.camera import CameraView
 from entropy.render.context import GameWindow
 from entropy.render.gl_timer import GlQueries
 from entropy.render.interop import SharedBuffer
-from entropy.render.points import PointsRenderer
-from entropy.render.scene import SceneRenderer
-from entropy.render.world_view import GlassRenderer, glass_panels, ground_height_m, opaque_boxes
+from entropy.render.world_frame import WorldFrame
 from entropy.sim.loop import FrameLoop, LoopSettings
 from entropy.sim.setup import liquid_setup
 from entropy.sim.simulation import Simulation
 from entropy.solvers.liquid.solver import LiquidSolver, NonFiniteStateError
 from entropy.ui.hud import PerformanceHud, hud_lines
 from entropy.world.maps import load_map
+from entropy.world.materials import load_material
 from entropy.world.world import build_world
 
 _log = logging.getLogger(__name__)
@@ -71,7 +70,7 @@ class GameStages:
         self.simulation = Simulation([self.liquid] if self.liquid is not None else [])
         self.frozen_because: str | None = None
         """Why the world stopped (a NaN guard's alert), or None while it runs."""
-        self.points_drawn = 0
+        self.particles_drawn = 0
         # GPU time per stage for the HUD (SPEC 4.7): CUDA events around Warp work,
         # OpenGL timer queries around render passes.
         self.cuda_timer = cuda_stage_timer(self.device)
@@ -81,18 +80,20 @@ class GameStages:
         # Everything made here is released in reverse order, also if a later step fails,
         # while the window and its OpenGL context still exist.
         with ExitStack() as resources:
-            self.scene = SceneRenderer(
-                ctx, opaque_boxes(self.world), ground_z_m=ground_height_m(self.world)
-            )
-            resources.callback(self.scene.release)
-            self.glass = GlassRenderer(ctx, glass_panels(self.world))
-            resources.callback(self.glass.release)
             capacity = setup.max_particles if setup is not None else 1
             self.particles = resources.enter_context(
                 SharedBuffer(ctx, capacity, wp.vec3, self.device)
             )
-            self.points = PointsRenderer(ctx, self.particles)
-            resources.callback(self.points.release)
+            spec = setup.spec if setup is not None else None
+            volume_m3 = spec.dx_m**3 / setup.particles_per_cell if setup and spec else 1e-6
+            self.frame = WorldFrame(
+                ctx,
+                self.world,
+                self.particles,
+                particle_volume_m3=volume_m3,
+                water=load_material("water"),
+            )
+            resources.callback(self.frame.release)
             self.hud = resources.enter_context(PerformanceHud(window.handle))
             self._install_callbacks()
             resources.callback(self._remove_callbacks)
@@ -168,7 +169,7 @@ class GameStages:
             with self.particles.writable() as positions:
                 # Only the first `count` are drawn; the rest of the buffer is unused.
                 wp.copy(positions, self.liquid.fields()["positions_m"], count=count)
-        self.points_drawn = count
+        self.particles_drawn = count
         camera = self.settings.camera
         pose = self.mode.pose
         forward = pose.forward()
@@ -180,12 +181,7 @@ class GameStages:
             far_m=camera.far_m,
         )
         screen = self.window.ctx.screen
-        with self.gl_timer.stage("scene (OpenGL)"):
-            self.scene.render(screen, view, (width, height))
-        with self.gl_timer.stage("points (OpenGL)"):
-            self.points.render(screen, view, (width, height), count=count)
-        with self.gl_timer.stage("glass (OpenGL)"):
-            self.glass.render(screen, view, (width, height))
+        self.frame.render(screen, view, (width, height), count=count, timer=self.gl_timer)
         lines = hud_lines(
             self.stats.summary(),
             gpu_memory(self.device),
