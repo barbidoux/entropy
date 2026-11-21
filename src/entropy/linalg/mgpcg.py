@@ -36,9 +36,11 @@ CUDA those iterations replay as one CUDA graph (SPEC 3: solver loops launch
 from graphs). Iterations past convergence only lower the residual further.
 
 Named limit: every connected body of fluid must touch air, or A is singular. A
-sealed pocket does not converge (`converged` is false after `max_iterations`), and
-an isolated fluid cell gets an arbitrary pressure through the diagonal's 1e-12
-floor. Detecting such pockets is #69.
+sealed pocket whose right-hand side does not sum to zero does not converge
+(`converged` is false after `max_iterations`). When it does sum to zero, as a
+projection's divergence does inside closed walls, the solve usually converges with
+the pocket's pressure fixed only up to a constant. An isolated fluid cell gets an
+arbitrary pressure through the diagonal's 1e-12 floor. Detecting such pockets is #69.
 """
 
 from __future__ import annotations

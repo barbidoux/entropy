@@ -49,7 +49,11 @@ hold the water, solids inside the water, and the free surface. Two facts shape t
 - **Sealed pockets are deferred** (#69). A body of water that touches no air makes the
   pressure system singular (ADR 0016). In M1 the only solids are the grid's walls, so
   that happens only if water fills the whole grid. Until #69, the projection does not
-  detect it: the solve reports `converged = False`.
+  detect it. Its right-hand side is consistent (every boundary face of such a body is
+  closed, so the divergence sums to zero), and the solve usually converges with the
+  pressure fixed only up to a constant (measured on a 12 × 10 × 16 grid full of water,
+  CPU and CUDA: 8 iterations). Float32 rounding may still keep larger grids from
+  converging.
 
 ## Alternatives considered
 
