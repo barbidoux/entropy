@@ -523,6 +523,31 @@ def test_jittered_still_water_stays_still_for_ten_seconds(device: str) -> None:
     assert np.abs(liquid.particle_velocities()).max() < 5e-3
 
 
+def test_particles_within_a_sphere_can_be_removed(device: str) -> None:
+    """The eraser (#54): the particles within the radius go, the others keep their order,
+    velocities and affine matrices."""
+    liquid = LiquidSolver.create(_setup((8, 8, 8)), device)
+    points = fill_box((0.0, 0.0, 0.0), (0.5, 0.5, 0.25), DX_M, 8, seed=20)
+    velocities = np.tile(np.arange(len(points), dtype=np.float32)[:, None], (1, 3))
+    liquid.add_particles(points, velocities=velocities)
+    centre, radius = np.array([0.25, 0.25, 0.1]), 0.12
+    outside = np.linalg.norm(points - centre, axis=1) > radius
+
+    removed = liquid.remove_particles_within(tuple(centre), radius)
+
+    assert removed == int((~outside).sum()) > 0
+    assert liquid.diagnostics()["particles"] == int(outside.sum())
+    np.testing.assert_allclose(liquid.particle_positions(), points[outside])
+    np.testing.assert_allclose(liquid.particle_velocities(), velocities[outside])
+
+
+def test_removing_nothing_changes_nothing(device: str) -> None:
+    liquid = LiquidSolver.create(_setup((8, 8, 8)), device)
+    points = fill_box((0.0, 0.0, 0.0), (0.5, 0.5, 0.25), DX_M, 8, seed=21)
+    liquid.add_particles(points)
+
+    assert liquid.remove_particles_within((5.0, 5.0, 5.0), 0.1) == 0
+    np.testing.assert_allclose(liquid.particle_positions(), points)
 @pytest.mark.parametrize("jitter", [0.0, 0.8])
 def test_a_grid_full_of_water_stays_still(device: str, jitter: float) -> None:
     """#69: water up to the grid's lid, no air anywhere: still, finite, converged."""

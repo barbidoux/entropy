@@ -14,6 +14,7 @@ from typing import Any
 from entropy.game.input import TOOL_ACTIONS, FrameInput
 from entropy.game.tools.base import Aim, Tool, ToolContext, load_tool_spec
 from entropy.game.tools.bucket import Bucket
+from entropy.game.tools.eraser import Eraser
 from entropy.game.tools.flood import Flood
 from entropy.game.tools.hose import Hose
 from entropy.game.tools.jet import Domain, Jet
@@ -56,6 +57,7 @@ class Toolbox:
                 Hose(load_tool_spec("hose")),
                 Bucket(load_tool_spec("bucket")),
                 Flood(load_tool_spec("flood")),
+                Eraser(load_tool_spec("eraser")),
             ],
             jet=Jet(gravity_m_per_s2),
             domain=domain,

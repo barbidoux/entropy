@@ -227,6 +227,7 @@ class LiquidSolver:
         ]
         self._scratch = wp.zeros(capacity, dtype=wp.vec3, device=device)
         self._scratch_v = wp.zeros(capacity, dtype=wp.vec3, device=device)
+        self._affine_scratch: wp.array | None = None  # made on the first removal
         self._solid_distance = wp.zeros(capacity, dtype=float, device=device)
         self._shifted = wp.zeros(3 * capacity, dtype=wp.vec3, device=device)
         self._shifted_distance = wp.zeros(3 * capacity, dtype=float, device=device)
@@ -362,6 +363,44 @@ class LiquidSolver:
             finite = speeds[np.isfinite(speeds)]
             if len(finite):
                 self._speed_m_per_s = max(self._speed_m_per_s, float(finite.max()))
+
+    def remove_particles_within(self, centre_m: tuple[float, float, float], radius_m: float) -> int:
+        """Remove the particles within `radius_m` of `centre_m` (the eraser, #54); the
+        others keep their order. Returns how many went. It reads the new count back, so
+        it waits for the GPU once: a tool's action, not part of the step."""
+        n = self._count
+        if n == 0 or radius_m <= 0.0:
+            return 0
+        device = self._device
+        active = self._active()
+        keep = wp.zeros(n, dtype=wp.int32, device=device)  # pyright: ignore[reportArgumentType]
+        index = wp.zeros(n, dtype=wp.int32, device=device)  # pyright: ignore[reportArgumentType]
+        wp.launch(
+            _k.outside_sphere,
+            dim=n,
+            inputs=[active.position_m, wp.vec3(*centre_m), float(radius_m) ** 2, keep],
+            device=device,
+        )
+        wp.utils.array_scan(keep, index, inclusive=False)
+        # Scratch arrays free between steps; not `_before`, which the NaN guard may still
+        # need for the frame that just ran.
+        if self._affine_scratch is None:
+            capacity = self._require_setup().max_particles
+            self._affine_scratch = wp.zeros(capacity, dtype=wp.mat33, device=device)
+        target = LiquidParticles(self._scratch, self._scratch_v, self._affine_scratch)
+        wp.launch(
+            _k.compact,
+            dim=n,
+            inputs=[keep, index, *_arrays(active), *_arrays(target)],
+            device=device,
+        )
+        last_keep, last_index = keep.numpy()[-1], index.numpy()[-1]
+        kept = int(last_index + last_keep)
+        for source, destination in zip(_arrays(target), _arrays(self._particles), strict=True):
+            if kept:
+                wp.copy(destination, source, count=kept)
+        self._count = kept
+        return n - kept
 
     def particle_positions(self) -> np.ndarray:
         return self._active().position_m.numpy()

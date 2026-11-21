@@ -344,3 +344,35 @@ def volume_correction(
                 if inside and labels[ii, jj, kk] == AIR:
                     return
     target[i, j, k] = target[i, j, k] + rate_per_s * (density[i, j, k] - 1.0)
+
+
+@wp.kernel
+def outside_sphere(
+    positions_m: wp.array(dtype=wp.vec3),
+    centre_m: wp.vec3,
+    radius_sq_m2: float,
+    keep: wp.array(dtype=wp.int32),
+):
+    """keep = 1 for particles farther than the radius from the centre, 0 within it."""
+    t = wp.tid()
+    keep[t] = wp.where(wp.length_sq(positions_m[t] - centre_m) > radius_sq_m2, 1, 0)
+
+
+@wp.kernel
+def compact(
+    keep: wp.array(dtype=wp.int32),
+    index: wp.array(dtype=wp.int32),
+    positions_m: wp.array(dtype=wp.vec3),
+    velocities: wp.array(dtype=wp.vec3),
+    affine: wp.array(dtype=wp.mat33),
+    positions_out: wp.array(dtype=wp.vec3),
+    velocities_out: wp.array(dtype=wp.vec3),
+    affine_out: wp.array(dtype=wp.mat33),
+):
+    """Kept particles move to their exclusive prefix-sum index, in their order."""
+    t = wp.tid()
+    if keep[t] == 1:
+        i = index[t]
+        positions_out[i] = positions_m[t]
+        velocities_out[i] = velocities[t]
+        affine_out[i] = affine[t]
