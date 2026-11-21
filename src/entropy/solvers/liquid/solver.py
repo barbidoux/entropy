@@ -143,6 +143,27 @@ def _arrays(particles: LiquidParticles) -> tuple[wp.array, wp.array, wp.array]:
     return particles.position_m, particles.velocity_m_per_s, particles.affine_per_s
 
 
+class PendingCheckpoint:
+    """A copy of the liquid's state on its way to host memory (`checkpoint_async`).
+
+    On CUDA the copies go to pinned memory on the device's stream, and an event marks
+    their end; `result()` waits for it, so only restoring can wait, not taking."""
+
+    def __init__(self, arrays: dict[str, wp.array], event: wp.Event | None, extra: dict) -> None:
+        self._arrays = arrays
+        self._event = event
+        self._extra = extra
+
+    def result(self) -> dict[str, Any]:
+        """The state, as `checkpoint()` gives it."""
+        if self._event is not None:
+            wp.synchronize_event(self._event)
+            self._event = None
+        state: dict[str, Any] = {name: a.numpy().copy() for name, a in self._arrays.items()}
+        state.update(self._extra)
+        return state
+
+
 def fill_box(
     low_m: tuple[float, float, float],
     high_m: tuple[float, float, float],
@@ -290,8 +311,40 @@ class LiquidSolver:
             "volume_error": self._volume_error.numpy().copy(),
         }
 
-    def restore(self, state: dict[str, Any]) -> None:
-        """Return to `state`; a NaN freeze is lifted, and the speed comes from `state`."""
+    def checkpoint_async(self) -> PendingCheckpoint:
+        """A copy of the full state to host memory, enqueued without waiting (SPEC 4.6):
+        the game takes one every 10 s without a hitch. `restore` accepts it."""
+        n, device = self._count, self._device
+        cuda = wp.get_device(device).is_cuda
+        sources = {
+            "positions_m": (self._particles.position_m, wp.vec3, n),
+            "velocities_m_per_s": (self._particles.velocity_m_per_s, wp.vec3, n),
+            "affine_per_s": (self._particles.affine_per_s, wp.mat33, n),
+        }
+        arrays: dict[str, wp.array] = {}
+        for name, (source, dtype, count) in sources.items():
+            host = wp.empty(count, dtype=dtype, device="cpu", pinned=cuda)
+            if count:
+                wp.copy(host, source, count=count)
+            arrays[name] = host
+        for name, source in (
+            ("pressure_pa", self._projection.pressure_pa),
+            ("volume_error", self._volume_error),
+        ):
+            host = wp.empty(source.shape, dtype=source.dtype, device="cpu", pinned=cuda)
+            wp.copy(host, source)
+            arrays[name] = host
+        event = None
+        if cuda:
+            event = wp.Event(device)
+            wp.get_device(device).stream.record_event(event)
+        return PendingCheckpoint(arrays, event, {"count": n})
+
+    def restore(self, state: dict[str, Any] | PendingCheckpoint) -> None:
+        """Return to `state` (a `checkpoint()`, or a `checkpoint_async()` waited for here);
+        a NaN freeze is lifted, and the speed comes from `state`."""
+        if isinstance(state, PendingCheckpoint):
+            state = state.result()
         if self._status_pending and self._status_event is not None:
             wp.synchronize_event(self._status_event)
         self._status_pending = False

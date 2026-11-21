@@ -42,7 +42,12 @@ class CheckpointRing:
                 self._next_s += self.every_s
 
     def save_now(self) -> None:
-        self.entries.append((self.clock_s, [solver.checkpoint() for solver in self.solvers]))
+        """Take a checkpoint of every solver now; asynchronous where a solver offers it
+        (`checkpoint_async`), so taking one does not wait for the GPU."""
+        states = [
+            getattr(solver, "checkpoint_async", solver.checkpoint)() for solver in self.solvers
+        ]
+        self.entries.append((self.clock_s, states))
 
     def saved_times_s(self) -> list[float]:
         return [time_s for time_s, _ in self.entries]

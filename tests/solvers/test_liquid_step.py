@@ -548,6 +548,24 @@ def test_removing_nothing_changes_nothing(device: str) -> None:
 
     assert liquid.remove_particles_within((5.0, 5.0, 5.0), 0.1) == 0
     np.testing.assert_allclose(liquid.particle_positions(), points)
+
+
+def test_an_asynchronous_checkpoint_holds_the_state_of_its_moment(device: str) -> None:
+    """#55: the copy to host memory is enqueued, not waited for; restoring from it
+    gives the state at the moment it was taken, whatever ran after."""
+    liquid = LiquidSolver.create(_setup((12, 12, 16)), device)
+    liquid.add_particles(fill_box((0.0, 0.0, 0.0), (0.25, 0.75, 0.75), DX_M, 8, seed=22))
+    for _ in range(3):
+        liquid.step(1.0 / 60.0)
+    expected = liquid.particle_positions().copy()
+
+    pending = liquid.checkpoint_async()
+    for _ in range(5):
+        liquid.step(1.0 / 60.0)
+    liquid.add_particles(np.full((10, 3), 0.5, dtype=np.float32))
+    liquid.restore(pending)
+
+    np.testing.assert_allclose(liquid.particle_positions(), expected)
 @pytest.mark.parametrize("jitter", [0.0, 0.8])
 def test_a_grid_full_of_water_stays_still(device: str, jitter: float) -> None:
     """#69: water up to the grid's lid, no air anywhere: still, finite, converged."""
