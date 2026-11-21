@@ -98,8 +98,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
-- The Dell thermal profile is *Optimized* (Matt, 2026-11-21): SPEC 3's measured limits
-  are no longer provisional on it; CLAUDE.md and the benchmark guide say so.
+- The Dell thermal profile is *Optimized*, as Matt confirmed after the M0 sessions
+  (2026-11-21). SPEC 3's measured limits are taken to apply to it and are no longer
+  provisional. CLAUDE.md and the benchmark guide say so.
 - SPEC 3 recalibrated from the M0 measurements: gas box 96³ to 128³ and at risk (192³
   out of reach), liquid pressure solve at risk on the full house grid, measured hardware
   limits (450 GB/s planning bandwidth, provisional sustained GPU state, kernel launches
