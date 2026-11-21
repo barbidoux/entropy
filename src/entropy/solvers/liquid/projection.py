@@ -12,6 +12,14 @@ divergence-free in the water:
    liquid's volume correction asks crowded cells to expand (ADR 0018).
 4. u = u* - dt/rho grad(p). A missing air pressure is the ghost value that puts p = 0 at θ.
 
+Water sealed from air (#69): when no cell is air, as when water fills the whole grid,
+A is singular: the pressure is fixed only up to a constant, and the right-hand side
+must sum to zero. It does in exact arithmetic (closed walls), not after rounding nor
+with a target divergence. So the right-hand side's mean over the fluid cells is
+removed first, and the pressure's level is set so that its mean is 0 afterwards; both
+on the device, with no sync point. Named limit: a body of water sealed by static solids
+while air remains elsewhere in the grid is not detected (M2's solids will need it).
+
 Each substep the caller writes `labels` (fluid, air, solid; `entropy.linalg.mgpcg`
 codes) and `phi_m` into this object's own arrays. The arrays stay the same objects,
 so the solver's CUDA graphs stay valid (ADR 0016). Faces between two air cells are
@@ -57,6 +65,8 @@ class Projection:
         )
         self._divergence = wp.zeros(shape, dtype=float, device=device)
         self._rhs = wp.zeros(shape, dtype=float, device=device)
+        self._slots = wp.zeros((int(_k.SLOTS), 3), dtype=wp.float64, device=device)
+        self._mean = wp.zeros(1, dtype=float, device=device)
         system = system_from_labels(self.labels, dx_m=spec.dx_m, face_theta=self._theta)  # pyright: ignore[reportArgumentType]
         self.solver = Mgpcg(system)
 
@@ -69,6 +79,18 @@ class Projection:
                 inputs=[self.labels, *offset, component],
                 device=self.device,
             )
+
+    def _remove_sealed_mean(self, field: wp.array) -> None:
+        """Subtract `field`'s mean over the fluid cells, only when no cell is air."""
+        self._slots.zero_()
+        shape = self.spec.shape
+        wp.launch(
+            _k.fluid_sums, dim=shape, inputs=[self.labels, field, self._slots], device=self.device
+        )
+        wp.launch(_k.sealed_mean, dim=1, inputs=[self._slots, self._mean], device=self.device)
+        wp.launch(
+            _k.subtract_mean, dim=shape, inputs=[self.labels, self._mean, field], device=self.device
+        )
 
     def project(
         self, velocity: MacVelocity, dt_s: float, *, tolerance: float = 1e-5
@@ -100,7 +122,9 @@ class Projection:
             ],
             device=self.device,
         )
+        self._remove_sealed_mean(self._rhs)
         result = self.solver.solve(self._rhs, self.pressure_pa, tolerance=tolerance)
+        self._remove_sealed_mean(self.pressure_pa)
         coefficient = dt_s / (self.density_kg_per_m3 * self.spec.dx_m)
         for offset, theta, component in zip(
             _OFFSETS, self._theta, (velocity.u, velocity.v, velocity.w), strict=True

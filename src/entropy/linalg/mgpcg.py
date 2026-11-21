@@ -40,7 +40,9 @@ sealed pocket whose right-hand side does not sum to zero does not converge
 (`converged` is false after `max_iterations`). When it does sum to zero, as a
 projection's divergence does inside closed walls, the solve usually converges with
 the pocket's pressure fixed only up to a constant. An isolated fluid cell gets an
-arbitrary pressure through the diagonal's 1e-12 floor. Detecting such pockets is #69.
+arbitrary pressure through the diagonal's 1e-12 floor. The liquid's projection handles
+a grid with no air at all (ADR 0021); pockets sealed by solids while air remains are not
+detected.
 """
 
 from __future__ import annotations

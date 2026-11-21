@@ -5,6 +5,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Water sealed from air (#69, ADR 0021): when no cell is air, the projection removes
+  the right-hand side's mean and sets the pressure's level (mean 0), on the device. A
+  grid filled to the lid now stays still; on a lattice it used to run to the
+  iteration cap with pressures near 10⁹ Pa.
+
 ### Added
 
 - Water on screen (#52, SPEC 7.2):

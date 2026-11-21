@@ -251,3 +251,27 @@ def test_a_target_divergence_is_what_the_fluid_cells_get(device: str) -> None:
     after = _divergence(velocity)[fluid]
     assert result.converged
     np.testing.assert_allclose(after, 0.3, atol=1e-4 * 0.3 + 2e-5)
+
+
+def test_water_sealed_from_air_is_projected_up_to_its_pressure_level(device: str) -> None:
+    """#69: a closed box full of water has no free surface, so its pressure is fixed only
+    up to a constant. The projection removes the right-hand side's mean (the system is
+    then consistent even after rounding), keeps the water still under gravity, and sets
+    the level so the mean pressure is 0."""
+    spec = GridSpec(shape=(8, 8, 16), dx_m=1.0 / 16.0)
+    projection = Projection(spec, WATER.density_kg_per_m3, device)
+    projection.labels.fill_(CELL_FLUID)
+    projection.phi_m.fill_(-0.75 * spec.dx_m)
+    velocity = MacVelocity.zeros(spec, device)
+    velocity.w.fill_(-GRAVITY_M_PER_S2 * DT_S)
+    # A target divergence with a non-zero mean, as the volume correction may ask for.
+    projection.target_divergence_per_s.fill_(0.01)
+
+    result = projection.project(velocity, DT_S)
+
+    assert result.converged
+    pressure = projection.pressure_pa.numpy()
+    assert abs(pressure.mean()) < 1e-2 * WATER.density_kg_per_m3 * GRAVITY_M_PER_S2 * spec.dx_m
+    gradient = np.diff(pressure[4, 4, :]) / spec.dx_m
+    np.testing.assert_allclose(gradient, -WATER.density_kg_per_m3 * GRAVITY_M_PER_S2, rtol=1e-3)
+    assert np.abs(velocity.w.numpy()).max() < 1e-4

@@ -520,3 +520,19 @@ def test_jittered_still_water_stays_still_for_ten_seconds(device: str) -> None:
         liquid.step(1.0 / 60.0)
 
     assert np.abs(liquid.particle_velocities()).max() < 5e-3
+
+
+@pytest.mark.parametrize("jitter", [0.0, 0.8])
+def test_a_grid_full_of_water_stays_still(device: str, jitter: float) -> None:
+    """#69: water up to the grid's lid, no air anywhere: still, finite, converged."""
+    liquid = LiquidSolver.create(_setup((12, 10, 16)), device)
+    liquid.add_particles(
+        fill_box((0.0, 0.0, 0.0), (0.75, 0.625, 1.0), DX_M, 8, seed=25, jitter=jitter)
+    )
+
+    for _ in range(60):
+        liquid.step(1.0 / 60.0)
+
+    assert np.isfinite(liquid.particle_velocities()).all()
+    assert np.abs(liquid.particle_velocities()).max() < 5e-3
+    assert liquid.diagnostics()["pressure_iterations"] < 200

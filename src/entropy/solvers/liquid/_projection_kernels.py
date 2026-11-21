@@ -119,3 +119,49 @@ def subtract_gradient(
         u[i, j, k] = u[i, j, k] + coefficient * pressure[i - di, j - dj, k - dk] / t
     elif a == AIR and b == FLUID:
         u[i, j, k] = u[i, j, k] - coefficient * pressure[i, j, k] / t
+
+
+SLOTS = wp.constant(1024)
+"""Sums are spread over this many slots, then added up (one address would serialise)."""
+
+
+@wp.kernel
+def fluid_sums(
+    labels: wp.array3d(dtype=wp.int32),
+    field: wp.array3d(dtype=float),
+    slots: wp.array2d(dtype=wp.float64),
+):
+    """slots[s] += (field over fluid cells, fluid cells, air cells)."""
+    i, j, k = wp.tid()
+    slot = ((i * labels.shape[1] + j) * labels.shape[2] + k) % SLOTS
+    label = labels[i, j, k]
+    if label == FLUID:
+        wp.atomic_add(slots, slot, 0, wp.float64(field[i, j, k]))
+        wp.atomic_add(slots, slot, 1, wp.float64(1.0))
+    elif label == AIR:
+        wp.atomic_add(slots, slot, 2, wp.float64(1.0))
+
+
+@wp.kernel
+def sealed_mean(slots: wp.array2d(dtype=wp.float64), mean: wp.array(dtype=float)):
+    """One thread. mean[0] = the field's mean over fluid cells when no cell is air (the
+    water sealed from it), else 0: nothing to remove."""
+    total = wp.float64(0.0)
+    fluid = wp.float64(0.0)
+    air = wp.float64(0.0)
+    for s in range(SLOTS):
+        total = total + slots[s, 0]
+        fluid = fluid + slots[s, 1]
+        air = air + slots[s, 2]
+    mean[0] = 0.0
+    if air == wp.float64(0.0) and fluid > wp.float64(0.0):
+        mean[0] = float(total / fluid)
+
+
+@wp.kernel
+def subtract_mean(
+    labels: wp.array3d(dtype=wp.int32), mean: wp.array(dtype=float), field: wp.array3d(dtype=float)
+):
+    i, j, k = wp.tid()
+    if labels[i, j, k] == FLUID:
+        field[i, j, k] = field[i, j, k] - mean[0]
