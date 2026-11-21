@@ -158,7 +158,7 @@ def test_glfw_events_reach_god_mode(window_settings: WindowSettings) -> None:
             window, dataclasses.replace(Settings(), window=window_settings), FrameStats()
         )
         try:
-            on_key, on_cursor, on_button = stages.callbacks
+            on_key, on_cursor, on_button, on_scroll = stages.callbacks
             start = stages.mode.pose
             on_button(window.handle, glfw.MOUSE_BUTTON_LEFT, glfw.PRESS, 0)
             on_cursor(window.handle, 0.0, 0.0)
@@ -171,9 +171,33 @@ def test_glfw_events_reach_god_mode(window_settings: WindowSettings) -> None:
             on_key(window.handle, forward_key, 0, glfw.PRESS, 0)
             stages.update(0.1)
 
+            on_scroll(window.handle, 0.0, 2.0)
+            stages.update(0.1)
+            assert stages.toolbox.current.values["flow_l_per_s"] == 22.0
             assert stages.mode.input.mouse_captured
             assert glfw.get_input_mode(window.handle, glfw.CURSOR) == glfw.CURSOR_DISABLED
             assert turned.yaw_rad != start.yaw_rad
             assert stages.mode.pose.position_m != turned.position_m
         finally:
             stages.release()
+
+
+def test_the_hose_fills_the_tank(stages: GameStages) -> None:
+    """#53: holding the tool button with the hose in hand pours water into the tank; the
+    jet in flight is drawn with the water."""
+    from entropy.game.free_camera import CameraPose
+    from entropy.game.input import FrameInput
+
+    assert stages.liquid is not None
+    stages.mode.pose = CameraPose((0.0, -1.0, 2.8), 1.5708, -0.9)  # above the rim, aiming in
+    hold = FrameInput(frozenset(), frozenset(), 0.0, 0.0, tool_held=True, tool_pressed=True)
+    stages.toolbox.handle(hold)
+    for _ in range(20):
+        stages.step_simulation(1.0 / 60.0)
+        stages.toolbox.handle(FrameInput(frozenset(), frozenset(), 0.0, 0.0, tool_held=True))
+    stages.render()
+
+    in_tank = stages.liquid.diagnostics()["particles"]
+    assert in_tank > 0
+    assert stages.particles_drawn == in_tank + len(stages.toolbox.jet)
+    assert any("Tuyau" in note for note in stages.hud_notes())

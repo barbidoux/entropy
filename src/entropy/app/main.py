@@ -29,11 +29,15 @@ from entropy.core.paths import content_dir, out_dir
 from entropy.core.profiler import FrameStats, StageTimer, cuda_stage_timer, gpu_memory
 from entropy.game.god_mode import GodMode
 from entropy.game.input import bindings_from_settings
+from entropy.game.toolbox import Toolbox
+from entropy.game.tools.base import Aim
+from entropy.game.tools.jet import Domain
 from entropy.render.camera import CameraView
 from entropy.render.context import GameWindow
 from entropy.render.gl_timer import GlQueries
 from entropy.render.interop import SharedBuffer
 from entropy.render.world_frame import WorldFrame
+from entropy.render.world_view import ground_height_m
 from entropy.sim.loop import FrameLoop, LoopSettings
 from entropy.sim.setup import liquid_setup
 from entropy.sim.simulation import Simulation
@@ -41,7 +45,8 @@ from entropy.solvers.liquid.solver import LiquidSolver
 from entropy.ui.hud import PerformanceHud, hud_lines
 from entropy.world.maps import load_map
 from entropy.world.materials import load_material
-from entropy.world.world import build_world
+from entropy.world.sdf import OpenBox
+from entropy.world.world import World, build_world
 
 _log = logging.getLogger(__name__)
 
@@ -50,6 +55,17 @@ START_MAP = "test_tank"
 DEFAULT_LOG_PATH = out_dir() / "entropy.log"
 """Where the game logs, next to the clone (`out/` is ignored by git)."""
 CONTROLS_HINT = "clic : regarder   Échap : libérer la souris   F3 : HUD"
+
+
+def tank_domain(world: World, spec_origin_m, spec_high_m) -> Domain:
+    """Where the liquid can hold water, for the tools: the grid's box, the tank's rim."""
+    tank = next(shape for shape, _ in world.solids if isinstance(shape, OpenBox))
+    return Domain(
+        low_m=tuple(spec_origin_m),
+        high_m=tuple(spec_high_m),
+        rim_z_m=tank.inner_max_m[2],
+        ground_z_m=ground_height_m(world),
+    )
 
 
 class GameStages:
@@ -68,6 +84,18 @@ class GameStages:
         setup = liquid_setup(self.world)
         self.liquid = LiquidSolver.create(setup, self.device) if setup is not None else None
         self.simulation = Simulation([self.liquid] if self.liquid is not None else [])
+        domain = None
+        if setup is not None:
+            spec = setup.spec
+            high = [o + n * spec.dx_m for o, n in zip(spec.origin_m, spec.shape, strict=True)]
+            domain = tank_domain(self.world, spec.origin_m, high)
+        self.toolbox = Toolbox.standard(
+            gravity_m_per_s2=self.world.environment.gravity_m_per_s2,
+            domain=domain,
+            liquid=self.liquid,
+            # Without a liquid no tool adds water; any positive volume will do.
+            particle_volume_m3=setup.particle_volume_m3 if setup is not None else 1.0,
+        )
         self.particles_drawn = 0
         # GPU time per stage for the HUD (SPEC 4.7): CUDA events around Warp work,
         # OpenGL timer queries around render passes.
@@ -107,19 +135,25 @@ class GameStages:
         def on_cursor(_window: Any, x: float, y: float) -> None:
             mode.input.on_mouse_move(x, y)
 
-        def on_button(_window: Any, _button: int, action: int, _mods: int) -> None:
+        def on_button(_window: Any, button: int, action: int, _mods: int) -> None:
+            mode.input.on_mouse_button(button, action)  # before: a capturing click is no use
             mode.on_mouse_button(pressed=action == glfw.PRESS)
 
-        self.callbacks = (on_key, on_cursor, on_button)
+        def on_scroll(_window: Any, _dx: float, dy: float) -> None:
+            mode.input.on_scroll(dy)
+
+        self.callbacks = (on_key, on_cursor, on_button, on_scroll)
         glfw.set_key_callback(handle, on_key)
         glfw.set_cursor_pos_callback(handle, on_cursor)
         glfw.set_mouse_button_callback(handle, on_button)
+        glfw.set_scroll_callback(handle, on_scroll)
 
     def _remove_callbacks(self) -> None:
         handle = self.window.handle
         # pyGLFW accepts None to remove a callback; its stubs do not say so.
         glfw.set_key_callback(handle, None)  # pyright: ignore[reportArgumentType]
         glfw.set_cursor_pos_callback(handle, None)  # pyright: ignore[reportArgumentType]
+        glfw.set_scroll_callback(handle, None)  # pyright: ignore[reportArgumentType]
         glfw.set_mouse_button_callback(handle, None)  # pyright: ignore[reportArgumentType]
 
     def _particle_count(self) -> int:
@@ -131,6 +165,7 @@ class GameStages:
         notes = []
         if self.simulation.frozen_because:
             notes.append(f"MONDE ARRÊTÉ : {self.simulation.frozen_because}")
+        notes += self.toolbox.palette()
         notes += [CONTROLS_HINT, f"{self.world.name} : {self._particle_count():,} particules d'eau"]
         if self.particles.fallback_reason:
             notes.append(f"host copy because: {self.particles.fallback_reason}")
@@ -141,6 +176,8 @@ class GameStages:
 
     def update(self, frame_dt_s: float) -> None:
         self.mode.update(frame_dt_s)
+        if self.mode.last_frame is not None:
+            self.toolbox.handle(self.mode.last_frame)
         captured = self.mode.input.mouse_captured
         if captured != self._mouse_captured:
             self.window.set_mouse_captured(captured)
@@ -148,17 +185,29 @@ class GameStages:
         self.hud.visible = self.mode.hud_visible
 
     def step_simulation(self, dt_s: float) -> float:
+        pose = self.mode.pose
+        forward = pose.forward()
+        aim = Aim(pose.position_m, (float(forward[0]), float(forward[1]), float(forward[2])))
         with self.cuda_timer.stage("simulation (CUDA)"):
-            return self.simulation.step(dt_s)
+            return self.simulation.step(
+                dt_s, player=lambda advance_s: self.toolbox.apply(aim, advance_s)
+            )
 
     def render(self) -> None:
         width, height = self.window.framebuffer_size_px()
         if width == 0 or height == 0:
             return  # minimised
         count = self._particle_count()
-        if count and self.liquid is not None:
-            with self.particles.writable(count) as positions:
-                wp.copy(positions, self.liquid.fields()["positions_m"], count=count)
+        flying = self.toolbox.jet.positions_m[: max(self.particles.count - count, 0)]
+        if (count or len(flying)) and self.liquid is not None:
+            with self.particles.writable(count + len(flying)) as positions:
+                # The liquid, then the water in flight; the rest of the buffer is unused.
+                if count:
+                    wp.copy(positions, self.liquid.fields()["positions_m"], count=count)
+                if len(flying):
+                    jet = wp.array(flying.astype("float32"), dtype=wp.vec3, device=self.device)
+                    wp.copy(positions, jet, dest_offset=count, count=len(flying))
+        count += len(flying)
         self.particles_drawn = count
         camera = self.settings.camera
         pose = self.mode.pose

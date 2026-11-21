@@ -7,6 +7,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Tools and the hose (#53, #35, ADR 0020):
+  - tool plug-ins with their parameters, limits and defaults in `content/tools/`;
+    keys 1–9 choose, the mouse wheel sets the power, the left button (mouse
+    captured) uses; the palette shows the settings in SI units in the HUD;
+  - the hose: flow 1–50 L/s, nozzle 5–30 m/s (default 10 m/s), released by
+    accumulated volume, so slow motion loses nothing to rounding;
+  - outside the liquid's grid the jet flies ballistically and is drawn; it enters
+    the tank over the rim, and water that hits the glass or the ground is lost;
+  - US-01: 10 s of hose at 20 L/s puts 200 L ± 2 % in the Test Tank, at 1x and 0.1x.
 - Benchmarks sample GPU telemetry during each measurement (#25, ADR 0022): one
   `nvidia-smi -lms 100` process in the background, summarised in each result (min,
   median, max and count of each number; counts of P-states and clock event reasons),

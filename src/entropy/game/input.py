@@ -34,6 +34,19 @@ class Action(StrEnum):
     DOWN = "down"
     TOGGLE_HUD = "toggle_hud"
     MENU = "menu"
+    TOOL_1 = "tool_1"
+    TOOL_2 = "tool_2"
+    TOOL_3 = "tool_3"
+    TOOL_4 = "tool_4"
+    TOOL_5 = "tool_5"
+    TOOL_6 = "tool_6"
+    TOOL_7 = "tool_7"
+    TOOL_8 = "tool_8"
+    TOOL_9 = "tool_9"
+
+
+TOOL_ACTIONS = tuple(Action(f"tool_{n}") for n in range(1, 10))
+"""Keys 1 to 9 choose a tool (SPEC 4.5)."""
 
 
 DEFAULT_BINDINGS: Mapping[int, Action] = MappingProxyType(
@@ -47,6 +60,7 @@ DEFAULT_BINDINGS: Mapping[int, Action] = MappingProxyType(
         glfw.KEY_RIGHT_CONTROL: Action.DOWN,
         glfw.KEY_F3: Action.TOGGLE_HUD,
         glfw.KEY_ESCAPE: Action.MENU,
+        **{glfw.KEY_1 + n: Action(f"tool_{n + 1}") for n in range(9)},
     }
 )
 
@@ -128,6 +142,12 @@ class FrameInput:
     pressed: frozenset[Action]
     look_dx_px: float
     look_dy_px: float
+    tool_held: bool = False
+    """The tool button (left mouse) is down, with the mouse captured."""
+    tool_pressed: bool = False
+    tool_released: bool = False
+    wheel_steps: int = 0
+    """Mouse wheel notches this frame, up positive."""
 
 
 class InputState:
@@ -141,6 +161,10 @@ class InputState:
         self._cursor_px: tuple[float, float] | None = None
         self._dx_px = 0.0
         self._dy_px = 0.0
+        self._tool_held = False
+        self._tool_pressed = False
+        self._tool_released = False
+        self._wheel = 0.0
 
     def on_key(self, key: int, event: int) -> None:
         """A GLFW key event (`glfw.PRESS`, `glfw.RELEASE` or `glfw.REPEAT`)."""
@@ -174,16 +198,39 @@ class InputState:
             self._dy_px += y_px - self._cursor_px[1]
         self._cursor_px = (x_px, y_px)
 
+    def on_mouse_button(self, button: int, event: int) -> None:
+        """A GLFW mouse button event. The left button uses the tool, but only while the
+        mouse is captured: the click that captures it does not."""
+        if button != glfw.MOUSE_BUTTON_LEFT:
+            return
+        if event == glfw.PRESS and self._mouse_captured:
+            self._tool_held = True
+            self._tool_pressed = True
+        elif event == glfw.RELEASE and self._tool_held:
+            self._tool_held = False
+            self._tool_released = True
+
+    def on_scroll(self, dy: float) -> None:
+        """A GLFW scroll event: notches of the wheel, up positive."""
+        self._wheel += dy
+
     def take_frame(self) -> FrameInput:
-        """This frame's input; presses and mouse motion start again from zero."""
+        """This frame's input; presses, wheel and mouse motion start again from zero."""
+        steps = int(self._wheel)
         frame = FrameInput(
             held=frozenset(self.bindings[key] for key in self._held_keys),
             pressed=frozenset(self._pressed),
             look_dx_px=self._dx_px,
             look_dy_px=self._dy_px,
+            tool_held=self._tool_held,
+            tool_pressed=self._tool_pressed,
+            tool_released=self._tool_released,
+            wheel_steps=steps,
         )
         self._pressed.clear()
         self._dx_px = self._dy_px = 0.0
+        self._tool_pressed = self._tool_released = False
+        self._wheel -= steps
         return frame
 
 

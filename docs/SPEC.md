@@ -138,6 +138,8 @@ Every tool exposes its parameters in SI units, so the player always knows what i
 
 Tools are plug-ins: a new tool is one class implementing the tool interface plus one content file for its parameters and icon (section 8).
 
+In M1, water thrown from outside the liquid's grid (the hose, from the camera) flies ballistically, without drag, until it enters the tank over its rim; water that hits the glass below the rim or the ground is lost, since water cannot exist outside the tank yet (ADR 0017, ADR 0020). Sources carry the fraction of a particle they could not release to the next frame, so slow motion loses no water.
+
 ### 4.3 Maps and Build mode
 
 A map is a folder of plain text files under version control, so maps can be diffed, copied, shared and repaired by hand.

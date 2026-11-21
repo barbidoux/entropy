@@ -125,3 +125,50 @@ def test_unfreezing_lets_the_world_run_again() -> None:
     simulation.unfreeze()
 
     assert simulation.step(1.0 / 60.0) > 0.0
+
+
+def test_the_player_acts_first_with_the_shared_advance() -> None:
+    """SPEC 5.9, step 1 of the frame: the tools act with the advance the solvers will take,
+    before any of them steps."""
+    solvers, log = _solvers(0.01)
+    simulation = Simulation(solvers)
+
+    advance_s = simulation.step(1.0 / 30.0, player=lambda dt_s: log.append(("player", dt_s)))
+
+    assert advance_s == 0.01
+    assert log == [("player", 0.01), ("s0", 0.01)]
+
+
+def test_the_player_does_not_act_on_a_frozen_world() -> None:
+    """While frozen, the tools add or remove nothing either."""
+    solvers, log = _solvers(math.inf)
+    simulation = Simulation(solvers)
+    simulation.frozen_because = "earlier"
+
+    assert simulation.step(1.0 / 60.0, player=lambda dt_s: log.append(("player", dt_s))) == 0.0
+    assert log == []
+
+
+class _BrokenLimit:
+    """Finds its state non-finite when reading back its speeds, as the liquid can."""
+
+    def max_advance_s(self) -> float:
+        from pathlib import Path
+
+        from entropy.solvers.interface import NonFiniteStateError
+
+        raise NonFiniteStateError(Path("out/nan_dumps/limit.npz"))
+
+    def step(self, dt_s: float, ctx: Any) -> None:
+        raise AssertionError("a frozen solver must not step")
+
+
+def test_a_state_found_non_finite_while_pacing_freezes_the_world() -> None:
+    """The speeds read back for the limit may be the first to show NaN: the world freezes
+    there too, and the player does not act."""
+    acted: list[float] = []
+    simulation = Simulation([_BrokenLimit()])
+
+    assert simulation.step(1.0 / 60.0, player=acted.append) == 0.0
+    assert acted == []
+    assert simulation.frozen_because is not None and "limit.npz" in simulation.frozen_because

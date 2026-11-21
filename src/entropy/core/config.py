@@ -87,6 +87,15 @@ class ControlsSettings:
     down: str = "LEFT_CONTROL, RIGHT_CONTROL"
     toggle_hud: str = "F3"
     menu: str = "ESCAPE"
+    tool_1: str = "1"
+    tool_2: str = "2"
+    tool_3: str = "3"
+    tool_4: str = "4"
+    tool_5: str = "5"
+    tool_6: str = "6"
+    tool_7: str = "7"
+    tool_8: str = "8"
+    tool_9: str = "9"
 
 
 @dataclass(frozen=True)

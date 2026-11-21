@@ -75,10 +75,12 @@ def test_labels_ignore_case_and_names_allow_several_keys() -> None:
 
 
 def test_digits_fall_back_to_the_digit_row_when_no_key_prints_them() -> None:
-    """On AZERTY the digit row prints & é \" ... unshifted; "1" still means that key."""
-    bindings = bindings_from_settings(ControlsSettings(toggle_hud="1"), key_label=azerty)
+    """On AZERTY the digit row prints & é \" ... unshifted; "1" still means that key
+    (tool 1, by default)."""
+    bindings = bindings_from_settings(ControlsSettings(), key_label=azerty)
 
-    assert bindings[glfw.KEY_1] is Action.TOGGLE_HUD
+    assert bindings[glfw.KEY_1] is Action.TOOL_1
+    assert bindings[glfw.KEY_9] is Action.TOOL_9
 
 
 def test_a_position_can_be_named_explicitly() -> None:

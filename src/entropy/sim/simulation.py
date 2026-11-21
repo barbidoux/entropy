@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import logging
 import math
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import Any, Protocol, runtime_checkable
 
 from entropy.solvers.interface import NonFiniteStateError
@@ -59,16 +59,21 @@ class Simulation:
             advance_s = min(advance_s, limit_s)
         return advance_s
 
-    def step(self, requested_s: float) -> float:
+    def step(self, requested_s: float, *, player: Callable[[float], None] | None = None) -> float:
         """Advance every solver by one shared advance; return it (s).
 
+        `player`, if given, is the frame's step 1 (SPEC 5.9): the player's tools act with
+        the shared advance (s), zero when paused, before any solver steps.
+
         NaN guard (SPEC 5.9): when a solver finds its state non-finite, it has dumped it
-        and raises; the world then freezes, nothing advances until `unfreeze`, and
-        `frozen_because` says where the dump is."""
+        and raises; the world then freezes, nothing advances and the player does not act
+        until `unfreeze`, and `frozen_because` says where the dump is."""
         if self.frozen_because is not None:
             return 0.0
         try:
             advance_s = self.advance_for(requested_s)
+            if player is not None:
+                player(advance_s)
             if advance_s > 0.0:
                 for solver in self.solvers:
                     solver.step(advance_s, self.context)
