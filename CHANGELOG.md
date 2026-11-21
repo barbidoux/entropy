@@ -7,6 +7,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Benchmarks sample GPU telemetry during each measurement (#25): one `nvidia-smi -lms 100`
+  process in the background, summarised as min, median and max of clocks, power and
+  temperature in each result; compared passes are timed interleaved, round by round
+  (`time_interleaved`, used by the stencil benchmark), so their ratios hold while
+  clocks drift.
 - Water on screen (#52, SPEC 7.2):
   - the frame is drawn in linear light into a half-float target and tone-mapped last
     (`entropy.render.frame`); the glass now blends in linear light;

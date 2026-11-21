@@ -21,7 +21,7 @@ from collections.abc import Callable
 import pytest
 import warp as wp
 
-from bench.harness import BenchSession, summarize, time_device
+from bench.harness import BenchSession, summarize, time_interleaved
 from entropy.linalg.jacobi import jacobi_step
 
 DEVICE = "cuda:0"
@@ -65,11 +65,19 @@ def test_jacobi_sweep_cost(bench_session: BenchSession, shape: tuple[int, int, i
 
     name = "stencil_" + "x".join(map(str, shape))
     bench_session.start(name)
-    single = summarize(time_device(lambda: sweeps(1), repeats=200, device=DEVICE))
-    batched = summarize(time_device(lambda: sweeps(BATCH), repeats=20, device=DEVICE))
-    graphed = summarize(time_device(lambda: wp.capture_launch(graph), repeats=20, device=DEVICE))
-    streamed = summarize(
-        time_device(lambda: wp.capture_launch(streaming), repeats=20, device=DEVICE)
+    # Interleaved repeat by repeat, so the ratios between them hold while clocks drift (#25).
+    timed = time_interleaved(
+        {
+            "single": lambda: sweeps(1),
+            "batched": lambda: sweeps(BATCH),
+            "graph": lambda: wp.capture_launch(graph),
+            "streaming": lambda: wp.capture_launch(streaming),
+        },
+        rounds=20,
+        device=DEVICE,
+    )
+    single, batched, graphed, streamed = (
+        summarize(timed[key]) for key in ("single", "batched", "graph", "streaming")
     )
 
     cells = shape[0] * shape[1] * shape[2]
