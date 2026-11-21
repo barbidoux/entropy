@@ -1,0 +1,16 @@
+{
+  "entities": [
+    {
+      "prefab": "glass_tank",
+      "position_m": [0.0, 0.0, 0.0],
+      "material": "glass",
+      "parameters": {"inner_size_m": [4.0, 4.0, 2.0], "wall_m": 0.02}
+    },
+    {
+      "prefab": "floor_slab",
+      "position_m": [0.0, 0.0, -0.02],
+      "material": "concrete",
+      "parameters": {"size_m": [20.0, 20.0], "thickness_m": 0.3}
+    }
+  ]
+}

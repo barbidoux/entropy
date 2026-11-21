@@ -1,0 +1,9 @@
+# The Test Tank (SPEC 4.4): a 4 x 4 x 2 m glass tank on a concrete floor.
+# Map format v1 (SPEC 4.3): metadata and environment here, entities in scene.json.
+schema_version = 1
+name = "Test Tank"
+description = "A 4 x 4 x 2 m glass tank on a concrete floor, for water experiments."
+
+[environment]
+gravity_m_per_s2 = [0.0, 0.0, -9.81]
+air_temperature_k = 293.15

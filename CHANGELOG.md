@@ -7,6 +7,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Map files, format v1, and the Test Tank (#51):
+  - `entropy.world.maps`: `map.toml` (schema version, name, environment) and
+    `scene.json` (entities), with load, save and a migration registry that refuses
+    newer schemas;
+  - `entropy.world.prefabs`: `glass_tank` and `floor_slab`;
+  - `entropy.world.world.build_world`;
+  - `content/maps/test_tank/`: a 4 × 4 × 2 m glass tank with 2 cm walls on a concrete
+    slab.
 - Materials and static solids (#47):
   - `content/materials/water.toml`, `glass.toml` and `concrete.toml`, each density with
     its source;
