@@ -13,12 +13,13 @@ from __future__ import annotations
 
 import math
 from collections.abc import Sequence
-from typing import Any, Protocol
+from typing import Any, Protocol, runtime_checkable
 
 
+@runtime_checkable
 class PacedSolver(Protocol):
-    """What the simulation needs from a solver. It lives here until the liquid (#50)
-    adds `max_advance_s` to `entropy.solvers.interface.Solver` (SPEC 8.2)."""
+    """The part of `entropy.solvers.interface.Solver` the simulation uses (SPEC 8.2):
+    every solver is one, and tests pace small fakes with it."""
 
     def max_advance_s(self) -> float:
         """Largest advance (s) this solver can take within its substep cap; math.inf if

@@ -264,7 +264,7 @@ Initial material values below are order-of-magnitude placeholders. Each one gets
 Water uses the Affine Particle-In-Cell method (APIC): particles carry the water, a grid enforces incompressibility. This is the family of methods used for film water, and it conserves angular momentum, so splashes keep their swirl.
 
 - **State:** particles with position, velocity and a 3 × 3 affine matrix; a staggered (MAC) grid with a default cell of 6.25 cm; about 8 particles per cell.
-- **Step:** transfer particles to grid with quadratic B-spline weights; add gravity, tool and coupling forces; enforce solid boundaries; solve for pressure; transfer back to particles; move particles with a second-order integrator and push them out of solids.
+- **Step:** transfer particles to grid with quadratic B-spline weights; add gravity, tool and coupling forces; build the liquid's level set from the particles and label the cells from it (Zhu & Bridson 2005, ADR 0018); enforce solid boundaries; solve for pressure; extrapolate velocity two faces into the air; transfer back to particles; move particles with a second-order integrator and push them out of solids.
 - **Pressure:** a Poisson equation solved by multigrid-preconditioned conjugate gradient (MGPCG), with a second-order free-surface boundary condition.
 - **Solids:** static geometry enters as a signed distance field (SDF). Moving rigid bodies use variational solid–fluid coupling, so pressure pushes on bodies and bodies push on water in one solve.
 - **Boundaries in M1 (ADR 0017):** the Test Tank's walls are the grid's walls, and static solids inside the water are voxelized. Named limits: water cannot spill over the rim, and the grid's top is a closed wall too, so a splash that reaches it stops there. A body of water sealed from air is not handled yet (#69).
@@ -351,6 +351,7 @@ Each frame advances the world once by the measured frame time multiplied by the 
   - Rigid bodies: substeps of at most 1/480 s.
   - The CPU fixes the advance from the previous frame's maximum speeds, read back without a synchronisation point. When the cap would be exceeded, the advance shrinks before any solver steps, the time scale drops automatically and the HUD says so. The world slows down rather than blowing up numerically.
   - Simplification: if speed grows faster within one frame than that estimate allowed, the fluid substeps stay at the cap and move more than one cell for that frame. The HUD and the log count such frames, and the next advance shrinks.
+  - Simplification, until conditional graph nodes (#36): the CPU, not the GPU, counts the liquid's substeps, from the same previous-frame speed. A frame whose speed outgrew it is counted the same way.
   - With the cap and the 1/30 s clamp, flows faster than about 4 cells per advance slow the world down: about 6.7 m/s for water in 6.25 cm cells at 30 fps.
 - **Guards:** every solver checks for NaN and infinity after its step. On detection, the simulation freezes, dumps its state to disk and shows an alert, so every crash becomes a reproducible bug report.
 
@@ -772,6 +773,7 @@ Linked entries were checked against the publisher or the authors' page; unlinked
 - Ihmsen, Akinci, Akinci, Teschner (2012). [Unified spray, foam and air bubbles for particle-based fluids](https://doi.org/10.1007/s00371-012-0697-9). The Visual Computer 28(6–8).
 - Enright, Nguyen, Gibou, Fedkiw (2003). Using the particle level set method and a second order accurate pressure boundary condition for free surface flows. ASME Fluids Engineering Division Summer Meeting.
 - Bridson (2015). Fluid Simulation for Computer Graphics, 2nd edition. CRC Press.
+- Zhu, Bridson (2005). [Animating Sand as a Fluid](https://doi.org/10.1145/1073204.1073298). ACM Transactions on Graphics 24(3), SIGGRAPH 2005.
 
 **Gas, smoke and fire**
 

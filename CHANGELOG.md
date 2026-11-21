@@ -7,6 +7,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- The liquid's full step (#50, `entropy.solvers.liquid.solver.LiquidSolver`):
+  - each substep: particles to grid, gravity, a level set and labels from the
+    particles (Zhu & Bridson 2005, ADR 0018), the projection, two layers of velocity
+    extrapolated into the air, grid to particles, midpoint motion kept inside the grid
+    and out of static solids;
+  - substeps from the previous frame's speed (ADR 0013), at most 4; frames that outran
+    it are counted as overruns;
+  - NaN guard: a non-finite state is dumped to an `.npz` file and stops the liquid;
+  - `Solver` gains `max_advance_s()` (SPEC 8.2).
+
+  A still tank stays still: after 1 s, 99 % of the particles moved less than 1 mm and
+  the surface is within 1 mm of the water's height. A jittered surface settles; a
+  falling blob accelerates at g within 2 %.
 - Pressure projection of the liquid (#49, `entropy.solvers.liquid.projection`):
   - faces against static solids and walls carry no flow;
   - one θ per fluid-air face from the liquid's level set (second-order free surface,
