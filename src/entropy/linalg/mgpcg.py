@@ -39,6 +39,7 @@ from graphs). Iterations past convergence do nothing (alpha = beta = 0).
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -50,7 +51,9 @@ CELL_AIR = 0
 CELL_FLUID = 1
 CELL_SOLID = 2
 
-_DOT_THREADS = 65536
+_DOT_PARTIALS = 32768
+"""Threads of a dot product's first stage: enough to stream the arrays at full bandwidth."""
+_DOT_GROUP = 128
 
 
 @dataclass(frozen=True)
@@ -63,6 +66,9 @@ class PoissonSystem:
     wy: wp.array
     wz: wp.array
     dx_m: float
+    unit_weights: bool = False
+    """True when every weight is 0 or 1 as `system_from_labels` sets them: kernels then
+    take 1 between fluid cells without reading the weight arrays."""
 
     def __post_init__(self) -> None:
         nx, ny, nz = self.labels.shape
@@ -90,7 +96,15 @@ class PoissonSystem:
         return self.labels.device
 
     def operator_args(self) -> list:
-        return [self.labels, self.diag, self.wx, self.wy, self.wz, 1.0 / self.dx_m**2]
+        return [
+            self.labels,
+            self.diag,
+            self.wx,
+            self.wy,
+            self.wz,
+            int(self.unit_weights),
+            1.0 / self.dx_m**2,
+        ]
 
 
 def system_from_labels(labels: wp.array, *, dx_m: float, air_theta: float = 1.0) -> PoissonSystem:
@@ -119,7 +133,7 @@ def system_from_labels(labels: wp.array, *, dx_m: float, air_theta: float = 1.0)
     wp.launch(
         _k.diagonal, dim=labels.shape, inputs=[labels, *faces, 1.0 / air_theta, diag], device=device
     )
-    return PoissonSystem(labels, diag, *faces, dx_m=dx_m)
+    return PoissonSystem(labels, diag, *faces, dx_m=dx_m, unit_weights=True)
 
 
 def _check_field(system: PoissonSystem, name: str, array: wp.array) -> None:
@@ -168,16 +182,14 @@ class Mgpcg:
     system: PoissonSystem
     multigrid: bool = True
     smoothing_sweeps: int = 2
-    coarsest_sweeps: int = 40
+    coarsest_sweeps: int = 16
     omega: float = 6.0 / 7.0
     """Jacobi damping: 6/7 smooths the 7-point Laplacian's high frequencies best."""
-    min_coarse_cells: int = 8
+    min_coarse_cells: int = 4
     """Coarsening stops once a coarse grid would have an axis shorter than this."""
     _levels: list[_Level] = field(init=False, repr=False)
     _vectors: dict[str, wp.array] = field(init=False, repr=False)
-    _graph: wp.Graph | None = field(init=False, default=None, repr=False)
-    _graph_iterations: int = field(init=False, default=0, repr=False)
-    _graph_x: wp.array | None = field(init=False, default=None, repr=False)
+    _graphs: dict[str, tuple[wp.Graph, tuple]] = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         if self.smoothing_sweeps < 1 or self.coarsest_sweeps < 1 or not 0 < self.omega <= 1:
@@ -201,7 +213,10 @@ class Mgpcg:
             name: wp.zeros(self.system.shape, dtype=float, device=device)
             for name in ("r", "z", "p", "q")
         }
-        self._vectors["scalars"] = wp.zeros(4, dtype=wp.float64, device=device)
+        self._vectors["scalars"] = wp.zeros(5, dtype=wp.float64, device=device)
+        self._graphs = {}
+        partials = min(_DOT_PARTIALS, int(np.prod(self.system.shape)))
+        self._vectors["partials"] = wp.zeros(partials, dtype=wp.float64, device=device)
 
     @property
     def levels(self) -> int:
@@ -210,16 +225,22 @@ class Mgpcg:
     # The preconditioner ----------------------------------------------------------------
 
     def _jacobi(self, level: _Level, sweeps: int) -> None:
-        """`sweeps` damped Jacobi sweeps on level.x towards level.b (ping-pong, even count kept)."""
+        """`sweeps` damped Jacobi sweeps on level.x towards level.b.
+
+        Sweeps alternate between level.x and level.scratch; an odd count ends
+        with one copy back into level.x."""
         s = level.system
+        src, dst = level.x, level.scratch
         for _ in range(sweeps):
             wp.launch(
                 _k.jacobi,
                 dim=s.shape,
-                inputs=[*s.operator_args(), self.omega, level.x, level.b, level.scratch],
+                inputs=[*s.operator_args(), self.omega, src, level.b, dst],
                 device=s.device,
             )
-            wp.copy(level.x, level.scratch)
+            src, dst = dst, src
+        if src is not level.x:
+            wp.copy(level.x, src)
 
     def _vcycle(self, index: int) -> None:
         level = self._levels[index]
@@ -258,22 +279,26 @@ class Mgpcg:
             )
             return
         top = self._levels[0]
-        wp.copy(top.b, r)
+        top.b, top.x = r, z  # the fine level works in the caller's arrays: no copies
         self._vcycle(0)
-        wp.copy(z, top.x)
 
     # CG ----------------------------------------------------------------------------------
 
     def _dot(self, a: wp.array, b: wp.array, slot: int) -> None:
-        scalars = self._vectors["scalars"]
-        flat_a, flat_b = a.flatten(), b.flatten()
-        threads = min(_DOT_THREADS, flat_a.shape[0])
-        wp.launch(_k.clear, dim=1, inputs=[scalars, slot], device=self.system.device)
+        """scalars[slot] = a·b in two stages: partial sums, then a few atomics."""
+        scalars, partials = self._vectors["scalars"], self._vectors["partials"]
+        device = self.system.device
+        threads = partials.shape[0]
+        wp.launch(_k.clear, dim=1, inputs=[scalars, slot], device=device)
         wp.launch(
-            _k.dot,
+            _k.dot_partial,
             dim=threads,
-            inputs=[flat_a, flat_b, threads, scalars, slot],
-            device=self.system.device,
+            inputs=[a.flatten(), b.flatten(), threads, partials],
+            device=device,
+        )
+        groups = (threads + _DOT_GROUP - 1) // _DOT_GROUP
+        wp.launch(
+            _k.sum_partials, dim=groups, inputs=[partials, _DOT_GROUP, scalars, slot], device=device
         )
 
     def _iterate(self, x: wp.array) -> None:
@@ -306,20 +331,47 @@ class Mgpcg:
         )
         wp.launch(_k.roll, dim=1, inputs=[v["scalars"]], device=s.device)
 
-    def _batch(self, x: wp.array, iterations: int) -> None:
-        """`iterations` CG iterations, replayed as one CUDA graph on a GPU."""
+    def _run(self, name: str, key: tuple, enqueue: Callable[[], None]) -> None:
+        """Run `enqueue` directly on the CPU; on CUDA capture it once per `key` as a graph
+        and replay it (SPEC 3: solver loops launch from graphs). `key` holds the arrays
+        the work writes to, so a graph is never replayed on other arrays."""
         device = self.system.device
         if device is None or not device.is_cuda:
-            for _ in range(iterations):
-                self._iterate(x)
+            enqueue()
             return
-        if self._graph is None or self._graph_iterations != iterations or self._graph_x is not x:
+        cached = self._graphs.get(name)
+        if (
+            cached is None
+            or len(cached[1]) != len(key)
+            or any(a is not b for a, b in zip(cached[1], key, strict=True))
+        ):
             with wp.ScopedCapture(device=device) as capture:
-                for _ in range(iterations):
-                    self._iterate(x)
-            self._graph, self._graph_iterations, self._graph_x = capture.graph, iterations, x
-        assert self._graph is not None
-        wp.capture_launch(self._graph)
+                enqueue()
+            assert capture.graph is not None
+            cached = (capture.graph, key)
+            self._graphs[name] = cached
+        wp.capture_launch(cached[0])
+
+    def _start(self, b: wp.array, x: wp.array) -> None:
+        """r = b - A x, z = M r, p = z, and r·z, r·r and b·b, all on the device."""
+        v, s = self._vectors, self.system
+        wp.launch(_k.mask, dim=s.shape, inputs=[s.labels, x], device=s.device)
+        wp.launch(
+            _k.residual, dim=s.shape, inputs=[*s.operator_args(), x, b, v["r"]], device=s.device
+        )
+        wp.copy(v["q"], b)
+        wp.launch(_k.mask, dim=s.shape, inputs=[s.labels, v["q"]], device=s.device)
+        self._dot(v["q"], v["q"], int(_k.BB))
+        self.precondition(v["r"], v["z"])
+        wp.copy(v["p"], v["z"])
+        self._dot(v["r"], v["z"], int(_k.RZ))
+        self._dot(v["r"], v["r"], int(_k.RR))
+
+    def _batch(self, x: wp.array, iterations: int) -> None:
+        """`iterations` CG iterations, then r·r for the convergence check."""
+        for _ in range(iterations):
+            self._iterate(x)
+        self._dot(self._vectors["r"], self._vectors["r"], int(_k.RR))
 
     def solve(
         self,
@@ -339,32 +391,20 @@ class Mgpcg:
         _check_field(self.system, "x", x)
         if check_every < 1 or max_iterations < 0:
             raise ValueError("check_every must be ≥ 1 and max_iterations ≥ 0")
-        v, s = self._vectors, self.system
-        scalars = v["scalars"]
-        wp.launch(_k.mask, dim=s.shape, inputs=[s.labels, x], device=s.device)
-        wp.launch(
-            _k.residual, dim=s.shape, inputs=[*s.operator_args(), x, b, v["r"]], device=s.device
-        )
-        wp.copy(v["q"], b)
-        wp.launch(_k.mask, dim=s.shape, inputs=[s.labels, v["q"]], device=s.device)
-        self._dot(v["q"], v["q"], int(_k.RR))
-        b_norm = math.sqrt(float(scalars.numpy()[int(_k.RR)]))
+        scalars = self._vectors["scalars"]
+        self._run("start", (b, x), lambda: self._start(b, x))
+        values = scalars.numpy()  # the first read-back: b·b and r·r together
+        b_norm = math.sqrt(float(values[int(_k.BB)]))
         if b_norm == 0.0:
             x.zero_()
             return SolveResult(iterations=0, relative_residual=0.0, converged=True)
-        self.precondition(v["r"], v["z"])
-        wp.copy(v["p"], v["z"])
-        self._dot(v["r"], v["z"], int(_k.RZ))
+        relative = math.sqrt(max(float(values[int(_k.RR)]), 0.0)) / b_norm
         done = 0
-        relative = math.inf
-        while True:
-            self._dot(v["r"], v["r"], int(_k.RR))
-            relative = math.sqrt(max(float(scalars.numpy()[int(_k.RR)]), 0.0)) / b_norm
-            if relative <= tolerance or done >= max_iterations:
-                break
+        while relative > tolerance and done < max_iterations:
             batch = min(check_every, max_iterations - done)
-            self._batch(x, batch)
+            self._run(f"batch{batch}", (x,), lambda n=batch: self._batch(x, n))
             done += batch
+            relative = math.sqrt(max(float(scalars.numpy()[int(_k.RR)]), 0.0)) / b_norm
         return SolveResult(
             iterations=done, relative_residual=relative, converged=relative <= tolerance
         )

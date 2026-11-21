@@ -20,6 +20,7 @@ RZ = wp.constant(0)  # r·z of the previous iteration
 PQ = wp.constant(1)  # p·Ap
 RZ_NEW = wp.constant(2)  # r·z of this iteration
 RR = wp.constant(3)  # r·r, for the convergence check
+BB = wp.constant(4)  # b·b over fluid cells, for the relative residual
 
 
 @wp.kernel
@@ -92,12 +93,22 @@ def _neighbour(
 
 
 @wp.func
+def _w(w: wp.array3d(dtype=float), i: int, j: int, k: int, unit: int):
+    """A face weight; 1 without reading memory when the system's weights are all 0 or 1
+    (between two fluid cells, the only faces this is asked for, it is then 1)."""
+    if unit == 1:
+        return 1.0
+    return w[i, j, k]
+
+
+@wp.func
 def _apply_at(
     labels: wp.array3d(dtype=wp.int32),
     diag: wp.array3d(dtype=float),
     wx: wp.array3d(dtype=float),
     wy: wp.array3d(dtype=float),
     wz: wp.array3d(dtype=float),
+    unit: int,
     x: wp.array3d(dtype=float),
     i: int,
     j: int,
@@ -109,17 +120,17 @@ def _apply_at(
     nz = labels.shape[2]
     s = diag[i, j, k] * x[i, j, k]
     if i > 0:
-        s -= _neighbour(labels, x, i - 1, j, k, wx[i, j, k])
+        s -= _neighbour(labels, x, i - 1, j, k, _w(wx, i, j, k, unit))
     if i < nx - 1:
-        s -= _neighbour(labels, x, i + 1, j, k, wx[i + 1, j, k])
+        s -= _neighbour(labels, x, i + 1, j, k, _w(wx, i + 1, j, k, unit))
     if j > 0:
-        s -= _neighbour(labels, x, i, j - 1, k, wy[i, j, k])
+        s -= _neighbour(labels, x, i, j - 1, k, _w(wy, i, j, k, unit))
     if j < ny - 1:
-        s -= _neighbour(labels, x, i, j + 1, k, wy[i, j + 1, k])
+        s -= _neighbour(labels, x, i, j + 1, k, _w(wy, i, j + 1, k, unit))
     if k > 0:
-        s -= _neighbour(labels, x, i, j, k - 1, wz[i, j, k])
+        s -= _neighbour(labels, x, i, j, k - 1, _w(wz, i, j, k, unit))
     if k < nz - 1:
-        s -= _neighbour(labels, x, i, j, k + 1, wz[i, j, k + 1])
+        s -= _neighbour(labels, x, i, j, k + 1, _w(wz, i, j, k + 1, unit))
     return s
 
 
@@ -130,6 +141,7 @@ def apply(
     wx: wp.array3d(dtype=float),
     wy: wp.array3d(dtype=float),
     wz: wp.array3d(dtype=float),
+    unit: int,
     inv_dx2: float,
     x: wp.array3d(dtype=float),
     out: wp.array3d(dtype=float),
@@ -138,7 +150,7 @@ def apply(
     if labels[i, j, k] != FLUID:
         out[i, j, k] = 0.0
         return
-    out[i, j, k] = _apply_at(labels, diag, wx, wy, wz, x, i, j, k) * inv_dx2
+    out[i, j, k] = _apply_at(labels, diag, wx, wy, wz, unit, x, i, j, k) * inv_dx2
 
 
 @wp.kernel
@@ -148,6 +160,7 @@ def residual(
     wx: wp.array3d(dtype=float),
     wy: wp.array3d(dtype=float),
     wz: wp.array3d(dtype=float),
+    unit: int,
     inv_dx2: float,
     x: wp.array3d(dtype=float),
     b: wp.array3d(dtype=float),
@@ -158,7 +171,7 @@ def residual(
     if labels[i, j, k] != FLUID:
         r[i, j, k] = 0.0
         return
-    r[i, j, k] = b[i, j, k] - _apply_at(labels, diag, wx, wy, wz, x, i, j, k) * inv_dx2
+    r[i, j, k] = b[i, j, k] - _apply_at(labels, diag, wx, wy, wz, unit, x, i, j, k) * inv_dx2
 
 
 @wp.kernel
@@ -168,6 +181,7 @@ def jacobi(
     wx: wp.array3d(dtype=float),
     wy: wp.array3d(dtype=float),
     wz: wp.array3d(dtype=float),
+    unit: int,
     inv_dx2: float,
     omega: float,
     x: wp.array3d(dtype=float),
@@ -179,7 +193,7 @@ def jacobi(
     if labels[i, j, k] != FLUID:
         out[i, j, k] = 0.0
         return
-    ax = _apply_at(labels, diag, wx, wy, wz, x, i, j, k) * inv_dx2
+    ax = _apply_at(labels, diag, wx, wy, wz, unit, x, i, j, k) * inv_dx2
     out[i, j, k] = x[i, j, k] + omega * (b[i, j, k] - ax) / (diag[i, j, k] * inv_dx2)
 
 
@@ -331,14 +345,13 @@ def mask(labels: wp.array3d(dtype=wp.int32), x: wp.array3d(dtype=float)):
 
 
 @wp.kernel
-def dot(
+def dot_partial(
     a: wp.array(dtype=float),
     b: wp.array(dtype=float),
     stride: int,
-    scalars: wp.array(dtype=wp.float64),
-    slot: int,
+    partials: wp.array(dtype=wp.float64),
 ):
-    """scalars[slot] += a·b, each thread summing every `stride`-th element in float64."""
+    """partials[t] = Σ a[i]·b[i] over i = t, t + stride, ... in float64 (coalesced reads)."""
     t = wp.tid()
     s = wp.float64(0.0)
     n = a.shape[0]
@@ -346,6 +359,21 @@ def dot(
     while i < n:
         s += wp.float64(a[i]) * wp.float64(b[i])
         i += stride
+    partials[t] = s
+
+
+@wp.kernel
+def sum_partials(
+    partials: wp.array(dtype=wp.float64),
+    group: int,
+    scalars: wp.array(dtype=wp.float64),
+    slot: int,
+):
+    """scalars[slot] += the sum of `group` consecutive partials per thread: few atomics."""
+    g = wp.tid()
+    s = wp.float64(0.0)
+    for i in range(g * group, wp.min((g + 1) * group, partials.shape[0])):
+        s += partials[i]
     wp.atomic_add(scalars, slot, s)
 
 

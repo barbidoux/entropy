@@ -1,5 +1,7 @@
 """Multigrid-preconditioned conjugate gradient (`entropy.linalg.mgpcg`), SPEC 5.2, V-LIQ-05."""
 
+import dataclasses
+
 import numpy as np
 import pytest
 import warp as wp
@@ -101,6 +103,22 @@ def test_the_operator_is_the_7_point_laplacian_among_fluid_cells(device: str) ->
         np.roll(count, shift, axis)[1:-1, 1:-1, 1:-1] for axis in range(3) for shift in (1, -1)
     )
     np.testing.assert_allclose(out.numpy(), (degree * x - neighbours) / h**2, rtol=1e-4, atol=1e-3)
+
+
+def test_stored_face_weights_give_the_same_operator_as_unit_weights(device: str) -> None:
+    """The general path (weights read from arrays) matches the label-derived fast path."""
+    shape = (7, 6, 5)
+    unit = system_from_labels(_labels(_random_labels(shape, 12), device), dx_m=0.1, air_theta=0.6)
+    stored = dataclasses.replace(unit, unit_weights=False)
+    x = _field(np.random.default_rng(13).standard_normal(shape), device)
+    out_unit = wp.zeros(shape, dtype=float, device=device)
+    out_stored = wp.zeros(shape, dtype=float, device=device)
+
+    apply(unit, x, out_unit)
+    apply(stored, x, out_stored)
+
+    assert unit.unit_weights
+    np.testing.assert_allclose(out_stored.numpy(), out_unit.numpy(), rtol=1e-6, atol=1e-6)
 
 
 def test_the_operator_is_symmetric(device: str) -> None:
