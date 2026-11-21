@@ -85,3 +85,43 @@ def test_a_world_without_solvers_still_advances() -> None:
 def test_a_negative_request_is_refused() -> None:
     with pytest.raises(ValueError, match="requested"):
         Simulation([]).step(-0.01)
+
+
+class _BrokenSolver:
+    """Finds its state non-finite on its next call, as the liquid's NaN guard does."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def max_advance_s(self) -> float:
+        return math.inf
+
+    def step(self, dt_s: float, ctx: Any) -> None:
+        self.calls += 1
+        from pathlib import Path
+
+        from entropy.solvers.interface import NonFiniteStateError
+
+        raise NonFiniteStateError(Path("out/nan_dumps/test.npz"))
+
+
+def test_a_non_finite_solver_freezes_the_world() -> None:
+    """SPEC 5.9, 8.1: the simulation stops stepping and says why; nothing advances."""
+    broken = _BrokenSolver()
+    simulation = Simulation([broken])
+
+    assert simulation.step(1.0 / 60.0) == 0.0
+    assert simulation.step(1.0 / 60.0) == 0.0  # stays frozen: no second dump
+    assert broken.calls == 1
+    assert simulation.frozen_because is not None and "test.npz" in simulation.frozen_because
+
+
+def test_unfreezing_lets_the_world_run_again() -> None:
+    """After a checkpoint is restored (#55), the game unfreezes the world."""
+    solver = FakeSolver(name="ok")
+    simulation = Simulation([solver])
+    simulation.frozen_because = "earlier"
+
+    simulation.unfreeze()
+
+    assert simulation.step(1.0 / 60.0) > 0.0

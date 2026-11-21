@@ -1,8 +1,14 @@
-"""`uv run entropy`: open the window and run the M0 scene (SPEC 10.5).
+"""`uv run entropy`: open the window in the Test Tank (SPEC 4.4, 10.5).
 
-Wiring only (ADR 0005, ADR 0010): GLFW callbacks feed God mode's input, the
-frame loop calls the stages below, the renderer draws the scene and the
-interop test pattern, and the HUD shows the frame statistics.
+Wiring only (ADR 0005, ADR 0010): the Test Tank's map gives the world; the world
+gives the liquid's setup and what the renderer draws (floor, glass). GLFW
+callbacks feed God mode's input, the frame loop calls the stages below, the
+liquid's particles reach OpenGL through the interop buffer, and the HUD shows the
+frame statistics.
+
+NaN guard (SPEC 5.9): when the liquid finds a non-finite state it dumps it and
+raises; the game then stops stepping the world, keeps drawing it, and says where
+the dump is.
 """
 
 from __future__ import annotations
@@ -19,7 +25,7 @@ import glfw
 import warp as wp
 
 from entropy.core.config import Settings, default_settings_path, load_settings
-from entropy.core.paths import out_dir
+from entropy.core.paths import content_dir, out_dir
 from entropy.core.profiler import FrameStats, StageTimer, cuda_stage_timer, gpu_memory
 from entropy.game.god_mode import GodMode
 from entropy.game.input import bindings_from_settings
@@ -27,22 +33,27 @@ from entropy.render.camera import CameraView
 from entropy.render.context import GameWindow
 from entropy.render.gl_timer import GlQueries
 from entropy.render.interop import SharedBuffer
-from entropy.render.points import PointsRenderer, write_test_pattern
-from entropy.render.scene import SceneRenderer
+from entropy.render.world_frame import WorldFrame
 from entropy.sim.loop import FrameLoop, LoopSettings
+from entropy.sim.setup import liquid_setup
 from entropy.sim.simulation import Simulation
+from entropy.solvers.liquid.solver import LiquidSolver
 from entropy.ui.hud import PerformanceHud, hud_lines
+from entropy.world.maps import load_map
+from entropy.world.materials import load_material
+from entropy.world.world import build_world
 
 _log = logging.getLogger(__name__)
 
-PATTERN_POINTS = 200_000
+START_MAP = "test_tank"
+"""The map the game opens (SPEC 4.4)."""
 DEFAULT_LOG_PATH = out_dir() / "entropy.log"
 """Where the game logs, next to the clone (`out/` is ignored by git)."""
 CONTROLS_HINT = "clic : regarder   Échap : libérer la souris   F3 : HUD"
 
 
 class GameStages:
-    """The frame loop's stages for the M0 scene."""
+    """The frame loop's stages for the Test Tank."""
 
     def __init__(self, window: GameWindow, settings: Settings, stats: FrameStats) -> None:
         self.window = window
@@ -53,8 +64,11 @@ class GameStages:
         self.mode = GodMode.from_settings(settings.camera, bindings)
         self.device = "cuda:0" if wp.is_cuda_available() else "cpu"
         self._mouse_captured = False
-        self._pattern_time_s = 0.0
-        self.simulation = Simulation([])  # M0 scene: no solver yet; the liquid joins in M1
+        self.world = build_world(load_map(content_dir() / "maps" / START_MAP))
+        setup = liquid_setup(self.world)
+        self.liquid = LiquidSolver.create(setup, self.device) if setup is not None else None
+        self.simulation = Simulation([self.liquid] if self.liquid is not None else [])
+        self.particles_drawn = 0
         # GPU time per stage for the HUD (SPEC 4.7): CUDA events around Warp work,
         # OpenGL timer queries around render passes.
         self.cuda_timer = cuda_stage_timer(self.device)
@@ -64,13 +78,20 @@ class GameStages:
         # Everything made here is released in reverse order, also if a later step fails,
         # while the window and its OpenGL context still exist.
         with ExitStack() as resources:
-            self.scene = SceneRenderer(ctx)
-            resources.callback(self.scene.release)
-            self.pattern = resources.enter_context(
-                SharedBuffer(ctx, PATTERN_POINTS, wp.vec3, self.device)
+            capacity = setup.max_particles if setup is not None else 1
+            self.particles = resources.enter_context(
+                SharedBuffer(ctx, capacity, wp.vec3, self.device)
             )
-            self.points = PointsRenderer(ctx, self.pattern)
-            resources.callback(self.points.release)
+            # Without a liquid nothing is drawn as water; any positive volume will do.
+            volume_m3 = setup.particle_volume_m3 if setup is not None else 1.0
+            self.frame = WorldFrame(
+                ctx,
+                self.world,
+                self.particles,
+                particle_volume_m3=volume_m3,
+                water=load_material("water"),
+            )
+            resources.callback(self.frame.release)
             self.hud = resources.enter_context(PerformanceHud(window.handle))
             self._install_callbacks()
             resources.callback(self._remove_callbacks)
@@ -101,11 +122,18 @@ class GameStages:
         glfw.set_cursor_pos_callback(handle, None)  # pyright: ignore[reportArgumentType]
         glfw.set_mouse_button_callback(handle, None)  # pyright: ignore[reportArgumentType]
 
+    def _particle_count(self) -> int:
+        return int(self.liquid.diagnostics()["particles"]) if self.liquid is not None else 0
+
     def hud_notes(self) -> list[str]:
-        """Extra HUD lines: the controls, the test pattern, and why interop copies, if it does."""
-        notes = [CONTROLS_HINT, f"{PATTERN_POINTS:,} points by Warp (interop test pattern)"]
-        if self.pattern.fallback_reason:
-            notes.append(f"host copy because: {self.pattern.fallback_reason}")
+        """Extra HUD lines: an alert if the world froze, the controls, the map and its
+        water, and why interop copies, if it does."""
+        notes = []
+        if self.simulation.frozen_because:
+            notes.append(f"MONDE ARRÊTÉ : {self.simulation.frozen_because}")
+        notes += [CONTROLS_HINT, f"{self.world.name} : {self._particle_count():,} particules d'eau"]
+        if self.particles.fallback_reason:
+            notes.append(f"host copy because: {self.particles.fallback_reason}")
         return notes
 
     def poll_input(self) -> None:
@@ -120,19 +148,18 @@ class GameStages:
         self.hud.visible = self.mode.hud_visible
 
     def step_simulation(self, dt_s: float) -> float:
-        advanced_s = self.simulation.step(dt_s)
-        self._pattern_time_s += advanced_s
-        return advanced_s
+        with self.cuda_timer.stage("simulation (CUDA)"):
+            return self.simulation.step(dt_s)
 
     def render(self) -> None:
         width, height = self.window.framebuffer_size_px()
         if width == 0 or height == 0:
             return  # minimised
-        with (
-            self.pattern.writable() as positions,
-            self.cuda_timer.stage("test pattern (CUDA)"),
-        ):
-            write_test_pattern(positions, time_s=self._pattern_time_s)
+        count = self._particle_count()
+        if count and self.liquid is not None:
+            with self.particles.writable(count) as positions:
+                wp.copy(positions, self.liquid.fields()["positions_m"], count=count)
+        self.particles_drawn = count
         camera = self.settings.camera
         pose = self.mode.pose
         forward = pose.forward()
@@ -144,14 +171,11 @@ class GameStages:
             far_m=camera.far_m,
         )
         screen = self.window.ctx.screen
-        with self.gl_timer.stage("scene (OpenGL)"):
-            self.scene.render(screen, view, (width, height))
-        with self.gl_timer.stage("points (OpenGL)"):
-            self.points.render(screen, view, (width, height))
+        self.frame.render(screen, view, (width, height), count=count, timer=self.gl_timer)
         lines = hud_lines(
             self.stats.summary(),
             gpu_memory(self.device),
-            interop=self.pattern.mode.value,
+            interop=self.particles.mode.value,
             time_scale=self.loop_settings.time_scale,
             notes=self.hud_notes(),
         )

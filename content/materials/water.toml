@@ -1,6 +1,10 @@
 # Liquid water at 20 °C and 101.325 kPa (SPEC 5.1). SI units; every value cites its source.
 name = "Water"
 density_kg_per_m3 = 998.21
+refractive_index = 1.333
+absorption_per_m_rgb = [0.2644, 0.0565, 0.01011]  # at 610, 550, 465 nm
 
 [source]
 density_kg_per_m3 = "IAPWS-95 formulation (Wagner & Pruß 2002, J. Phys. Chem. Ref. Data 31, 387), 998.21 kg/m³ at 293.15 K and 0.101325 MPa, as tabulated by the NIST Chemistry WebBook (SRD 69), Thermophysical Properties of Fluid Systems: water"
+refractive_index = "IAPWS R9-97, Release on the Refractive Index of Ordinary Water Substance as a Function of Wavelength, Temperature and Pressure: 1.333 at 589 nm, 20 °C and 0.1 MPa"
+absorption_per_m_rgb = "Pope & Fry (1997), Absorption spectrum (380-700 nm) of pure water. II. Integrating cavity measurements, Applied Optics 36, 8710-8723; table as published by OMLC (omlc.org/spectra/water/data/pope97.txt, in 1/cm): 0.002644 at 610 nm, 0.000565 at 550 nm, 0.0001011 at 465 nm, read 2026-11-21. One wavelength per sRGB primary, near its dominant wavelength: a named simplification of the renderer"

@@ -1,6 +1,8 @@
 # Annealed soda-lime silicate glass, the glass of windows and of the Test Tank (SPEC 5.1).
 name = "Annealed glass"
 density_kg_per_m3 = 2500.0
+refractive_index = 1.5
 
 [source]
 density_kg_per_m3 = "EN 572-1:2012+A1:2016, Glass in building - Basic soda lime silicate glass products - Part 1: Definitions and general physical and mechanical properties: density 2,500 kg/m³"
+refractive_index = "EN 572-1:2012+A1:2016, same table as the density: refractive index to visible radiation (380 to 780 nm) 1.5"

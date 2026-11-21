@@ -24,10 +24,83 @@ def test_a_material_holds_the_values_of_its_file(name: str) -> None:
 
 @pytest.mark.parametrize("name", M1_MATERIALS)
 def test_every_constant_cites_a_source(name: str) -> None:
+    raw = tomllib.loads((content_dir() / "materials" / f"{name}.toml").read_text("utf-8"))
     material = load_material(name)
 
-    assert set(material.sources) == {"density_kg_per_m3"}
+    constants = set(raw) - {"name", "source"}
+    assert set(material.sources) == constants
     assert all(source.strip() for source in material.sources.values())
+
+
+def test_the_test_tank_materials_have_what_the_renderer_needs() -> None:
+    """Glass reflects by its refractive index; concrete has a colour (#51)."""
+    assert load_material("glass").refractive_index == pytest.approx(1.5)
+    albedo = load_material("concrete").albedo_linear_rgb
+    assert albedo is not None and all(0.0 < c < 1.0 for c in albedo)
+
+
+def test_optional_constants_are_read_with_their_sources() -> None:
+    text = (
+        'name = "x"\ndensity_kg_per_m3 = 1.0\nrefractive_index = 1.33\n'
+        "albedo_linear_rgb = [0.1, 0.2, 0.3]\nabsorption_per_m_rgb = [0.3, 0.05, 0.01]\n"
+        '[source]\ndensity_kg_per_m3 = "a"\nrefractive_index = "b"\n'
+        'albedo_linear_rgb = "c"\nabsorption_per_m_rgb = "d"\n'
+    )
+
+    material = parse_material(text, origin="x.toml")
+
+    assert material.refractive_index == 1.33
+    assert material.albedo_linear_rgb == (0.1, 0.2, 0.3)
+    assert material.absorption_per_m_rgb == (0.3, 0.05, 0.01)
+    assert set(material.sources) == {
+        "density_kg_per_m3",
+        "refractive_index",
+        "albedo_linear_rgb",
+        "absorption_per_m_rgb",
+    }
+
+
+def test_optional_constants_may_be_left_out() -> None:
+    material = parse_material(
+        'name = "x"\ndensity_kg_per_m3 = 1.0\n[source]\ndensity_kg_per_m3 = "a"\n',
+        origin="x.toml",
+    )
+
+    assert material.refractive_index is None
+    assert material.albedo_linear_rgb is None
+    assert material.absorption_per_m_rgb is None
+
+
+@pytest.mark.parametrize(
+    ("line", "key"),
+    [
+        ("refractive_index = 0.9", "refractive_index"),
+        ("refractive_index = nan", "refractive_index"),
+        ("albedo_linear_rgb = [0.1, 0.2]", "albedo_linear_rgb"),
+        ("albedo_linear_rgb = [0.1, 0.2, 1.5]", "albedo_linear_rgb"),
+        ('albedo_linear_rgb = [0.1, 0.2, "x"]', "albedo_linear_rgb"),
+        ("absorption_per_m_rgb = [0.1, -0.2, 0.3]", "absorption_per_m_rgb"),
+        ("absorption_per_m_rgb = 0.1", "absorption_per_m_rgb"),
+    ],
+)
+def test_an_impossible_optional_constant_is_an_error(line: str, key: str) -> None:
+    text = (
+        f'name = "x"\ndensity_kg_per_m3 = 1.0\n{line}\n'
+        f'[source]\ndensity_kg_per_m3 = "a"\n{key} = "b"\n'
+    )
+
+    with pytest.raises(ValueError, match=f"x.toml: {key}"):
+        parse_material(text, origin="x.toml")
+
+
+def test_an_optional_constant_without_a_source_is_an_error() -> None:
+    text = (
+        'name = "x"\ndensity_kg_per_m3 = 1.0\nrefractive_index = 1.5\n'
+        '[source]\ndensity_kg_per_m3 = "a"\n'
+    )
+
+    with pytest.raises(ValueError, match="refractive_index has no source"):
+        parse_material(text, origin="x.toml")
 
 
 def test_water_is_lighter_than_glass() -> None:

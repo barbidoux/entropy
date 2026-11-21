@@ -1,10 +1,11 @@
-"""The interop test pattern: a cloud of points written by a Warp kernel each frame.
+"""Points from a `SharedBuffer`, for checks and debugging (the game draws water with
+the liquid pass, `entropy.render.liquid`).
 
-This is a visual check of the CUDA-OpenGL path of M0 (ADR 0004), not physics:
-the points follow a fixed formula (a slowly turning spiral galaxy above the
-reference cubes) in simulated time, so the cloud freezes when the world is
-paused. `PointsRenderer` draws any `SharedBuffer` of `vec3` positions as
-points coloured by height.
+`PointsRenderer` draws the first `count` `vec3` positions of a buffer as small
+points of one colour.
+
+`write_test_pattern` is M0's check of the CUDA-OpenGL path (ADR 0004), kept for the
+interop tests: a fixed formula (a slowly turning spiral galaxy), not physics.
 """
 
 from __future__ import annotations
@@ -19,6 +20,8 @@ from entropy.render.interop import SharedBuffer
 
 PATTERN_CENTRE_M = (0.0, 0.0, 6.0)
 PATTERN_RADIUS_M = 4.0
+WATER_BLUE = (0.30, 0.62, 1.0)
+"""Colour of the particles on screen (display sRGB); a look choice."""
 
 
 @wp.kernel
@@ -50,9 +53,7 @@ _VERTEX = """
 #version 450 core
 uniform mat4 view_projection;
 in vec3 position_m;
-out float height;
 void main() {
-    height = position_m.z;
     gl_Position = view_projection * vec4(position_m, 1.0);
     gl_PointSize = 2.0;
 }
@@ -60,12 +61,10 @@ void main() {
 
 _FRAGMENT = """
 #version 450 core
-uniform float centre_z;
-in float height;
+uniform vec3 point_colour;
 out vec4 colour;
 void main() {
-    float t = clamp((height - centre_z) * 0.5 + 0.5, 0.0, 1.0);
-    colour = vec4(mix(vec3(1.0, 0.55, 0.15), vec3(0.35, 0.75, 1.0), t), 1.0);
+    colour = vec4(point_colour, 1.0);
 }
 """
 
@@ -73,11 +72,16 @@ void main() {
 class PointsRenderer:
     """Draws the positions of a SharedBuffer as points."""
 
-    def __init__(self, ctx: moderngl.Context, shared: SharedBuffer) -> None:
+    def __init__(
+        self,
+        ctx: moderngl.Context,
+        shared: SharedBuffer,
+        colour: tuple[float, float, float] = WATER_BLUE,
+    ) -> None:
         self.ctx = ctx
         self.count = shared.count
         self._program = ctx.program(vertex_shader=_VERTEX, fragment_shader=_FRAGMENT)
-        self._program["centre_z"].value = PATTERN_CENTRE_M[2]  # type: ignore[union-attr]
+        self._program["point_colour"].value = colour  # type: ignore[union-attr]
         self._vao = ctx.vertex_array(self._program, [(shared.buffer, "3f", "position_m")])
 
     def render(
@@ -85,17 +89,23 @@ class PointsRenderer:
         target: moderngl.Framebuffer,
         view: CameraView,
         size_px: tuple[int, int] | None = None,
+        *,
+        count: int | None = None,
     ) -> None:
-        """Draw the points over `size_px` of `target` (see `SceneRenderer.render`)."""
+        """Draw the first `count` points (default: all) over `size_px` of `target` (see
+        `SceneRenderer.render`)."""
         width, height = size_px or target.size
-        if width <= 0 or height <= 0:
+        count = self.count if count is None else count
+        if not 0 <= count <= self.count:
+            raise ValueError(f"count must be between 0 and {self.count}, got {count}")
+        if width <= 0 or height <= 0 or count == 0:
             return
         target.use()
         self.ctx.viewport = (0, 0, width, height)
         view_projection = view.projection(width / height) @ view.view()
         self._program["view_projection"].write(gl_bytes(view_projection))  # type: ignore[union-attr]
         self.ctx.enable(moderngl.DEPTH_TEST | moderngl.PROGRAM_POINT_SIZE)
-        self._vao.render(moderngl.POINTS, vertices=self.count)
+        self._vao.render(moderngl.POINTS, vertices=count)
         self.ctx.disable(moderngl.DEPTH_TEST | moderngl.PROGRAM_POINT_SIZE)
 
     def release(self) -> None:
