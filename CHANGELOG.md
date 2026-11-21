@@ -20,6 +20,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   A still tank stays still: after 1 s, 99 % of the particles moved less than 1 mm and
   the surface is within 1 mm of the water's height. A jittered surface settles; a
   falling blob accelerates at g within 2 %.
+- V-LIQ-02 and V-LIQ-03 pass (#50, ADR 0019):
+  - a sloshing tank keeps its volume within 1 % over 2,000 steps (volume from the
+    level set, averaged over each second);
+  - a released column follows Martin & Moyce (1952) within 10 % for T ≤ 3, once
+    the clock is aligned on the first measured point (the experiment's gate took
+    about 13 ms to lift; an instant release leads by 13–18 % otherwise), on 8 cells
+    across the column and at the game's 6.25 cm cells;
+  - the reference data sits in `content/validation/martin_moyce_1952.toml`.
 - Pressure projection of the liquid (#49, `entropy.solvers.liquid.projection`):
   - faces against static solids and walls carry no flow;
   - one θ per fluid-air face from the liquid's level set (second-order free surface,

@@ -535,8 +535,8 @@ Each row is a test, written before the code it validates.
 | ID | Law or experiment | Scenario | Pass criterion | Milestone |
 | --- | --- | --- | --- | --- |
 | V-LIQ-01 | Hydrostatic pressure p = ρgd | Still water 1 m deep | Error ≤ 2 % at every depth | M1 |
-| V-LIQ-02 | Volume conservation | Sloshing tank, 2,000 steps | Drift ≤ 1 % | M1 |
-| V-LIQ-03 | Dam break (Martin & Moyce, 1952) | Column of width a and height 2a; front Z = z/a against T = t·√(2g/a) | Within 10 % of the measured front for T ≤ 3 | M1 |
+| V-LIQ-02 | Volume conservation | Sloshing tank, 2,000 steps; volume from the level set, averaged over each second (ADR 0019) | Drift ≤ 1 % | M1 |
+| V-LIQ-03 | Dam break (Martin & Moyce, 1952) | Column of width a and height 2a; front Z = z/a against T = t·√(2g/a); clock aligned on the first measured point, since the experiment's gate took time to lift (delay ≤ 0.5 in T, ADR 0019) | Within 10 % of the measured front for T ≤ 3 | M1 |
 | V-LIQ-04 | Incompressibility | Any state after projection | Relative residual ≤ 10⁻⁵ | M1 |
 | V-LIQ-05 | Pressure solver order | Manufactured Poisson solution | Error falls about 4× per grid refinement (second order) | M1 |
 | V-RB-01 | Free fall z = z₀ − ½gt² | 1 s fall | Error ≤ 0.5 % | M2 |
@@ -623,7 +623,7 @@ entropy/
     io/          save, export (PLY, OpenVDB, JSON)
     audio/       sound events (M9)
     app/         composition root: window, wiring of the frame loop
-  content/       materials, prefabs, tools, maps (TOML, JSON)
+  content/       materials, prefabs, tools, maps, validation reference data (TOML, JSON)
   tests/         unit, property, validation, golden, render, gameplay, perf
   bench/         benchmark scenarios
   tools/blender/ Blender import script
@@ -805,6 +805,7 @@ Linked entries were checked against the publisher or the authors' page; unlinked
 **Validation data**
 
 - Martin, Moyce (1952). [An Experimental Study of the Collapse of Liquid Columns on a Rigid Horizontal Plane](https://www.math.ntu.edu.tw/~shyue/orch08/benchmarks/lowmach/broken-dam/91519.pdf). Philosophical Transactions of the Royal Society of London, Series A.
+- Lobovsky, Botia-Vera, Castellana, Mas-Soler, Souto-Iglesias (2014). [Experimental investigation of dynamic pressure loads during dam break](https://arxiv.org/abs/1308.0115). Journal of Fluids and Structures, doi:10.1016/j.jfluidstructs.2014.03.009.
 - Ritter (1892), analytical dam-break solution of the shallow-water equations, as summarized in [Dam break flow](https://marinespecies.org/traits/wiki/Dam_break_flow) (Coastal Wiki).
 
 **Rendering**

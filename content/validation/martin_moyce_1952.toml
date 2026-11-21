@@ -1,0 +1,12 @@
+# Dam break: surge front of a collapsing water column (V-LIQ-03, US-02).
+# Column of width a and height 2a (n² = 2), a = 2.25 in, released at t = 0 on a dry,
+# rigid horizontal floor. Dimensionless: front position Z = z/a (z from the wall behind
+# the column), time T = t·sqrt(2g/a).
+name = "Martin & Moyce (1952), surge front, n² = 2, a = 2.25 in"
+height_over_width = 2.0
+time_dimensionless = [0.832, 1.219, 1.997, 2.547, 3.345, 4.034, 4.418, 5.091, 5.685, 6.306, 6.822, 7.439, 8.031, 8.633, 9.237]
+front_dimensionless = [1.217, 1.474, 2.292, 2.995, 4.134, 4.944, 5.881, 6.980, 7.945, 8.966, 9.986, 10.963, 11.977, 13.005, 13.970]
+
+[source]
+experiment = "J. C. Martin and W. J. Moyce (1952). Part IV. An experimental study of the collapse of liquid columns on a rigid horizontal plane. Philosophical Transactions of the Royal Society A 244 (882), 312-324, Figure 3."
+data = "Digitised from Figure 3 by the PySPH project: array mm_data_2 ('data for n^2=2 and a=2.25 from Figure 3') in pysph/examples/db_exp_data.py, https://github.com/pypr/pysph (BSD licence), read 2026-11-21. The paper itself was not accessible, so these values are not yet checked against it: the physics auditor checks them at the M1 gate (#58)."
