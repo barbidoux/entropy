@@ -50,7 +50,7 @@ Future ideas, not committed: earthquakes, lava, tornadoes, vehicles, ragdolls, v
 
 ## 3. Target platform & performance budgets
 
-The game targets one machine: a Dell Precision 7780 laptop with an RTX 4090 Laptop GPU, running natively on Windows, plugged in, in performance power mode. A typical scene must hold at least 30 fps, sustained after thermal warm-up.
+The game targets one machine: a Dell Precision 7780 laptop with an RTX 4090 Laptop GPU, running natively on Windows, plugged in, in performance power mode, with the Dell thermal profile *Optimized*. A typical scene must hold at least 30 fps, sustained after thermal warm-up.
 
 | Component | Specification |
 | --- | --- |
@@ -83,7 +83,9 @@ Recalibrated by the M0 measurements (`docs/benchmarks/2026-11-20-m0-laptop.md`, 
 | Shallow water (street, M8) | 1024 × 1024 cells at 25 cm; about 0.23 ms per step by bandwidth bound, and a 4 m surge needs about 7 steps per 1/30 s frame (Δt ≤ Δx/4a with a = |u| + √(gh), the CFL limit of Kurganov & Petrova's 2D scheme), so about 1.6 ms per frame: at risk, M8 decides | 1 |
 | Blast model and coupling | analytic, per event (checked in M5) | 1 |
 
-**Measured hardware limits (M0, provisional until the Dell thermal profile is confirmed)**
+**Measured hardware limits (M0)**
+
+Matt confirmed on 2026-11-21 that the Dell thermal profile is *Optimized*; nothing suggests it changed since the M0 sessions, so these limits hold for that profile. A higher profile (*Ultra Performance*) may raise the power limit; it is not measured and nothing is budgeted on it.
 
 - Planning bandwidth (estimate): 450 GB/s for read-write streaming in the sustained state, the 503 GB/s copy measured at the full 9001 MHz memory clock scaled to the 8001 MHz seen under the power cap (the 192³ streaming pass measured 462 GB/s during a run in which the memory clock fell to 8001 MHz). A kernel moving B bytes per cell over N cells costs at least B·N / 450 GB/s. Grids that fit in the 64 MiB L2 cache run up to twice as fast; solvers with many live fields should not count on it.
 - Sustained GPU state after warm-up, over the two M0 sessions: 82–93 °C, enforced power limit 110–122 W, thermal and power capped; SM clock 1.05–2.3 GHz, memory clock 7001–9001 MHz (7001 MHz seen once, at the start of a benchmark). Estimates use the DRAM rate of 28 ps per cell per sweep for planning and each grid's slower L2 rate (house 15.0 ps, 128³ 15.2 ps) as the optimistic end.

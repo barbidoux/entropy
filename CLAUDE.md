@@ -69,6 +69,8 @@ uv run pyright
 - The game runs natively on Windows, never in WSL (CUDA–OpenGL interop).
 - Claude reaches it through the Claude desktop app once Matt connects the clone's folder.
   Suggested location: `GITREPOS\entropy` in his home folder (open decision, SPEC 13).
+- Dell thermal profile: *Optimized* (Matt, 2026-11-21). Windows cannot read it, so ask
+  Matt before an official session if it may have changed.
 - Run benchmarks plugged in, in performance power mode, after a 5-minute warm-up.
 
 ## Where things are
