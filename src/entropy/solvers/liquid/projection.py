@@ -7,7 +7,9 @@ divergence-free in the water:
 2. One θ per fluid-air face comes from the liquid's level set `phi_m` (negative in
    the water, metres): the fraction of the way to the air cell's centre where it
    crosses zero. This is the second-order free surface (Enright et al. 2003).
-3. Solve A p = -(rho/dt) div(u*) with MGPCG (ADR 0016), starting from the last pressure.
+3. Solve A p = -(rho/dt) (div(u*) - d) with MGPCG (ADR 0016), starting from the last
+   pressure. d is a target divergence (1/s), zero unless the caller asks for one: the
+   liquid's volume correction asks crowded cells to expand (ADR 0018).
 4. u = u* - dt/rho grad(p). A missing air pressure is the ghost value that puts p = 0 at θ.
 
 Each substep the caller writes `labels` (fluid, air, solid; `entropy.linalg.mgpcg`
@@ -48,6 +50,8 @@ class Projection:
         """The liquid's signed distance at cell centres (m), negative in the water."""
         self.pressure_pa = wp.zeros(shape, dtype=float, device=device)
         """The last pressure (Pa): the result, and the next solve's starting point."""
+        self.target_divergence_per_s = wp.zeros(shape, dtype=float, device=device)
+        """Divergence (1/s) the fluid cells should have after projection; 0 by default."""
         self._theta = tuple(
             wp.ones(spec.face_shape(axis), dtype=float, device=device) for axis in range(3)
         )
@@ -87,7 +91,13 @@ class Projection:
         wp.launch(
             _k.right_hand_side,
             dim=self.spec.shape,
-            inputs=[self.labels, self._divergence, -self.density_kg_per_m3 / dt_s, self._rhs],
+            inputs=[
+                self.labels,
+                self._divergence,
+                self.target_divergence_per_s,
+                -self.density_kg_per_m3 / dt_s,
+                self._rhs,
+            ],
             device=self.device,
         )
         result = self.solver.solve(self._rhs, self.pressure_pa, tolerance=tolerance)

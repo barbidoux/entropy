@@ -236,3 +236,18 @@ def test_cpu_and_cuda_project_alike() -> None:
 
     np.testing.assert_allclose(results[0][0], results[1][0], rtol=1e-3, atol=1e-4)
     np.testing.assert_allclose(results[0][1], results[1][1], rtol=1e-3, atol=1e-2)
+
+
+def test_a_target_divergence_is_what_the_fluid_cells_get(device: str) -> None:
+    """The liquid's volume correction asks crowded cells to expand: after projection the
+    fluid cells' divergence is the target, not zero (ADR 0018)."""
+    projection, velocity, labels = _random_scene(5, device)
+    target = np.where(labels == CELL_FLUID, 0.3, 0.0).astype(np.float32)
+    wp.copy(projection.target_divergence_per_s, wp.array(target, dtype=float, device=device))
+
+    result = projection.project(velocity, DT_S)
+
+    fluid = labels == CELL_FLUID
+    after = _divergence(velocity)[fluid]
+    assert result.converged
+    np.testing.assert_allclose(after, 0.3, atol=1e-4 * 0.3 + 2e-5)

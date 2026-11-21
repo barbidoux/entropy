@@ -7,6 +7,29 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- The liquid's full step (#50, `entropy.solvers.liquid.solver.LiquidSolver`):
+  - each substep: particles to grid, gravity, density and level set from the
+    particles' mass (the surface where the density is ½, ADR 0018), a volume
+    correction (local density, and volume control after Kim et al. 2007), the
+    projection, two layers of velocity extrapolated into the air, grid to particles,
+    midpoint motion kept inside the grid and out of static solids;
+  - substeps from the previous frame's speed and from added particles' speed
+    (ADR 0013), at most 4; frames that needed more are counted as overruns;
+  - NaN guard: a non-finite state stops the liquid until `restore`, and its dump holds
+    the state the failing frame started from and its time step, to replay it;
+  - the projection takes a target divergence; `Solver` gains `max_advance_s()`
+    (SPEC 8.2).
+
+  A still tank stays still: after 1 s, 99 % of the particles moved less than 1 mm and
+  the surface is within 1 mm of the water's height. A jittered surface settles; a
+  falling blob accelerates at g within 2 %.
+- V-LIQ-02 and V-LIQ-03 pass (#50, ADR 0019):
+  - a sloshing tank keeps its volume within 1 % over 33 s (measured: 0.6 %);
+  - a 1 m column at the game's 6.25 cm cells follows the means of Martin & Moyce's
+    Table 2 within 7 % for 1.19 ≤ T ≤ 3 (measured: −3.2 to +1.4 %), with the
+    simulated clock delayed by a fixed 0.25, since the paper's clock starts before
+    the water moved;
+  - the paper's Table 2 sits in `content/validation/martin_moyce_1952.toml`.
 - Pressure projection of the liquid (#49, `entropy.solvers.liquid.projection`):
   - faces against static solids and walls carry no flow;
   - one θ per fluid-air face from the liquid's level set (second-order free surface,

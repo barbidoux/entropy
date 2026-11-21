@@ -36,3 +36,10 @@ class Solver(Protocol):
     def diagnostics(self) -> dict[str, float]:
         """Counts and timings for the HUD: particles, cells, substeps, iterations."""
         ...
+
+    def max_advance_s(self) -> float:
+        """Largest advance (s) the solver can take within its substep cap; math.inf if
+        unlimited (ADR 0013). From the previous frame's speeds: never waits for the GPU.
+        Always positive for a finite state: 0 would hold the world for good, since a held
+        world never updates the speeds the limit comes from."""
+        ...

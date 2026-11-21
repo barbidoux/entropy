@@ -1,0 +1,26 @@
+# Dam break: surge front of a collapsing water column (V-LIQ-03, US-02).
+# A column of width a and height 2a (n² = 2) on a dry, rigid horizontal floor, held by
+# a waxed-paper diaphragm freed by an electric heater strip. Dimensionless: front
+# position Z = z/a (z from the wall behind the column), time T = t·sqrt(2g/a).
+#
+# The time origin is a convention of the paper, not the moment the water was released:
+# each record was rescaled so that T = 1.19 when Z = 1.44, which is about the time since
+# the heater current was applied (p. 314 and Table 2's footnote). The first motion came
+# up to T = 0.23 after the current (Table 6). See ADR 0019.
+name = "Martin & Moyce (1952), surge front, n² = 2: means of the records in Table 2"
+height_over_width = 2.0
+clock_point = [1.44, 1.19]  # (Z, T) where the paper fixed every record's clock
+
+[column_2_25_in]
+width_m = 0.05715
+front_dimensionless = [1.11, 1.22, 1.44, 1.67, 1.89, 2.11, 2.33, 2.56, 2.78, 3.00, 3.22, 3.44, 3.67, 3.89, 4.11, 5.00, 5.89, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0]
+time_dimensionless = [0.41, 0.84, 1.19, 1.43, 1.63, 1.83, 1.98, 2.20, 2.32, 2.51, 2.65, 2.83, 2.97, 3.11, 3.33, 4.02, 4.44, 5.09, 5.69, 6.30, 6.83, 7.44, 8.08, 8.67, 9.31]
+
+[column_1_125_in]
+width_m = 0.028575
+front_dimensionless = [1.22, 1.44, 1.89, 2.33, 2.78, 3.22, 3.67, 4.11, 4.56, 5.00, 5.44, 5.89, 6.33, 6.76]
+time_dimensionless = [0.82, 1.19, 1.58, 1.91, 2.23, 2.58, 2.91, 3.26, 3.60, 3.92, 4.26, 4.61, 4.95, 5.32]
+
+[source]
+experiment = "J. C. Martin and W. J. Moyce (1952). Part IV. An experimental study of the collapse of liquid columns on a rigid horizontal plane. Philosophical Transactions of the Royal Society A 244 (882), 312-324: release and clock pp. 313-314, Table 2 (surge front, n² = 2), Table 6 (onset of motion)."
+data = "Means of the records in Table 2, read from a scan of the paper (math.ntu.edu.tw/~shyue/orch08/benchmarks/lowmach/broken-dam/91519.pdf) by ENTROPY's physics auditor, 2026-11-21. PySPH's digitisation of Figure 3 (pysph/examples/db_exp_data.py, mm_data_1 and mm_data_2) agrees within about 0.04 in T but reads about 2 % low in Z at T = 2.0-2.55, so the table is used instead."
