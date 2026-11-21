@@ -1,8 +1,11 @@
 """The assembled game runs (`entropy.app.main`): window, loop, scene, interop, HUD."""
 
 import dataclasses
+from collections.abc import Iterator
+from pathlib import Path
 
 import glfw
+import numpy as np
 import pytest
 import warp as wp
 
@@ -11,8 +14,60 @@ from entropy.app.main import GameStages, run
 from entropy.core.config import Settings, WindowSettings
 from entropy.core.profiler import FrameStats
 from entropy.render.context import GameWindow
+from entropy.solvers.liquid.solver import NonFiniteStateError, fill_box
 
 pytestmark = pytest.mark.render
+
+
+@pytest.fixture
+def stages(window_settings: WindowSettings) -> Iterator[GameStages]:
+    with GameWindow(window_settings, visible=False) as window:
+        made = GameStages(
+            window, dataclasses.replace(Settings(), window=window_settings), FrameStats()
+        )
+        try:
+            yield made
+        finally:
+            made.release()
+
+
+def test_the_game_starts_in_the_test_tank(stages: GameStages) -> None:
+    """#51: the Test Tank's world, its liquid in the simulation, its floor and glass drawn."""
+    assert stages.world.name == "Test Tank"
+    assert stages.liquid is not None
+    assert stages.simulation.solvers == (stages.liquid,)
+    assert len(stages.scene.boxes) == 1  # the concrete slab
+    assert len(stages.glass.panels) == 5  # the tank's floor and walls
+    assert any("Test Tank" in note for note in stages.hud_notes())
+
+
+def test_the_liquid_s_particles_are_drawn(stages: GameStages) -> None:
+    assert stages.liquid is not None
+    stages.liquid.add_particles(fill_box((-0.5, -0.5, 0.0), (0.5, 0.5, 0.5), 0.0625, 8, seed=1))
+
+    stages.step_simulation(1.0 / 60.0)
+    stages.render()
+
+    assert stages.points_drawn == stages.liquid.diagnostics()["particles"] == 16 * 16 * 8 * 8
+    assert any(f"{16 * 16 * 8 * 8:,}" in note for note in stages.hud_notes())
+
+
+def test_a_non_finite_liquid_freezes_the_world_and_says_so(
+    stages: GameStages, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SPEC 5.9: the solver dumps its state; the game stops stepping and alerts."""
+    assert stages.liquid is not None
+
+    def broken_step(dt_s: float, ctx: object = None) -> None:
+        raise NonFiniteStateError(Path("out/nan_dumps/liquid-test.npz"))
+
+    monkeypatch.setattr(stages.liquid, "step", broken_step)
+
+    assert stages.step_simulation(1.0 / 60.0) == 0.0
+    assert stages.step_simulation(1.0 / 60.0) == 0.0  # stays frozen
+    notes = "\n".join(stages.hud_notes())
+    assert "liquid-test.npz" in notes
+    assert np.isfinite(stages.loop_settings.time_scale)
 
 
 def test_the_game_runs_a_few_frames_headless(window_settings: WindowSettings) -> None:
@@ -32,8 +87,8 @@ def test_the_game_records_gpu_time_per_stage(window_settings: WindowSettings) ->
     stats = run(settings, visible=False, max_frames=10)
 
     gpu = stats.summary().gpu_ms_mean
-    assert {"scene (OpenGL)", "points (OpenGL)", "HUD (OpenGL)"} <= gpu.keys()
-    assert ("test pattern (CUDA)" in gpu) == wp.is_cuda_available()
+    assert {"scene (OpenGL)", "glass (OpenGL)", "points (OpenGL)", "HUD (OpenGL)"} <= gpu.keys()
+    assert ("liquid (CUDA)" in gpu) == wp.is_cuda_available()
     assert all(ms >= 0.0 for ms in gpu.values())
 
 
@@ -61,7 +116,7 @@ def test_hud_notes_give_the_controls_and_any_interop_fallback(
             window, dataclasses.replace(Settings(), window=window_settings), FrameStats()
         )
         try:
-            stages.pattern.fallback_reason = "CUDA-OpenGL registration failed: test"
+            stages.particles.fallback_reason = "CUDA-OpenGL registration failed: test"
             notes = stages.hud_notes()
 
             assert any("Échap" in note for note in notes)
@@ -78,7 +133,7 @@ def test_a_failed_set_up_releases_what_it_made(
     original = app_main.SharedBuffer.release
 
     def counting_release(self: app_main.SharedBuffer) -> None:
-        released.append("pattern")
+        released.append("particles")
         original(self)
 
     def broken_hud(*args: object, **kwargs: object) -> None:
@@ -92,7 +147,7 @@ def test_a_failed_set_up_releases_what_it_made(
                 window, dataclasses.replace(Settings(), window=window_settings), FrameStats()
             )
 
-        assert released == ["pattern"]
+        assert released == ["particles"]
 
 
 def test_glfw_events_reach_god_mode(window_settings: WindowSettings) -> None:

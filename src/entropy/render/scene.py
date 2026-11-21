@@ -1,4 +1,7 @@
-"""The empty lit scene of M0: sky, ground with a metre grid, sun, reference cubes.
+"""The lit scene: sky, ground with a metre grid, sun, and opaque boxes.
+
+M0 drew five reference cubes (the default); a world gives its own boxes and
+ground height (`entropy.render.world_view`, #51).
 
 A simple placeholder renderer until the passes of SPEC 7.2. Lighting is
 computed in linear RGB: Lambert diffuse from one directional sun plus a sky
@@ -15,6 +18,9 @@ Simplifications, named (CLAUDE.md rule 7):
 """
 
 from __future__ import annotations
+
+from collections.abc import Sequence
+from dataclasses import dataclass
 
 import moderngl
 import numpy as np
@@ -44,6 +50,26 @@ REFERENCE_CUBES = (
 """Cubes of known size, so scale and lighting can be judged."""
 
 
+@dataclass(frozen=True)
+class SceneBox:
+    """An opaque axis-aligned box: centre and half sizes in metres, linear albedo."""
+
+    centre_m: tuple[float, float, float]
+    half_size_m: tuple[float, float, float]
+    albedo_linear_rgb: tuple[float, float, float]
+
+
+M0_BOXES = tuple(
+    SceneBox(
+        (base[0], base[1], base[2] + edge / 2),
+        (edge / 2, edge / 2, edge / 2),
+        albedo,
+    )
+    for base, edge, albedo in REFERENCE_CUBES
+)
+"""The M0 scene's reference cubes as boxes."""
+
+
 def srgb_from_linear(value: float) -> float:
     """The sRGB transfer function (IEC 61966-2-1), linear [0, 1] to encoded [0, 1].
 
@@ -54,7 +80,7 @@ def srgb_from_linear(value: float) -> float:
     return 1.055 * value ** (1.0 / 2.4) - 0.055
 
 
-_DISPLAY = """
+DISPLAY_GLSL = """
 uniform float exposure;
 
 vec3 aces(vec3 x) {
@@ -70,7 +96,7 @@ vec3 display(vec3 radiance) {
 }
 """
 
-_SKY = """
+SKY_GLSL = """
 uniform vec3 sun_direction;
 uniform vec3 horizon;
 
@@ -109,8 +135,8 @@ void main() {
 }
 """,
     "#version 450 core\n"
-    + _DISPLAY
-    + _SKY
+    + DISPLAY_GLSL
+    + SKY_GLSL
     + """
 in vec3 ray;
 out vec4 colour;
@@ -132,7 +158,7 @@ void main() {
 }
 """,
     "#version 450 core\n"
-    + _DISPLAY
+    + DISPLAY_GLSL
     + _LIGHTING
     + """
 uniform vec3 eye_m;
@@ -165,17 +191,17 @@ _CUBE_PROGRAM = (
 #version 450 core
 uniform mat4 view_projection;
 uniform vec3 base_m;
-uniform float edge_m;
+uniform vec3 size_m;
 in vec3 corner;
 in vec3 normal;
 out vec3 face_normal;
 void main() {
     face_normal = normal;
-    gl_Position = view_projection * vec4(base_m + corner * edge_m, 1.0);
+    gl_Position = view_projection * vec4(base_m + corner * size_m, 1.0);
 }
 """,
     "#version 450 core\n"
-    + _DISPLAY
+    + DISPLAY_GLSL
     + _LIGHTING
     + """
 uniform vec3 albedo;
@@ -188,7 +214,7 @@ void main() {
 )
 
 
-def _cube_vertices() -> np.ndarray:
+def cube_vertices() -> np.ndarray:
     """36 vertices (corner, normal) of a unit cube standing on z = 0, counter-clockwise."""
     faces = []
     for axis in range(3):
@@ -206,10 +232,17 @@ def _cube_vertices() -> np.ndarray:
 
 
 class SceneRenderer:
-    """Draws the M0 scene into a framebuffer for a camera view."""
+    """Draws the sky, the ground at `ground_z_m` and `boxes` for a camera view."""
 
-    def __init__(self, ctx: moderngl.Context) -> None:
+    def __init__(
+        self,
+        ctx: moderngl.Context,
+        boxes: Sequence[SceneBox] = M0_BOXES,
+        *,
+        ground_z_m: float = 0.0,
+    ) -> None:
         self.ctx = ctx
+        self.boxes = tuple(boxes)
         self._sky = ctx.program(vertex_shader=_SKY_PROGRAM[0], fragment_shader=_SKY_PROGRAM[1])
         self._ground = ctx.program(
             vertex_shader=_GROUND_PROGRAM[0], fragment_shader=_GROUND_PROGRAM[1]
@@ -217,15 +250,15 @@ class SceneRenderer:
         self._cube = ctx.program(vertex_shader=_CUBE_PROGRAM[0], fragment_shader=_CUBE_PROGRAM[1])
         self._sky_vao = ctx.vertex_array(self._sky, [])
 
-        h = GROUND_HALF_SIZE_M
+        h, z = GROUND_HALF_SIZE_M, ground_z_m
         ground = np.array(
-            [[-h, -h, 0], [h, -h, 0], [h, h, 0], [-h, -h, 0], [h, h, 0], [-h, h, 0]], dtype="f4"
+            [[-h, -h, z], [h, -h, z], [h, h, z], [-h, -h, z], [h, h, z], [-h, h, z]], dtype="f4"
         )
         self._ground_buffer = ctx.buffer(ground.tobytes())
         self._ground_vao = ctx.vertex_array(
             self._ground, [(self._ground_buffer, "3f", "position_m")]
         )
-        self._cube_buffer = ctx.buffer(_cube_vertices().tobytes())
+        self._cube_buffer = ctx.buffer(cube_vertices().tobytes())
         self._cube_vao = ctx.vertex_array(
             self._cube, [(self._cube_buffer, "3f 3f", "corner", "normal")]
         )
@@ -276,10 +309,11 @@ class SceneRenderer:
         self._ground_vao.render(moderngl.TRIANGLES)
 
         self._cube["view_projection"].write(matrix)  # type: ignore[union-attr]
-        for base_m, edge_m, albedo in REFERENCE_CUBES:
-            self._cube["base_m"].value = base_m  # type: ignore[union-attr]
-            self._cube["edge_m"].value = edge_m  # type: ignore[union-attr]
-            self._cube["albedo"].value = albedo  # type: ignore[union-attr]
+        for box in self.boxes:
+            (cx, cy, cz), (hx, hy, hz) = box.centre_m, box.half_size_m
+            self._cube["base_m"].value = (cx, cy, cz - hz)  # type: ignore[union-attr]
+            self._cube["size_m"].value = (2 * hx, 2 * hy, 2 * hz)  # type: ignore[union-attr]
+            self._cube["albedo"].value = box.albedo_linear_rgb  # type: ignore[union-attr]
             self._cube_vao.render(moderngl.TRIANGLES)
         ctx.disable(moderngl.DEPTH_TEST | moderngl.CULL_FACE)
 

@@ -7,6 +7,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- The game starts in the Test Tank (#51):
+  - `entropy.sim.setup.liquid_setup` builds the liquid from the world. Its grid spans
+    the tank's cavity plus 0.5 m of air above, in 6.25 cm cells; other solids inside
+    become its static solid;
+  - `entropy.render.world_view` draws the concrete slab with its material's colour,
+    and the glass as panels that reflect the sky by Fresnel's law (n from
+    `glass.toml`; no refraction, a named simplification); the ground lies under the
+    lowest solid;
+  - the liquid's particles show as blue points until the liquid pass (#52);
+  - a non-finite liquid stops the world, which stays on screen, and the HUD says
+    where the dump is (SPEC 5.9);
+  - materials take optional constants with sources: refractive index, albedo, and
+    absorption per metre.
 - The liquid's full step (#50, `entropy.solvers.liquid.solver.LiquidSolver`):
   - each substep: particles to grid, gravity, density and level set from the
     particles' mass (the surface where the density is ½, ADR 0018), a volume

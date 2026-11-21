@@ -399,6 +399,8 @@ The real-time renderer uses OpenGL 4.6 and reads simulation data straight from G
 | Volumes | Ray marching of smoke, fire, dust and steam at half resolution with temporal reprojection; single scattering with shadows; blackbody emission; soot extinction | 2.5 |
 | Post and UI | Bloom for fire glow, exposure, ACES tone mapping, Dear ImGui overlay | 0.5 |
 
+Simplification until the solids pass: a forward placeholder draws the static solids (`entropy.render.world_view`). Boxes are lit by Lambert's law under uncalibrated light, and glass panels reflect the sky by Fresnel's law with no refraction or absorption. Until the liquid pass (#52), the liquid's particles show as points.
+
 Fire also lights the scene: a few dynamic point lights follow the hottest cells, so rooms flicker orange.
 
 **Fire colour is computed, not painted.** Planck's law gives the light emitted at each wavelength by gas at temperature T. Integrated against the CIE colour-matching functions, it gives a lookup table from 500 K to 3,000 K, converted to sRGB. A test checks the table against reference chromaticities.
