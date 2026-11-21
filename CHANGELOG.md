@@ -7,6 +7,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Solver interface and APIC transfers (#48):
+  - `entropy.solvers.interface.Solver` (SPEC 8.2), re-exported by the package root;
+  - `entropy.solvers.liquid`: particles with position, velocity and the APIC affine
+    matrix, and quadratic B-spline transfers to and from the MAC grid.
+
+  Nodes outside the grid take the nearest sample (ADR 0015): no mass is lost at the
+  walls, and a uniform flow stays uniform up to them. For particles at least one cell
+  inside the grid, the transfers keep affine fields exactly and conserve mass, momentum
+  and APIC angular momentum. NaN positions reach the grid as NaN.
 - MGPCG pressure solver (#46, `entropy.linalg.mgpcg`):
   - cell labels (fluid, air, solid), face weights and a ghost-fluid θ, for the
     second-order free surface;
