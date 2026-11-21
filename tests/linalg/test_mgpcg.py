@@ -237,18 +237,24 @@ def test_refresh_relabels_in_place_and_solves_the_new_problem(device: str) -> No
     solver.solve(_field(rng.standard_normal(shape), device), x)
     diag_before = solver.system.diag
 
+    # The free surface drops by 4 cells, so the coarse levels change too.
     new_labels = _random_labels(shape, 22)
+    new_labels[:, :, -5:] = CELL_AIR
     wp.copy(labels, _labels(new_labels, device))
     solver.refresh()
     b = np.where(new_labels == CELL_FLUID, rng.standard_normal(shape), 0.0)
     x.zero_()
-    result = solver.solve(_field(b, device), x)
+    result = solver.solve(_field(b, device), x, check_every=1)
 
     fresh = Mgpcg(system_from_labels(_labels(new_labels, device), dx_m=0.1, air_theta=0.5))
     expected = wp.zeros(shape, dtype=float, device=device)
-    fresh.solve(_field(b, device), expected)
+    fresh_result = fresh.solve(_field(b, device), expected, check_every=1)
     assert result.converged and solver.system.diag is diag_before
-    np.testing.assert_allclose(x.numpy(), expected.numpy(), rtol=1e-4, atol=1e-5)
+    assert result.iterations == fresh_result.iterations
+    if device == "cpu":  # CPU runs are bit-for-bit reproducible (SPEC 9.6)
+        np.testing.assert_array_equal(x.numpy(), expected.numpy())
+    else:
+        np.testing.assert_allclose(x.numpy(), expected.numpy(), rtol=1e-4, atol=1e-5)
 
 
 def test_multigrid_iterations_barely_grow_with_the_grid(device: str) -> None:
@@ -269,6 +275,22 @@ def test_multigrid_iterations_barely_grow_with_the_grid(device: str) -> None:
         counts.append(result.iterations)
 
     assert counts[1] <= counts[0] + 2, counts
+
+
+def test_a_single_sweep_on_a_single_level_is_damped_jacobi(device: str) -> None:
+    """z = ω Δx² r / diag on fluid cells: an odd sweep count must still land in z."""
+    shape = (8, 7, 6)
+    labels = _random_labels(shape, 25)
+    system = system_from_labels(_labels(labels, device), dx_m=0.1, air_theta=0.5)
+    solver = Mgpcg(system, min_coarse_cells=10**6, coarsest_sweeps=1)
+    r = np.where(labels == CELL_FLUID, np.random.default_rng(26).standard_normal(shape), 0.0)
+    z = wp.zeros(shape, dtype=float, device=device)
+
+    solver.precondition(_field(r, device), z)
+
+    assert solver.levels == 1
+    expected = solver.omega * 0.1**2 * r / system.diag.numpy()
+    np.testing.assert_allclose(z.numpy(), np.where(labels == CELL_FLUID, expected, 0.0), rtol=1e-5)
 
 
 @pytest.mark.parametrize("sweeps", [1, 2, 3])
