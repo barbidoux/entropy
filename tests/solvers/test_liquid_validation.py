@@ -28,10 +28,11 @@ def _liquid(shape: tuple[int, int, int], dx_m: float, device: str) -> LiquidSolv
 
 
 class _Volume:
-    """The water's volume (m³) from its level set: the share of 4³ points per cell where
-    the level set, interpolated between cell centres, is negative."""
+    """The water's volume (m³) from its level set: the share of 8³ points per cell where
+    the level set, interpolated between cell centres, is negative (ADR 0019; 4³ points
+    snap a flat surface to quarter cells, about 2 % of this tank's depth)."""
 
-    def __init__(self, spec: GridSpec, device: str, per_axis: int = 4) -> None:
+    def __init__(self, spec: GridSpec, device: str, per_axis: int = 8) -> None:
         offsets = (np.arange(per_axis) + 0.5) / per_axis
         axes = [
             spec.origin_m[a] + np.add.outer(np.arange(n), offsets).ravel() * spec.dx_m
@@ -50,12 +51,13 @@ class _Volume:
 
 @pytest.mark.slow
 def test_v_liq_02_a_sloshing_tank_keeps_its_volume(device: str) -> None:
-    """V-LIQ-02: a tank released with a tilted surface sloshes for 2,000 steps. Its volume,
-    averaged over each second, drifts by at most 1 %.
+    """V-LIQ-02 (ADR 0019): a tank released with a tilted surface sloshes for 33 s
+    (2,000 frames of 1/60 s). Its particles stay the same; its volume, from the level set
+    and averaged over each second, stays within 1 % of the first second's.
 
-    The level set of a few particles per cell wobbles by about ±1 % from step to step
-    on this small grid (ADR 0019); the particles themselves carry a fixed volume. The
-    second's mean keeps the drift and drops the wobble."""
+    The level set of a few particles per cell wobbles by a few tenths of a per cent from
+    frame to frame on this small grid; the second's mean keeps any drift and drops the
+    wobble. The volume is measured every third frame, 20 times a second."""
     dx_m = 1.0 / 16.0
     shape = (16, 4, 16)
     liquid = _liquid(shape, dx_m, device)
@@ -66,21 +68,31 @@ def test_v_liq_02_a_sloshing_tank_keeps_its_volume(device: str) -> None:
     nominal_m3 = len(points) * dx_m**3 / 8
 
     volumes = []
-    for _ in range(2000):
+    for frame in range(2000):
         liquid.step(FRAME_S)
-        volumes.append(volume(liquid))
+        if frame % 3 == 0:
+            volumes.append(volume(liquid))
 
+    assert liquid.diagnostics()["particles"] == len(points)
     assert volumes[0] == pytest.approx(nominal_m3, rel=0.01)  # the measure is sound
-    per_second = np.asarray(volumes[: 2000 // 60 * 60]).reshape(-1, 60).mean(axis=1)
+    per_second = np.asarray(volumes[: len(volumes) // 20 * 20]).reshape(-1, 20).mean(axis=1)
     assert np.abs(per_second / per_second[0] - 1.0).max() <= 0.01
     speeds = np.linalg.norm(liquid.particle_velocities(), axis=1)
     assert speeds.max() > 0.05  # it was still sloshing: the test saw moving water
 
 
+CLOCK_DELAY = 0.25
+"""V-LIQ-03's fixed delay of the simulated clock, in T (ADR 0019): Martin & Moyce's
+clock starts from the heater current, before the water moved. Never fitted per run."""
+
+
 def _martin_moyce() -> tuple[np.ndarray, np.ndarray]:
-    data = tomllib.loads((content_dir() / "validation" / "martin_moyce_1952.toml").read_text())
+    """(T, Z): the means of Table 2's records for the 2¼ in column."""
+    text = (content_dir() / "validation" / "martin_moyce_1952.toml").read_text("utf-8")
+    data = tomllib.loads(text)
     assert data["height_over_width"] == 2.0
-    return np.asarray(data["time_dimensionless"]), np.asarray(data["front_dimensionless"])
+    column = data["column_2_25_in"]
+    return np.asarray(column["time_dimensionless"]), np.asarray(column["front_dimensionless"])
 
 
 def _floor_front_m(liquid: LiquidSolver, dx_m: float) -> float:
@@ -109,26 +121,16 @@ def _dam_break(a_m: float, cells_per_a: int, device: str) -> tuple[np.ndarray, n
     return np.asarray(times), np.asarray(fronts)
 
 
-def _assert_meets_v_liq_03(times: np.ndarray, fronts: np.ndarray) -> None:
-    """ADR 0019: align the clock on the first measured point, since the experiment's gate
-    took time to lift; the shift must be a short delay, then every measured front with
-    T ≤ 3 is within 10 %."""
-    t_ref, z_ref = _martin_moyce()
-    k = int(np.argmax(fronts >= z_ref[0]))
-    t_reach = np.interp(z_ref[0], fronts[k - 1 : k + 1], times[k - 1 : k + 1])
-    shift = t_ref[0] - t_reach
-    assert 0.0 <= shift <= 0.5
-    later = (t_ref <= 3.0) & (np.arange(len(t_ref)) > 0)
-    simulated = np.interp(t_ref[later] - shift, times, fronts)
-    np.testing.assert_allclose(simulated, z_ref[later], rtol=0.10)
-
-
 def test_v_liq_03_a_released_column_advances_like_martin_and_moyce(device: str) -> None:
-    """V-LIQ-03 on a small grid: a = 25 cm, 8 cells across the column."""
-    _assert_meets_v_liq_03(*_dam_break(0.25, 8, device))
+    """V-LIQ-03 (ADR 0019), with the game's 6.25 cm cells: a 1 m column, 16 cells across,
+    released at once. With the simulated clock delayed by `CLOCK_DELAY`, every mean of
+    Table 2 with 1.19 <= T <= 3 is within 7 %. (Measured: -3 to +1.5 %. Gravity off by
+    20 % either way misses by 2 points or more.)"""
+    times, fronts = _dam_break(1.0, 16, device)
+    t_ref, z_ref = _martin_moyce()
+    window = (t_ref >= 1.19) & (t_ref <= 3.0)
 
+    simulated = np.interp(t_ref[window] - CLOCK_DELAY, times, fronts)
 
-@pytest.mark.gpu
-def test_v_liq_03_at_the_game_s_resolution() -> None:
-    """V-LIQ-03 with the game's 6.25 cm cells: a 1 m column, 16 cells across."""
-    _assert_meets_v_liq_03(*_dam_break(1.0, 16, "cuda:0"))
+    assert window.sum() == 11
+    np.testing.assert_allclose(simulated, z_ref[window], rtol=0.07)

@@ -26,12 +26,17 @@ GRAVITY = Environment().gravity_m_per_s2
 DX_M = 1.0 / 16.0
 
 
-def _setup(shape: tuple[int, int, int], dump_dir: Path | None = None) -> LiquidSetup:
+def _setup(
+    shape: tuple[int, int, int],
+    dump_dir: Path | None = None,
+    solid_phi_m: np.ndarray | None = None,
+) -> LiquidSetup:
     return LiquidSetup(
         spec=GridSpec(shape=shape, dx_m=DX_M),
         density_kg_per_m3=WATER.density_kg_per_m3,
         gravity_m_per_s2=GRAVITY,
         dump_dir=dump_dir,
+        solid_phi_m=solid_phi_m,
     )
 
 
@@ -90,8 +95,9 @@ def test_still_water_stays_still(device: str) -> None:
     moved = np.linalg.norm(liquid.particle_positions() - start, axis=1)
     assert np.percentile(moved, 99) < 1e-3
     assert np.abs(liquid.particle_velocities()).max() < 5e-3
-    heights = _surface_heights(liquid)
-    assert np.abs(heights - 0.5).max() < 1e-3
+    assert np.abs(_surface_heights(liquid) - 0.5).max() < 1e-3  # inner columns
+    # Against the walls the level set has particles on one side only: 2 mm there.
+    assert np.abs(_surface_heights(liquid, slice(None)) - 0.5).max() < 2e-3
 
 
 def test_a_rough_surface_settles(device: str) -> None:
@@ -153,6 +159,206 @@ def test_a_nan_freezes_the_liquid_and_dumps_its_state(device: str, tmp_path: Pat
     assert raised.value.dump_path.parent == tmp_path
     assert dump["positions_m"].shape == (len(points), 3)
     assert not np.isfinite(dump["velocities_m_per_s"]).all()
+    with pytest.raises(NonFiniteStateError) as again:  # frozen: same dump, no new one
+        liquid.max_advance_s()
+    assert again.value.dump_path == raised.value.dump_path
+    assert len(list(tmp_path.iterdir())) == 1
+
+
+def test_a_dump_replays_the_failing_frame(device: str, tmp_path: Path) -> None:
+    """SPEC 5.9: the dump holds the state the failing frame started from, and its time
+    step: loading it and stepping once gives the non-finite state again."""
+    liquid = LiquidSolver.create(_setup((8, 8, 8), dump_dir=tmp_path), device)
+    points = fill_box((0.125, 0.125, 0.125), (0.375, 0.375, 0.25), DX_M, 8, seed=6)
+    liquid.add_particles(points)
+    liquid.step(1.0 / 60.0)
+    poisoned = liquid.checkpoint()
+    poisoned["velocities_m_per_s"][3] = np.inf
+    liquid.restore(poisoned)
+
+    with pytest.raises(NonFiniteStateError) as raised:
+        for _ in range(3):
+            liquid.step(1.0 / 60.0)
+
+    dump = load_dump(raised.value.dump_path)
+    assert float(dump["dt_s"]) == pytest.approx(1.0 / 60.0)
+    replay = LiquidSolver.create(_setup((8, 8, 8), dump_dir=tmp_path), device)
+    replay.restore({k[len("before_") :]: v for k, v in dump.items() if k.startswith("before_")})
+    replay.step(float(dump["dt_s"]))
+    assert not np.isfinite(replay.particle_velocities()).all()
+
+
+def test_a_non_finite_position_is_not_hidden_by_the_grid_clamp(device: str) -> None:
+    """Clamping NaN into the grid would make it look finite to the guard."""
+    liquid = LiquidSolver.create(_setup((8, 8, 8)), device)
+    points = fill_box((0.125, 0.125, 0.125), (0.375, 0.375, 0.25), DX_M, 8, seed=6)
+    points[0] = np.nan
+    liquid.add_particles(points)
+
+    with pytest.raises(NonFiniteStateError) as raised:
+        for _ in range(3):
+            liquid.step(1.0 / 60.0)
+
+    assert not np.isfinite(load_dump(raised.value.dump_path)["positions_m"][0]).all()
+
+
+def test_restore_after_a_freeze_runs_again(device: str, tmp_path: Path) -> None:
+    liquid = LiquidSolver.create(_setup((8, 8, 8), dump_dir=tmp_path), device)
+    points = fill_box((0.125, 0.125, 0.125), (0.375, 0.375, 0.25), DX_M, 8, seed=6)
+    liquid.add_particles(points)
+    good = liquid.checkpoint()
+    bad = liquid.checkpoint()
+    bad["velocities_m_per_s"][0] = np.nan
+    liquid.restore(bad)
+    with pytest.raises(NonFiniteStateError):
+        for _ in range(3):
+            liquid.step(1.0 / 60.0)
+
+    liquid.restore(good)
+    for _ in range(3):
+        liquid.step(1.0 / 60.0)
+    assert np.isfinite(liquid.particle_velocities()).all()
+
+
+def test_restore_returns_to_the_checkpoint(device: str) -> None:
+    """A checkpoint, stepped again after restore, gives the same water."""
+    liquid = LiquidSolver.create(_setup((12, 12, 16)), device)
+    liquid.add_particles(fill_box((0.0, 0.0, 0.0), (0.25, 0.75, 0.75), DX_M, 8, seed=11))
+    for _ in range(5):
+        liquid.step(1.0 / 60.0)
+    saved = liquid.checkpoint()
+    for _ in range(5):
+        liquid.step(1.0 / 60.0)
+    first = liquid.particle_positions().copy()
+
+    liquid.restore(saved)
+    for _ in range(5):
+        liquid.step(1.0 / 60.0)
+
+    # CPU is bit for bit; CUDA's atomics add in any order (named in the solver).
+    np.testing.assert_allclose(liquid.particle_positions(), first, atol=2e-3)
+
+
+def test_fast_water_hits_the_substep_cap_and_counts_an_overrun(device: str) -> None:
+    """ADR 0013: 10 m/s in 6.25 cm cells over 1/30 s needs 6 substeps; 4 run, and the
+    frame is counted."""
+    liquid = LiquidSolver.create(_setup((16, 8, 8)), device)
+    # Away from the walls: water cannot pull away from a wall without air getting in.
+    points = fill_box((0.125, 0.125, 0.125), (0.375, 0.375, 0.375), DX_M, 8, seed=12)
+    liquid.add_particles(points, velocities=np.tile([10.0, 0.0, 0.0], (len(points), 1)))
+
+    liquid.step(1.0 / 30.0)
+    liquid.max_advance_s()  # reads the frame's status
+
+    assert liquid.diagnostics()["substeps"] == MAX_SUBSTEPS
+    assert liquid.diagnostics()["overruns"] == 1
+
+
+def test_a_frame_within_the_cap_is_not_an_overrun(device: str) -> None:
+    liquid = LiquidSolver.create(_setup((8, 8, 8)), device)
+    liquid.add_particles(fill_box((0.0, 0.0, 0.0), (0.5, 0.5, 0.25), DX_M, 8, seed=7))
+
+    for _ in range(3):
+        liquid.step(1.0 / 60.0)
+    liquid.max_advance_s()
+
+    assert liquid.diagnostics()["overruns"] == 0
+
+
+def test_the_speed_comes_from_the_end_of_the_frame(device: str) -> None:
+    """The status is sent after the substeps: a blob that fell for 0.1 s is known to move
+    at g t, so the next advance is limited by that speed."""
+    liquid = LiquidSolver.create(_setup((16, 16, 32)), device)
+    liquid.add_particles(fill_box((0.375, 0.375, 1.25), (0.625, 0.625, 1.5), DX_M, 8, seed=2))
+    for _ in range(6):
+        liquid.step(1.0 / 60.0)
+
+    speed = abs(GRAVITY[2]) * 0.1
+    cfl = speed + math.sqrt(abs(GRAVITY[2]) * DX_M)
+    assert liquid.max_advance_s() == pytest.approx(MAX_SUBSTEPS * DX_M / cfl, rel=0.03)
+
+
+def test_velocity_is_extrapolated_two_faces_into_the_air(device: str) -> None:
+    """Grid-to-particles reaches 1.5 cells: two faces above a falling blob carry its
+    velocity; further up, air faces only hold gravity's push."""
+    liquid = LiquidSolver.create(_setup((16, 16, 32)), device)
+    liquid.add_particles(fill_box((0.25, 0.25, 1.0), (0.75, 0.75, 1.25), DX_M, 8, seed=13))
+    for _ in range(3):
+        liquid.step(1.0 / 60.0)
+
+    w = liquid.fields()["velocity"].w.numpy()[8, 8, :]
+    phi = liquid.fields()["phi_m"].numpy()[8, 8, :]
+    top = int(np.nonzero(phi < 0.0)[0].max())  # the blob's top cell; face top + 1 is its lid
+    blob = w[top]
+    assert w[top + 2] == pytest.approx(blob, rel=0.05)  # first face above the lid
+    assert w[top + 3] == pytest.approx(blob, rel=0.05)  # second
+    assert abs(w[top + 4] - blob) > 0.2 * abs(blob)  # beyond: not extrapolated
+
+
+def test_a_static_solid_holds_water_and_pushes_particles_out(device: str) -> None:
+    """A raised floor (a static solid, ADR 0017): water poured on it rests on top, and a
+    particle placed inside is pushed out."""
+    shape = (12, 12, 16)
+    centres = (np.indices(shape).transpose(1, 2, 3, 0) + 0.5) * DX_M
+    # A slab 0.25 m high over the whole floor: signed distance, negative inside.
+    lo, hi = np.array([-1.0, -1.0, -1.0]), np.array([2.0, 2.0, 0.25])
+    q = np.abs(centres - (lo + hi) / 2) - (hi - lo) / 2
+    outside = np.linalg.norm(np.maximum(q, 0.0), axis=-1)
+    solid = (outside + np.minimum(q.max(axis=-1), 0.0)).astype(np.float32)
+    liquid = LiquidSolver.create(_setup(shape, solid_phi_m=solid), device)
+    water = fill_box((0.0, 0.0, 0.3), (0.75, 0.75, 0.5), DX_M, 8, seed=14)
+    inside = np.array([[0.375, 0.375, 0.2]], dtype=np.float32)
+    liquid.add_particles(np.concatenate([water, inside]))
+
+    for _ in range(30):
+        liquid.step(1.0 / 60.0)
+
+    p = liquid.particle_positions()
+    assert p[:, 2].min() > 0.25 - 0.1 * DX_M  # nothing sank into the slab
+    assert p[-1, 2] > 0.25 - 0.1 * DX_M  # the one inside got out
+    assert np.abs(liquid.particle_velocities()).max() < 0.1  # and the water came to rest
+
+
+def test_wall_faces_stay_closed_after_extrapolation(device: str) -> None:
+    """ADR 0015: the grid's walls carry no flow, also where velocity was extrapolated: a
+    blob flying at a wall, a cell away from it, must not lend its speed to the wall."""
+    liquid = LiquidSolver.create(_setup((12, 8, 12)), device)
+    blob = fill_box((DX_M, 0.125, 0.25), (0.25 + DX_M, 0.375, 0.5), DX_M, 8, seed=16)
+    liquid.add_particles(blob, velocities=np.tile([-0.5, 0.0, 0.0], (len(blob), 1)))
+    liquid.step(1.0 / 240.0)
+
+    velocity = liquid.fields()["velocity"]
+    u, v, w = (c.numpy() for c in (velocity.u, velocity.v, velocity.w))
+    for face in (u[0], u[-1], v[:, 0], v[:, -1], w[:, :, 0], w[:, :, -1]):
+        assert np.all(face == 0.0)
+
+
+def test_crowded_water_spreads_back_to_its_volume(device: str) -> None:
+    """ADR 0018: particles packed 15 % too densely (as clustering does over minutes)
+    spread back out, so the water regains the volume its particles carry."""
+    liquid = LiquidSolver.create(_setup((12, 12, 16)), device)
+    packed = fill_box((0.0, 0.0, 0.0), (0.75, 0.75, 0.6), DX_M, 8, seed=17)
+    packed[:, 2] *= 0.85  # the same particles in 85 % of the height
+    liquid.add_particles(packed)
+    liquid.step(1e-5)
+    crowded = liquid.density_ratio()[3:-3, 3:-3, 2:6].mean()
+
+    for _ in range(90):
+        liquid.step(1.0 / 60.0)
+
+    assert crowded > 1.1
+    assert liquid.density_ratio()[3:-3, 3:-3, 2:6].mean() == pytest.approx(1.0, abs=0.03)
+
+
+def test_the_density_of_evenly_spread_particles_is_one(device: str) -> None:
+    """The volume correction measures crowding against the rest density of 8 particles
+    per cell (ADR 0018): jittered, evenly spread particles read 1 inside the water."""
+    liquid = LiquidSolver.create(_setup((12, 12, 12)), device)
+    liquid.add_particles(fill_box((0.0, 0.0, 0.0), (0.75, 0.75, 0.75), DX_M, 8, seed=15))
+    liquid.step(1e-5)
+
+    ratio = liquid.density_ratio()[3:-3, 3:-3, 3:-3]  # away from walls and surface
+    assert ratio.mean() == pytest.approx(1.0, abs=0.03)
 
 
 def test_diagnostics_count_particles_and_pressure_iterations(device: str) -> None:
@@ -165,6 +371,25 @@ def test_diagnostics_count_particles_and_pressure_iterations(device: str) -> Non
     assert diagnostics["particles"] == 8 * 8 * 8 * 4
     assert diagnostics["pressure_iterations"] > 0
     assert diagnostics["substeps"] >= 1
+
+
+@pytest.mark.parametrize(
+    ("change", "message"),
+    [
+        ({"particles_per_cell": 6}, "cube"),
+        ({"solid_phi_m": np.ones((3, 3, 3))}, "solid_phi_m"),
+        ({"density_kg_per_m3": 0.0}, "density"),
+        ({"gravity_m_per_s2": (0.0, 0.0, float("nan"))}, "gravity"),
+    ],
+)
+def test_impossible_setups_are_refused(change: dict, message: str) -> None:
+    base = {
+        "spec": GridSpec(shape=(4, 4, 4), dx_m=DX_M),
+        "density_kg_per_m3": WATER.density_kg_per_m3,
+        "gravity_m_per_s2": GRAVITY,
+    }
+    with pytest.raises(ValueError, match=message):
+        LiquidSetup(**{**base, **change})
 
 
 def test_adding_beyond_capacity_is_refused() -> None:

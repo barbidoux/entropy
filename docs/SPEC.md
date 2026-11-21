@@ -221,7 +221,7 @@ Each story is accepted only when its criteria pass as automated tests and Matt h
 | --- | --- | --- | --- |
 | US-01 | First splash | In Test Tank, 10 s of hose at 20 L/s puts 200 L ± 2 % of water in the tank, at ≥ 30 fps | M1 |
 | US-02 | Dam break | A released water column advances like Martin & Moyce's experiment (test V-LIQ-03) | M1 |
-| US-03 | Slow motion | At 0.1× the camera moves freely, and a scenario run at 0.1× matches the same scenario at 1× in simulated time: a dam break run at both speeds meets V-LIQ-03 (front within 10 % of Martin & Moyce) and V-LIQ-02's volume tolerance (drift ≤ 1 %) (ADR 0008, ADR 0013) | M1 |
+| US-03 | Slow motion | At 0.1× the camera moves freely, and a scenario run at 0.1× matches the same scenario at 1× in simulated time: a dam break run at both speeds meets V-LIQ-03 and V-LIQ-02 (ADR 0008, ADR 0013) | M1 |
 | US-04 | It floats | A wooden crate (600 kg/m³) settles 60 % ± 5 % submerged; a concrete block sinks | M2 |
 | US-05 | Wading | In Walk mode, water 0.5 m deep flowing at 1 m/s pushes the player | M2 |
 | US-06 | Light it up | An ignited wooden table burns; smoke fills the ceiling layer first, then descends | M3 |
@@ -264,7 +264,7 @@ Initial material values below are order-of-magnitude placeholders. Each one gets
 Water uses the Affine Particle-In-Cell method (APIC): particles carry the water, a grid enforces incompressibility. This is the family of methods used for film water, and it conserves angular momentum, so splashes keep their swirl.
 
 - **State:** particles with position, velocity and a 3 × 3 affine matrix; a staggered (MAC) grid with a default cell of 6.25 cm; about 8 particles per cell.
-- **Step:** transfer particles to grid with quadratic B-spline weights; add gravity, tool and coupling forces; build the liquid's level set from the particles and label the cells from it (Zhu & Bridson 2005, ADR 0018); enforce solid boundaries; solve for pressure; extrapolate velocity two faces into the air; transfer back to particles; move particles with a second-order integrator and push them out of solids.
+- **Step:** transfer particles to grid with quadratic B-spline weights; add gravity, tool and coupling forces; build the liquid's density and level set from the particles' mass and label the cells from it (ADR 0018); enforce solid boundaries; correct the volume (ADR 0018); solve for pressure; extrapolate velocity two faces into the air; transfer back to particles; move particles with a second-order integrator and push them out of solids.
 - **Pressure:** a Poisson equation solved by multigrid-preconditioned conjugate gradient (MGPCG), with a second-order free-surface boundary condition.
 - **Solids:** static geometry enters as a signed distance field (SDF). Moving rigid bodies use variational solid–fluid coupling, so pressure pushes on bodies and bodies push on water in one solve.
 - **Boundaries in M1 (ADR 0017):** the Test Tank's walls are the grid's walls, and static solids inside the water are voxelized. Named limits: water cannot spill over the rim, and the grid's top is a closed wall too, so a splash that reaches it stops there. A body of water sealed from air is not handled yet (#69).
@@ -338,7 +338,7 @@ Each frame advances the world once by the measured frame time multiplied by the 
 
 1. Apply tools and sources.
 2. Predict rigid bodies.
-3. Liquid: transfer to grid, forces, pressure solve with moving solids, transfer back, move particles.
+3. Liquid: transfer to grid, forces, level set and labels, volume correction, pressure solve with moving solids, velocity extrapolation, transfer back, move particles.
 4. Gas: advection, combustion and burning solids, blast energy, buoyancy, pressure solve.
 5. Exchange coupling forces (water pressure, drag, blast impulses) with rigid bodies.
 6. Solve rigid bodies and joints, then fracture.
@@ -535,8 +535,8 @@ Each row is a test, written before the code it validates.
 | ID | Law or experiment | Scenario | Pass criterion | Milestone |
 | --- | --- | --- | --- | --- |
 | V-LIQ-01 | Hydrostatic pressure p = ρgd | Still water 1 m deep | Error ≤ 2 % at every depth | M1 |
-| V-LIQ-02 | Volume conservation | Sloshing tank, 2,000 steps; volume from the level set, averaged over each second (ADR 0019) | Drift ≤ 1 % | M1 |
-| V-LIQ-03 | Dam break (Martin & Moyce, 1952) | Column of width a and height 2a; front Z = z/a against T = t·√(2g/a); clock aligned on the first measured point, since the experiment's gate took time to lift (delay ≤ 0.5 in T, ADR 0019) | Within 10 % of the measured front for T ≤ 3 | M1 |
+| V-LIQ-02 | Volume conservation | Sloshing tank released with a tilted surface, 33 s of simulated time (2,000 frames at 1×); particle count unchanged; volume = share of 8³ points per cell where the level set is negative, the first frame within 1 % of the particles' volume (ADR 0019) | One-second mean volume within 1 % of the first second's throughout; the M1 soak repeats it over 10 min | M1 |
+| V-LIQ-03 | Dam break (Martin & Moyce, 1952) | Column a = 1 m wide and 2a high, 16 cells across a (the game's cells), released at once; front Z = z/a against T = t·√(2g/a), compared with the mean of the a = 2¼ in records in the paper's Table 2. The paper's clock was set from the heater current, before the water moved, so the simulated clock is delayed by a fixed ΔT = 0.25, never fitted per run (ADR 0019) | Every tabulated mean with 1.19 ≤ T ≤ 3 within 7 % | M1 |
 | V-LIQ-04 | Incompressibility | Any state after projection | Relative residual ≤ 10⁻⁵ | M1 |
 | V-LIQ-05 | Pressure solver order | Manufactured Poisson solution | Error falls about 4× per grid refinement (second order) | M1 |
 | V-RB-01 | Free fall z = z₀ − ½gt² | 1 s fall | Error ≤ 0.5 % | M2 |
@@ -773,7 +773,9 @@ Linked entries were checked against the publisher or the authors' page; unlinked
 - Ihmsen, Akinci, Akinci, Teschner (2012). [Unified spray, foam and air bubbles for particle-based fluids](https://doi.org/10.1007/s00371-012-0697-9). The Visual Computer 28(6–8).
 - Enright, Nguyen, Gibou, Fedkiw (2003). Using the particle level set method and a second order accurate pressure boundary condition for free surface flows. ASME Fluids Engineering Division Summer Meeting.
 - Bridson (2015). Fluid Simulation for Computer Graphics, 2nd edition. CRC Press.
-- Zhu, Bridson (2005). [Animating Sand as a Fluid](https://doi.org/10.1145/1073204.1073298). ACM Transactions on Graphics 24(3), SIGGRAPH 2005.
+- Kim, Liu, Llamas, Jiao, Rossignac (2007). Simulation of bubbles in foam with the volume control method. ACM Transactions on Graphics 26(3), SIGGRAPH 2007.
+- Landet, Mardal, Mortensen (2018). [arXiv:1803.06976](https://arxiv.org/abs/1803.06976): a two-phase Navier–Stokes solver's dam break against Martin & Moyce.
+- Hirt, Nichols (1981). Volume of fluid (VOF) method for the dynamics of free boundaries. Journal of Computational Physics 39(1).
 
 **Gas, smoke and fire**
 

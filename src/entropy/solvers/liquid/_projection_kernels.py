@@ -75,13 +75,15 @@ def zero_solid_faces(
 def right_hand_side(
     labels: wp.array3d(dtype=wp.int32),
     divergence: wp.array3d(dtype=float),
+    target: wp.array3d(dtype=float),
     scale: float,
     rhs: wp.array3d(dtype=float),
 ):
-    """rhs = -(rho/dt) div(u*) on fluid cells (A is about -laplacian, ADR 0016), 0 elsewhere."""
+    """rhs = -(rho/dt) (div(u*) - target) on fluid cells (A is about -laplacian, ADR 0016),
+    0 elsewhere."""
     i, j, k = wp.tid()
     if labels[i, j, k] == FLUID:
-        rhs[i, j, k] = scale * divergence[i, j, k]
+        rhs[i, j, k] = scale * (divergence[i, j, k] - target[i, j, k])
     else:
         rhs[i, j, k] = 0.0
 

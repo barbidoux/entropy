@@ -6,71 +6,87 @@
 ## Context
 
 V-LIQ-02 (volume conservation) and V-LIQ-03 (dam break against Martin & Moyce 1952)
-compare the liquid's full step (issue #50) with a law and an experiment. SPEC 9.4
-gives the scenarios and tolerances, not how to measure. Measured on the full step:
+compare the liquid's full step (issue #50) with a law and an experiment. SPEC 9.4 gave
+the scenarios and tolerances, not how to measure. A first version of this decision was
+rejected in review: it fitted a clock shift per run, which let solvers with gravity
+off by 20 % pass, and it explained the shift by a gate that never existed. The physics
+auditor then read the paper and the literature. What is known:
 
-- **Volume from the level set.** Zhu & Bridson's φ (ADR 0018) is a distance only near
-  the surface. Inside the water it stays at −r, 0.375 of a cell. A linear ramp over φ
-  counts those cells as 7/8 full; on the sloshing tank it missed 16 % of the volume.
-  Counting the points where φ, interpolated
-  between cell centres, is negative (4³ points per cell) gives the particles' volume
-  to 5 digits in a still tank.
-- **Sloshing.** On the 16 × 4 × 16 test tank, over 2,000 frames, that volume wobbles
-  from step to step (standard deviation 0.4 %, peaks of 1.3 %). It has no trend: a
-  linear fit moves by −0.15 % over the run. The wobble comes from a few particles per
-  cell lumping and spreading; the particles carry a fixed volume.
-- **Dam break.** The simulated column is released at once, the experiment's was not.
-  With the clock starting at release, the simulated front leads the measured one by
-  13–18 % (32 cells across the column). The lead is the same at 8, 16 and 32 cells
-  and at 1/60 s and 1/240 s frames, so it is not a resolution error. It opens before
-  T ≈ 1. Later, both fronts move at the same speed (dZ/dT ≈ 1.43 for T = 2.5–3).
-  Lobovsky et al. (2014, Sec. 4.3.1) compare dam-break experiments, Martin & Moyce's
-  among them. They find the differences largest for t* < 1 and write that this "may
-  be probably attributed to various techniques of dam gate removal".
+- **The release.** A waxed-paper diaphragm, held by beeswax on a heater strip, freed
+  when a 36 V battery bank was switched through the strip (pp. 313–314). Filmed at
+  about 300 frames per second.
+- **The clock is a convention.** The motion's start could not be recorded. Every
+  record was rescaled so that T = 1.19 when Z = 1.44, about the time since the current
+  was applied (p. 314, Table 2's footnote). Table 6 bounds the first motion at T ≤ 0.23
+  after the current (12 ms for the 2¼ in column). Martin & Moyce themselves shifted
+  their clock to compare with theory (0.10 and 0.37, pp. 321 and 324).
+- **Independent solvers need the same delay.** Released at once, they lead the
+  records by about ΔT = 0.25: Landet, Mardal & Mortensen (2018), two-phase
+  Navier–Stokes, 0.20–0.30; Hirt & Nichols (1981), SOLA-VOF, plotted the records
+  about 0.29 earlier than Table 2 without saying so; ENTROPY, converged, 0.26.
+- **The records scatter.** At Z = 3.00 the nine records of Table 2 run from T = 2.38 to
+  2.66 (about ±5–7 % in Z); their mean is good to about ±2 %. Lobovsky et al. (2014)
+  find dam-break experiments differ most for t* < 1, where t* = t·√(g/H) with H = 2a,
+  that is T < 2.
+- **The level set's volume wobbles.** With a few particles per cell it moves by a few
+  tenths of a per cent from frame to frame. Sampling it at 4³ points per cell snaps a
+  flat surface to quarter cells (±2 % of the test tank's depth); 8³ points do not.
+
+Not known:
+- the exact delay of the front records, since their origin is only roughly the heater
+  current and Table 6 bounds the first visible motion, not the diaphragm clearing;
+- how the diaphragm shaped the flow before T ≈ 1.2;
+- whether the remaining 0–5 % lead comes from the free-slip floor, the scale (a 5.7 cm
+  column against the game's 1 m one), surface tension or the measure. Larger columns
+  run faster in other experiments (Lobovsky et al. 2014, Table 1).
 
 ## Decision
 
-- **V-LIQ-02 volume:** the share of 4³ points per cell where the interpolated level
-  set is negative. The first frame's volume must match the particles' volume within
-  1 %. The drift is the largest change of the volume averaged over each second (60
-  frames), from the first second's mean. It must stay within 1 %.
-- **V-LIQ-03 front:** where the level set crosses zero along the floor's row of cells,
-  averaged across the tank's width. It is the water's edge the player sees; a lone
-  particle ahead of it is spray (SPEC 5.2).
-- **V-LIQ-03 clock:** shifted so that the simulated front reaches the first measured
-  point (Z = 1.217 at T = 0.832) at that time. The shift must be a delay of at most
-  0.5 in T (27 ms for the 2.25 in column). Every later measured point with T ≤ 3 must
-  then be within 10 %.
-- **Reference data:** `content/validation/martin_moyce_1952.toml`, Figure 3 of the paper
-  as digitised by PySPH. The paper itself was not readable here, so the physics
-  auditor checks the values at the M1 gate (#58).
+- **V-LIQ-02.**
+  - A tank released with a tilted surface sloshes for 33 s of simulated time (2,000
+    frames of 1/60 s at 1×).
+  - The particle count does not change.
+  - Volume: the share of 8³ points per cell where the level set, interpolated
+    between cell centres, is negative. The first frame's volume is within 1 % of the
+    particles'.
+  - Drift: the largest change of the one-second mean from the first second's, at most
+    1 %.
+  - The M1 soak runs the same measure for 10 minutes, with violent motion.
+- **V-LIQ-03.**
+  - A column a = 1 m wide and 2 m high, 16 cells across (the game's cells), released at
+    once.
+  - Front: where the level set crosses zero along the floor's row of cells, averaged
+    across the tank's width (a lone particle ahead of it is spray, SPEC 5.2).
+  - Data: the means of the 2¼ in records in Table 2 of the paper
+    (`content/validation/martin_moyce_1952.toml`).
+  - The simulated clock is delayed by a fixed ΔT = 0.25, never fitted per run, because
+    the paper's clock starts before the water moved.
+  - Every tabulated mean with 1.19 ≤ T ≤ 3 (11 points) must be within 7 %.
 
 Measured with this decision:
-
-| Cells across a | Frame | Shift in T (ms for a = 2.25 in) | Errors at T = 1.22, 2.00, 2.55 |
-|---|---|---|---|
-| 8 (CPU test, a = 25 cm) | 1/60 s | 0.10 (5) | +7.8 %, +5.5 %, +3.9 % |
-| 16 (game cells, a = 1 m) | 1/60 s | 0.18 (10) | +6.5 %, +4.1 %, +3.2 % |
-| 32 (a = 50 cm) | 1/60 s | 0.25 (14) | +2.4 %, +1.3 %, +1.0 % |
-| 32 (a = 50 cm) | 1/240 s | 0.24 (13) | +3.2 %, +2.5 %, +2.4 % |
+- V-LIQ-02 on CPU: the one-second mean stays within 0.6 %.
+- V-LIQ-03 at 16 cells on CPU: −3.2 to +1.4 %; at 32 cells: −2.0 to +3.3 %. Against the
+  1⅛ in column (not asserted): −7.2 to +1.4 %.
+- What V-LIQ-03 catches: gravity × 0.8 reaches −13.3 % and gravity × 1.2 +9.3 %, so
+  both fail by 2 points or more; gravity × 0.9 (−7.9 %) fails, gravity × 1.1 (+4.3 %)
+  passes. It does not separate a first-order free surface, PIC or forward Euler from
+  the right method; V-LIQ-01 and the full-step tests cover those.
 
 ## Alternatives considered
 
-- **No shift:** a correct instantaneous release misses by 13–18 % at every resolution.
-  The test would fail for a cause outside the solver.
-- **Front speed only** (the slope for T ≥ 1, as in Lobovsky et al.'s Table 1): it
-  passes too, but it ignores where the front is. The shift keeps position in the test
-  and bounds the delay it allows.
-- **Model the gate:** Martin & Moyce's release mechanism and its timing were not
-  readable here.
-- **A 20 % tolerance:** it would hide real errors of 10–20 % elsewhere in the run.
-- **Volume per frame within 1 %:** it fails on the measurement's wobble, not on lost
-  water. A finer grid lowers the wobble but costs CPU time in every test run.
+- **No delay:** a correct instant release leads the records by 13–18 % at every
+  resolution, for a cause in the paper's clock, not the solver.
+- **A delay fitted per run** (the rejected first version): it absorbs gravity errors of
+  ±20 %.
+- **PySPH's digitisation of Figure 3:** within about 0.04 in T of Table 2 but about
+  2 % low in Z at T = 2.0–2.55.
+- **A 10 % tolerance:** gravity × 1.2 would pass.
+- **Volume per frame within 1 %:** it fails on the measure's wobble, not on lost
+  water.
 
 ## How we would know it is wrong
 
-- The physics auditor finds that the digitised data, or the release delay it implies
-  (about 13 ms), do not fit the paper.
-- The shift drifts with resolution instead of settling, or nears its 0.5 bound.
-- The volume's one-second mean changes steadily over a longer run (water lost or
-  gained), even though each run stays within 1 %.
+- A reading of the paper, or a later experiment, puts the front records' clock origin
+  far from 0.25 before the motion.
+- The converged delay of the solver moves away from 0.25 when the method changes.
+- The M1 soak's 10-minute volume run drifts beyond 1 % while the 33 s run passes.
