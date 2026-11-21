@@ -62,11 +62,21 @@ def _sample(velocity: MacVelocity, points_m: np.ndarray, device: str) -> np.ndar
         {"shape": (4, 4), "dx_m": 0.1},
         {"shape": (4, 4, 4), "dx_m": 0.0},
         {"shape": (4, 4, 4), "dx_m": float("nan")},
+        {"shape": (4.0, 4, 4), "dx_m": 0.1},
+        {"shape": (True, 4, 4), "dx_m": 0.1},
     ],
 )
 def test_grid_spec_rejects_impossible_grids(kwargs: dict) -> None:
     with pytest.raises(ValueError):
         GridSpec(**kwargs)
+
+
+def test_grid_spec_normalises_to_tuples() -> None:
+    """A list or NumPy integers work, and compare and hash like plain tuples."""
+    spec = GridSpec(shape=[7, 5, np.int64(4)], dx_m=np.float32(0.25), origin_m=[1, -2, 0.5])  # type: ignore[arg-type]
+
+    assert spec == SPEC and hash(spec) == hash(SPEC)
+    assert type(spec.shape) is tuple and all(type(n) is int for n in spec.shape)
 
 
 def test_velocity_components_live_on_their_faces(device: str) -> None:
@@ -94,7 +104,7 @@ def test_sampling_reproduces_a_linear_velocity_field(device: str) -> None:
     np.testing.assert_allclose(sampled, a + points_m @ b.T, rtol=1e-4, atol=1e-4)
 
 
-@settings(max_examples=40, deadline=None)
+@settings(max_examples=40, deadline=None, derandomize=True)
 @given(
     coefficients=st.lists(st.floats(-5, 5), min_size=12, max_size=12),
     seed=st.integers(0, 2**16),
@@ -124,12 +134,49 @@ def test_sampling_cells_reproduces_a_linear_scalar(device: str) -> None:
     np.testing.assert_allclose(out.numpy(), expected, rtol=1e-5, atol=1e-4)
 
 
-def test_sampling_clamps_outside_the_grid(device: str) -> None:
-    """Points beyond the samples take the nearest boundary value, never garbage."""
-    velocity = _linear_velocity(SPEC, device, np.ones(3), np.zeros((3, 3)))
-    far_m = np.array([[100.0, 100.0, 100.0], [-100.0, -100.0, -100.0]], dtype=np.float32)
+def _clamped_linear(
+    spec: GridSpec, a: np.ndarray, b: np.ndarray, points_m: np.ndarray
+) -> np.ndarray:
+    """What clamped sampling of the linear field gives: each component at the point moved
+    into the box of that component's own samples."""
+    origin, dx, shape = np.asarray(spec.origin_m), spec.dx_m, np.asarray(spec.shape)
+    out = np.empty_like(points_m, dtype=np.float64)
+    for axis in range(3):
+        low = origin + np.full(3, 0.5) * dx
+        high = origin + (shape - 0.5) * dx
+        low[axis], high[axis] = origin[axis], origin[axis] + shape[axis] * dx
+        out[:, axis] = a[axis] + np.clip(points_m, low, high) @ b[axis]
+    return out
 
-    np.testing.assert_allclose(_sample(velocity, far_m, device), np.ones((2, 3)), atol=1e-6)
+
+def test_sampling_clamps_to_the_nearest_samples_outside(device: str) -> None:
+    """Beyond its samples a component reads the nearest boundary value: no extrapolation."""
+    rng = np.random.default_rng(10)
+    a, b = rng.standard_normal(3), rng.standard_normal((3, 3))
+    near = SPEC.origin_m[0] + 0.1 * SPEC.dx_m  # inside the grid, before the first v and w samples
+    points_m = np.array(
+        [
+            [near, 0.0, 1.0],
+            [100.0, 100.0, 100.0],
+            [-100.0, -100.0, -100.0],
+            [1e10, -1e10, 1e10],
+            [np.inf, -np.inf, 3.0],
+        ],
+        dtype=np.float32,
+    )
+
+    sampled = _sample(_linear_velocity(SPEC, device, a, b), points_m, device)
+
+    np.testing.assert_allclose(sampled, _clamped_linear(SPEC, a, b, points_m), rtol=1e-4, atol=1e-4)
+
+
+def test_a_nan_point_reads_nan(device: str) -> None:
+    """A NaN position is an upstream bug: it propagates so the NaN guard (SPEC 5.9) sees it."""
+    velocity = _linear_velocity(SPEC, device, np.ones(3), np.zeros((3, 3)))
+
+    sampled = _sample(velocity, np.array([[np.nan, 1.0, 1.0]], dtype=np.float32), device)
+
+    assert np.isnan(sampled).all()
 
 
 def test_divergence_of_a_linear_field_is_its_trace(device: str) -> None:
@@ -163,22 +210,64 @@ def test_divergence_of_the_gradient_is_the_7_point_laplacian(device: str) -> Non
     np.testing.assert_allclose(out.numpy()[inner], laplacian[inner], rtol=1e-4, atol=1e-3)
 
 
-def test_gradient_leaves_boundary_faces_at_zero(device: str) -> None:
-    """Faces on the grid boundary have a cell on one side only; walls set them later."""
+@pytest.mark.parametrize("axis", [0, 1, 2])
+def test_gradient_is_zero_on_boundary_faces(device: str, axis: int) -> None:
+    """The grid boundary is a closed wall (homogeneous Neumann) for every component."""
     p = np.random.default_rng(7).standard_normal(SPEC.shape).astype(np.float32)
     velocity = MacVelocity.zeros(SPEC, device)
 
     gradient(SPEC, wp.array(p, dtype=float, device=device), velocity)
 
-    u = velocity.u.numpy()
-    assert np.all(u[0] == 0.0) and np.all(u[-1] == 0.0)
-    np.testing.assert_allclose(u[1:-1], np.diff(p, axis=0) / SPEC.dx_m, rtol=1e-5, atol=1e-5)
+    face = (velocity.u, velocity.v, velocity.w)[axis].numpy()
+    first: list[slice | int] = [slice(None)] * 3
+    last: list[slice | int] = [slice(None)] * 3
+    first[axis], last[axis] = 0, -1
+    inner = [slice(None)] * 3
+    inner[axis] = slice(1, -1)
+    assert np.all(face[tuple(first)] == 0.0) and np.all(face[tuple(last)] == 0.0)
+    np.testing.assert_allclose(
+        face[tuple(inner)], np.diff(p, axis=axis) / SPEC.dx_m, rtol=1e-5, atol=1e-5
+    )
+
+
+def test_divergence_of_the_gradient_is_the_neumann_laplacian_everywhere(device: str) -> None:
+    """On boundary cells too: a missing neighbour adds nothing (no flux through the wall)."""
+    p = np.random.default_rng(11).standard_normal(SPEC.shape).astype(np.float64)
+    velocity = MacVelocity.zeros(SPEC, device)
+    out = wp.zeros(SPEC.shape, dtype=float, device=device)
+
+    gradient(SPEC, wp.array(p.astype(np.float32), dtype=float, device=device), velocity)
+    divergence(velocity, out)
+
+    neumann = np.zeros_like(p)
+    for axis in range(3):
+        flux = np.diff(p, axis=axis)  # p[i+1] - p[i] across each interior face
+        before = [slice(None)] * 3
+        after = [slice(None)] * 3
+        before[axis], after[axis] = slice(0, -1), slice(1, None)
+        neumann[tuple(before)] += flux
+        neumann[tuple(after)] -= flux
+    np.testing.assert_allclose(out.numpy(), neumann / SPEC.dx_m**2, rtol=1e-4, atol=1e-3)
 
 
 def test_operators_refuse_mismatched_arrays() -> None:
     velocity = MacVelocity.zeros(SPEC, "cpu")
     with pytest.raises(ValueError, match="shape"):
         divergence(velocity, wp.zeros((7, 5, 3), dtype=float, device="cpu"))
+    points = wp.zeros(3, dtype=wp.vec3, device="cpu")
+    with pytest.raises(ValueError, match="one shape"):
+        sample_velocity(velocity, points, wp.zeros(4, dtype=wp.vec3, device="cpu"))
+
+
+@pytest.mark.gpu
+def test_arrays_on_two_devices_are_refused() -> None:
+    cpu = MacVelocity.zeros(SPEC, "cpu")
+    cuda = MacVelocity.zeros(SPEC, "cuda:0")
+    with pytest.raises(ValueError, match="one device"):
+        MacVelocity(SPEC, cpu.u, cuda.v, cpu.w)
+    points = wp.zeros(3, dtype=wp.vec3, device="cuda:0")
+    with pytest.raises(ValueError, match="one device"):
+        sample_velocity(cpu, points, wp.zeros(3, dtype=wp.vec3, device="cuda:0"))
 
 
 @pytest.mark.gpu

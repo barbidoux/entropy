@@ -6,8 +6,16 @@ The x component u lives on the faces normal to x, at origin + (i, j + ½,
 k + ½)·dx, so it has (nx + 1, ny, nz) values; v and w likewise along y and z.
 
 Interpolation is trilinear between the samples of each component. Beyond the
-outermost samples it clamps to the boundary values, so a point outside the
-grid reads the nearest value rather than garbage.
+outermost samples it clamps to the boundary values: a point outside the grid,
+even at infinity, reads the nearest value, the same on CPU and CUDA. A NaN
+point reads NaN, so the NaN guard (SPEC 5.9) sees the bug upstream.
+
+The grid boundary is a closed wall. `gradient` gives 0 on boundary faces,
+which have a cell on one side only, so `divergence(gradient(p))` is the
+homogeneous-Neumann Laplacian: a missing neighbour adds no flux. This differs
+from `entropy.linalg.jacobi`, whose missing neighbours are Dirichlet zeros. The
+pressure projection (#49) states its own boundary conditions on top of this
+(open faces, free surface, solids).
 
 Units follow the caller: with velocity in m/s and positions in m, divergence
 is in 1/s; the gradient of a pressure in Pa is in Pa/m.
@@ -16,6 +24,8 @@ is in 1/s; the gradient of a pressure in Pa is in Pa/m.
 from __future__ import annotations
 
 import math
+import numbers
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 import warp as wp
@@ -30,12 +40,17 @@ class GridSpec:
     origin_m: tuple[float, float, float] = (0.0, 0.0, 0.0)
 
     def __post_init__(self) -> None:
-        if len(self.shape) != 3 or any(int(n) != n or n < 1 for n in self.shape):
+        if not _is_triple(self.shape) or not all(_is_count(n) for n in self.shape):
             raise ValueError(f"shape must be three positive cell counts, got {self.shape}")
-        if not (math.isfinite(self.dx_m) and self.dx_m > 0):
+        if not (_is_real(self.dx_m) and math.isfinite(self.dx_m) and self.dx_m > 0):
             raise ValueError(f"dx_m must be a positive length, got {self.dx_m}")
-        if len(self.origin_m) != 3 or not all(math.isfinite(c) for c in self.origin_m):
+        origin = self.origin_m
+        if not _is_triple(origin) or not all(_is_real(c) and math.isfinite(c) for c in origin):
             raise ValueError(f"origin_m must be a finite 3D point, got {self.origin_m}")
+        # Plain tuples of int and float, so specs compare, hash and print alike.
+        object.__setattr__(self, "shape", tuple(int(n) for n in self.shape))
+        object.__setattr__(self, "dx_m", float(self.dx_m))
+        object.__setattr__(self, "origin_m", tuple(float(c) for c in origin))
 
     def face_shape(self, axis: int) -> tuple[int, int, int]:
         """Shape of the face array normal to `axis` (0 = x, 1 = y, 2 = z)."""
@@ -44,9 +59,22 @@ class GridSpec:
         return (shape[0], shape[1], shape[2])
 
 
+def _is_triple(value: object) -> bool:
+    return isinstance(value, Sequence) and not isinstance(value, str) and len(value) == 3
+
+
+def _is_count(n: object) -> bool:
+    return isinstance(n, numbers.Integral) and not isinstance(n, bool) and int(n) >= 1
+
+
+def _is_real(x: object) -> bool:
+    return isinstance(x, numbers.Real) and not isinstance(x, bool)
+
+
 @dataclass(frozen=True)
 class MacVelocity:
-    """The three face-centred velocity components of a grid, on one device."""
+    """The three face-centred components of a grid, on one device: a velocity (m/s),
+    or any face field such as a pressure gradient (Pa/m)."""
 
     spec: GridSpec
     u: wp.array
@@ -74,20 +102,26 @@ class MacVelocity:
 
 @wp.func
 def _base(x: float, n: int) -> int:
-    """Lower sample index of the interval holding fractional index `x`, clamped."""
-    return wp.clamp(int(wp.floor(x)), 0, wp.max(n - 2, 0))
+    """Lower sample index of the interval holding fractional index `x`.
+
+    `x` is clamped to the samples before the conversion to int, so infinities and
+    huge values cannot overflow it (CPU and CUDA overflow differently)."""
+    return wp.min(int(wp.clamp(x, 0.0, float(n - 1))), wp.max(n - 2, 0))
 
 
 @wp.func
 def _frac(x: float, base: int, n: int) -> float:
+    """Weight of the upper sample, for `x` clamped to the samples."""
     if n == 1:
         return 0.0
-    return wp.clamp(x - float(base), 0.0, 1.0)
+    return wp.clamp(x, 0.0, float(n - 1)) - float(base)
 
 
 @wp.func
 def _trilinear(a: wp.array3d(dtype=float), x: float, y: float, z: float) -> float:
-    """`a` at fractional indices (x, y, z), clamped to its samples."""
+    """`a` at fractional indices (x, y, z), clamped to its samples; NaN if any is NaN."""
+    if wp.isnan(x) or wp.isnan(y) or wp.isnan(z):
+        return x + y + z  # NaN: propagate it rather than read a sample
     nx = a.shape[0]
     ny = a.shape[1]
     nz = a.shape[2]
@@ -113,12 +147,12 @@ def _sample_velocity_kernel(
     v: wp.array3d(dtype=float),
     w: wp.array3d(dtype=float),
     origin_m: wp.vec3,
-    inv_dx: float,
+    inv_dx_per_m: float,
     points_m: wp.array(dtype=wp.vec3),
     out: wp.array(dtype=wp.vec3),
 ):
     t = wp.tid()
-    g = (points_m[t] - origin_m) * inv_dx  # position in cell units
+    g = (points_m[t] - origin_m) * inv_dx_per_m  # position in cell units
     out[t] = wp.vec3(
         _trilinear(u, g[0], g[1] - 0.5, g[2] - 0.5),
         _trilinear(v, g[0] - 0.5, g[1], g[2] - 0.5),
@@ -130,12 +164,12 @@ def _sample_velocity_kernel(
 def _sample_cells_kernel(
     field: wp.array3d(dtype=float),
     origin_m: wp.vec3,
-    inv_dx: float,
+    inv_dx_per_m: float,
     points_m: wp.array(dtype=wp.vec3),
     out: wp.array(dtype=float),
 ):
     t = wp.tid()
-    g = (points_m[t] - origin_m) * inv_dx
+    g = (points_m[t] - origin_m) * inv_dx_per_m
     out[t] = _trilinear(field, g[0] - 0.5, g[1] - 0.5, g[2] - 0.5)
 
 
@@ -144,7 +178,7 @@ def _divergence_kernel(
     u: wp.array3d(dtype=float),
     v: wp.array3d(dtype=float),
     w: wp.array3d(dtype=float),
-    inv_dx: float,
+    inv_dx_per_m: float,
     out: wp.array3d(dtype=float),
 ):
     # 3D launch: tid() returns three indices, which Warp's stubs do not express.
@@ -153,7 +187,7 @@ def _divergence_kernel(
         (u[i + 1, j, k] - u[i, j, k])
         + (v[i, j + 1, k] - v[i, j, k])
         + (w[i, j, k + 1] - w[i, j, k])
-    ) * inv_dx
+    ) * inv_dx_per_m
 
 
 @wp.kernel
@@ -162,7 +196,7 @@ def _gradient_kernel(
     di: int,
     dj: int,
     dk: int,
-    inv_dx: float,
+    inv_dx_per_m: float,
     out: wp.array3d(dtype=float),
 ):
     """(di, dj, dk) is the unit offset along the face normal."""
@@ -172,7 +206,7 @@ def _gradient_kernel(
     if along == 0 or along == n:
         out[i, j, k] = 0.0  # a boundary face has a cell on one side only
         return
-    out[i, j, k] = (p[i, j, k] - p[i - di, j - dj, k - dk]) * inv_dx
+    out[i, j, k] = (p[i, j, k] - p[i - di, j - dj, k - dk]) * inv_dx_per_m
 
 
 def _check_points(points_m: wp.array, out: wp.array, device: wp.Device | None) -> None:

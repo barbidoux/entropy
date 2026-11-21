@@ -7,9 +7,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-- Staggered MAC grid (#45, `entropy.fields.mac`): `GridSpec`, face-centred
-  `MacVelocity`, trilinear sampling of velocity and cell scalars (exact on linear fields,
-  clamped outside the grid), divergence and gradient; CPU and CUDA.
+- Staggered MAC grid (#45, `entropy.fields.mac`):
+  - `GridSpec` and face-centred `MacVelocity`;
+  - trilinear sampling of velocity and cell scalars: exact on linear fields, clamped
+    outside the grid alike on CPU and CUDA, and NaN for a NaN point;
+  - divergence and gradient, with the grid boundary a closed wall (homogeneous Neumann).
+
+  ADR 0015 records these grid conventions.
 - GPU time per stage in the HUD (#29): `entropy.core.profiler.StageTimer` brackets
   stages with CUDA events (Warp work) or OpenGL timer queries (render passes,
   `entropy.render.gl_timer`). It reads results only once the GPU has finished them
