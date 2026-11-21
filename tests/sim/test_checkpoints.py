@@ -62,3 +62,21 @@ def test_restoring_with_no_checkpoint_does_nothing() -> None:
 
     assert ring.restore_latest() is None
     assert solver.restored == []
+
+
+def test_freezing_drops_what_was_saved_since_the_last_step() -> None:
+    """SPEC 5.9, 4.6: the NaN guard reads a step's state only at the next frame, so a
+    checkpoint saved after the step that went non-finite holds NaN. When the world
+    freezes, those are dropped; the ones before, checked by a later step, are kept."""
+    solver = _Solver()
+    ring = CheckpointRing([solver], every_s=10.0, keep=6)
+    solver.state = 1
+    ring.advance(10.0)  # saved at 10 s; the next step found it finite
+    ring.advance(5.0)  # this step's state is the one that went non-finite
+    solver.state = 2
+    ring.save_now()  # saved at 15 s, before the freeze was seen
+
+    ring.drop_unchecked()
+
+    assert ring.saved_times_s() == [10.0]
+    assert ring.restore_latest() == 10.0 and solver.state == 1

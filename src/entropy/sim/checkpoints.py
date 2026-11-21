@@ -49,6 +49,13 @@ class CheckpointRing:
         ]
         self.entries.append((self.clock_s, states))
 
+    def drop_unchecked(self) -> None:
+        """Drop the checkpoints saved since the last step, when the world froze: the NaN
+        guard reads a step's state only at the next frame, so they may hold the
+        non-finite state (SPEC 5.9). Those saved earlier were checked by a later step."""
+        while self.entries and self.entries[-1][0] >= self.clock_s - 1e-9:
+            self.entries.pop()
+
     def saved_times_s(self) -> list[float]:
         return [time_s for time_s, _ in self.entries]
 

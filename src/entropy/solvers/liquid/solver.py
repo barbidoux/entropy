@@ -61,12 +61,12 @@ import warp as wp
 from entropy.core.paths import out_dir
 from entropy.fields.mac import GridSpec, MacVelocity, sample_cells, sample_velocity
 from entropy.solvers.interface import NonFiniteStateError
-
-__all__ = ["LiquidSetup", "LiquidSolver", "NonFiniteStateError", "fill_box", "load_dump"]
 from entropy.solvers.liquid import _solver_kernels as _k
 from entropy.solvers.liquid.particles import LiquidParticles
 from entropy.solvers.liquid.projection import Projection
 from entropy.solvers.liquid.transfer import grid_to_particles, particles_to_grid
+
+__all__ = ["LiquidSetup", "LiquidSolver", "NonFiniteStateError", "fill_box", "load_dump"]
 
 MAX_SUBSTEPS = 4
 """Substep cap per frame (SPEC 5.9, ADR 0013)."""

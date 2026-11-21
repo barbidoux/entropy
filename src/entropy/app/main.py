@@ -182,8 +182,9 @@ class GameStages:
         """Extra HUD lines: an alert if the world froze, the controls, the map and its
         water, and why interop copies, if it does."""
         notes = []
-        if self.simulation.frozen_because:
-            notes.append(f"MONDE ARRÊTÉ : {self.simulation.frozen_because}")
+        if self.simulation.frozen_by is not None:
+            dump = self.simulation.frozen_by.dump_path
+            notes.append(f"MONDE ARRÊTÉ : état non fini, sauvegardé dans {dump} (F9 : revenir)")
         notes.append(self.time_control.hud_line())
         notes += self.toolbox.palette()
         notes += [CONTROLS_HINT, self._water_line()]
@@ -212,8 +213,8 @@ class GameStages:
             control.faster()
         if Action.STEP in pressed:
             control.step_once()
-        if Action.SAVE_CHECKPOINT in pressed:
-            self.checkpoints.save_now()
+        if Action.SAVE_CHECKPOINT in pressed and self.simulation.frozen_by is None:
+            self.checkpoints.save_now()  # never the non-finite state of a frozen world
         if Action.LOAD_CHECKPOINT in pressed and self.checkpoints.restore_latest() is not None:
             self.toolbox.jet.clear()  # water in flight belongs to the time left behind
             self.simulation.unfreeze()
@@ -227,10 +228,13 @@ class GameStages:
         pose = self.mode.pose
         forward = pose.forward()
         aim = Aim(pose.position_m, (float(forward[0]), float(forward[1]), float(forward[2])))
+        running = self.simulation.frozen_by is None
         with self.cuda_timer.stage("simulation (CUDA)"):
             advanced_s = self.simulation.step(
                 dt_s, player=lambda advance_s: self.toolbox.apply(aim, advance_s)
             )
+        if running and self.simulation.frozen_by is not None:
+            self.checkpoints.drop_unchecked()
         self.checkpoints.advance(advanced_s)
         return advanced_s
 

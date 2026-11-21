@@ -2,11 +2,13 @@
 
 import math
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import pytest
 
 from entropy.sim.simulation import Simulation
+from entropy.solvers.interface import NonFiniteStateError
 
 
 @dataclass
@@ -113,14 +115,15 @@ def test_a_non_finite_solver_freezes_the_world() -> None:
     assert simulation.step(1.0 / 60.0) == 0.0
     assert simulation.step(1.0 / 60.0) == 0.0  # stays frozen: no second dump
     assert broken.calls == 1
-    assert simulation.frozen_because is not None and "test.npz" in simulation.frozen_because
+    assert simulation.frozen_by is not None
+    assert simulation.frozen_by.dump_path == Path("out/nan_dumps/test.npz")
 
 
 def test_unfreezing_lets_the_world_run_again() -> None:
     """After a checkpoint is restored (#55), the game unfreezes the world."""
     solver = FakeSolver(name="ok")
     simulation = Simulation([solver])
-    simulation.frozen_because = "earlier"
+    simulation.frozen_by = NonFiniteStateError(Path("out/nan_dumps/earlier.npz"))
 
     simulation.unfreeze()
 
@@ -143,7 +146,7 @@ def test_the_player_does_not_act_on_a_frozen_world() -> None:
     """While frozen, the tools add or remove nothing either."""
     solvers, log = _solvers(math.inf)
     simulation = Simulation(solvers)
-    simulation.frozen_because = "earlier"
+    simulation.frozen_by = NonFiniteStateError(Path("out/nan_dumps/earlier.npz"))
 
     assert simulation.step(1.0 / 60.0, player=lambda dt_s: log.append(("player", dt_s))) == 0.0
     assert log == []
@@ -171,4 +174,5 @@ def test_a_state_found_non_finite_while_pacing_freezes_the_world() -> None:
 
     assert simulation.step(1.0 / 60.0, player=acted.append) == 0.0
     assert acted == []
-    assert simulation.frozen_because is not None and "limit.npz" in simulation.frozen_because
+    assert simulation.frozen_by is not None
+    assert simulation.frozen_by.dump_path.name == "limit.npz"

@@ -108,3 +108,31 @@ def test_a_still_pool_looks_like_its_reference(window: GameWindow) -> None:
     assert similarity >= 0.98, f"SSIM {similarity:.4f} against the reference"
     water = image[SIZE[1] // 2, SIZE[0] // 2].astype(int)
     assert water[2] > water[0]  # the pool tints the floor blue-green
+
+
+def test_the_frame_draws_the_glass(window: GameWindow, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The glass pass is part of the frame: without it, the panes' reflection is gone."""
+    world = build_world(load_map(content_dir() / "maps" / "test_tank"))
+    eye = (5.0, -1.0, 0.8)
+    forward = np.subtract((0.0, 2.0, 0.6), eye)
+    forward = forward / np.linalg.norm(forward)
+    x, y, z = (float(c) for c in forward)
+    view = CameraView(eye, (x, y, z), fov_y_rad=np.radians(60.0), near_m=0.05, far_m=500.0)
+    screen = window.ctx.simple_framebuffer(SIZE)
+    images = []
+    with SharedBuffer(window.ctx, 1, wp.vec3, device="cpu") as shared:
+        frame = WorldFrame(
+            window.ctx, world, shared, particle_volume_m3=DX_M**3 / 8, water=load_material("water")
+        )
+        try:
+            for _ in range(2):
+                frame.render(screen, view, SIZE, count=0)
+                images.append(np.frombuffer(screen.read(components=3), dtype=np.uint8))
+                monkeypatch.setattr(frame.glass, "render", lambda *args, **kwargs: None)
+        finally:
+            frame.release()
+            screen.release()
+
+    with_glass, without = (image.astype(np.int32) for image in images)
+    changed = np.abs(with_glass - without).reshape(-1, 3).max(axis=1) > 0
+    assert changed.mean() > 0.10  # the panes in view: about 15 % of the pixels

@@ -18,8 +18,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Time controls and checkpoints (#55): P pauses, [ and ] cycle 1x, 0.5x, 0.25x and
   0.1x, the period steps one frame while paused; F5 saves and F9 restores; a ring of 6
   checkpoints every 10 s of simulated time, copied to pinned host memory without
-  waiting. US-03: a dam break at 0.1x and at 1x both meet V-LIQ-03 and keep their
-  volume within 1 %.
+  waiting. When the world freezes (NaN guard), the checkpoints saved since the last
+  step are dropped, since they may hold the non-finite state, and F5 does nothing
+  until F9 has restored finite water. US-03: a dam break at 0.1x and at 1x both meet
+  V-LIQ-03 and keep their volume within 1 %.
 - The HUD counts the water (#56): particles, litres, cells of water, substeps, pressure
   iterations and overruns; the liquid's GPU time per phase (transfers, pressure,
   motion) through the step's context.
@@ -31,6 +33,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
     accumulated volume, so slow motion loses nothing to rounding;
   - outside the liquid's grid the jet flies ballistically and is drawn; it enters
     the tank over the rim, and water that hits the glass or the ground is lost;
+  - the tools act first in each frame, with the shared advance, inside the NaN guard
+    (`Simulation.step(player=...)`): a frozen world takes no water;
   - US-01: 10 s of hose at 20 L/s puts 200 L ± 2 % in the Test Tank, at 1x and 0.1x.
 - Benchmarks sample GPU telemetry during each measurement (#25, ADR 0022): one
   `nvidia-smi -lms 100` process in the background, summarised in each result (min,

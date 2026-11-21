@@ -212,3 +212,19 @@ def test_at_45_degrees_the_water_reflects_the_sky_45_degrees_up(window: GameWind
     zenith, horizon = np.array([0.10, 0.25, 0.70]), np.asarray(HORIZON)
     sky = horizon + (zenith - horizon) * np.sqrt(np.sin(np.radians(45.0)))
     np.testing.assert_allclose(_centre(out, half=4), fresnel * sky, rtol=0.15)
+
+
+def test_a_solid_inside_the_water_shortens_what_light_crosses(window: GameWindow) -> None:
+    """A solid halfway into a 2 m slab: the light seen comes from its face 0.9 m deep, so
+    only 0.9 m of water absorbs it. Spheres behind the face add no thickness."""
+    slab = fill_box((0.0, -0.5, -0.5), (2.0, 0.5, 0.5), DX_M, 8, seed=1)
+    view = _view((6.0, 0.0, 0.0), (0.0, 0.0, 0.0))
+    block = SceneBox((1.0, 0.0, 0.0), (0.1, 0.4, 0.4), (0.8, 0.8, 0.8))
+
+    scene, _, out, _ = _draw(window, slab, view, boxes=(block,))
+
+    absorption = np.asarray(WATER.absorption_per_m_rgb)
+    f0 = fresnel_f0(WATER.refractive_index or 0.0)
+    face = _centre(scene, half=8)
+    expected = f0 * np.asarray(HORIZON) + (1.0 - f0) * face * np.exp(-absorption * 0.9)
+    np.testing.assert_allclose(_centre(out, half=8), expected, rtol=0.03)

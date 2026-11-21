@@ -607,6 +607,13 @@ def test_the_step_times_its_phases_when_given_a_timer(device: str) -> None:
     assert {"liquid transfers (CUDA)", "liquid pressure (CUDA)", "liquid motion (CUDA)"} <= set(
         ctx.timer.names
     )
+
+
+def test_a_particle_stands_for_a_cell_over_its_particles() -> None:
+    """The volume the renderer and the tools count per particle (m³)."""
+    setup = _setup((4, 4, 4), particles_per_cell=8)
+
+    assert setup.particle_volume_m3 == pytest.approx(DX_M**3 / 8)
 @pytest.mark.parametrize("jitter", [0.0, 0.8])
 def test_a_grid_full_of_water_stays_still(device: str, jitter: float) -> None:
     """#69: water up to the grid's lid, no air anywhere: still, finite, converged."""

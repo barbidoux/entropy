@@ -52,8 +52,9 @@ class Simulation:
         self.solvers = tuple(solvers)
         self.context = context
         """What each solver's `step` receives for coupling; nothing until M2 couples solvers."""
-        self.frozen_because: str | None = None
-        """Why the world stopped (the NaN guard's alert), or None while it runs."""
+        self.frozen_by: NonFiniteStateError | None = None
+        """What stopped the world (the NaN guard's error, with its dump's path), or None
+        while it runs."""
 
     def advance_for(self, requested_s: float) -> float:
         """The advance every solver can take: `requested_s`, shrunk to the tightest limit."""
@@ -76,8 +77,8 @@ class Simulation:
 
         NaN guard (SPEC 5.9): when a solver finds its state non-finite, it has dumped it
         and raises; the world then freezes, nothing advances and the player does not act
-        until `unfreeze`, and `frozen_because` says where the dump is."""
-        if self.frozen_because is not None:
+        until `unfreeze`, and `frozen_by` says where the dump is."""
+        if self.frozen_by is not None:
             return 0.0
         try:
             advance_s = self.advance_for(requested_s)
@@ -87,11 +88,11 @@ class Simulation:
                 for solver in self.solvers:
                     solver.step(advance_s, self.context)
         except NonFiniteStateError as error:
-            self.frozen_because = f"état non fini, sauvegardé dans {error.dump_path}"
+            self.frozen_by = error
             _log.error("the world froze: %s", error)
             return 0.0
         return advance_s
 
     def unfreeze(self) -> None:
         """Run again, after the solvers were restored to a finite state."""
-        self.frozen_because = None
+        self.frozen_by = None

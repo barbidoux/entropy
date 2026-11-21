@@ -66,7 +66,7 @@ def test_a_non_finite_liquid_freezes_the_world_and_says_so(
     assert stages.step_simulation(1.0 / 60.0) == 0.0
     assert stages.step_simulation(1.0 / 60.0) == 0.0  # stays frozen
     notes = "\n".join(stages.hud_notes())
-    assert "liquid-test.npz" in notes
+    assert "MONDE ARRÊTÉ" in notes and "liquid-test.npz" in notes
     assert np.isfinite(stages.loop_settings.time_scale)
 
 
@@ -251,3 +251,28 @@ def test_the_hud_counts_the_water(stages: GameStages) -> None:
 
     assert "particules" in text and " L" in text and "cellules" in text
     assert "sous-pas" in text and "itérations" in text
+
+
+def test_a_frozen_world_saves_no_checkpoint_and_keeps_the_last_good_one(
+    stages: GameStages, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SPEC 5.9, 4.6: F5 while frozen would save the non-finite state, and so would one
+    saved just before the freeze was seen; F9 must lead back to finite water."""
+    assert stages.liquid is not None
+    stages.liquid.add_particles(fill_box((-0.5, -0.5, 0.0), (0.5, 0.5, 0.25), 0.0625, 8, seed=5))
+    stages.step_simulation(1.0 / 60.0)
+    _press(stages, glfw.KEY_F5)  # checked by the next step
+    good_s = stages.checkpoints.clock_s
+    stages.step_simulation(1.0 / 60.0)
+    _press(stages, glfw.KEY_F5)  # saved after the step that goes non-finite
+
+    def found_non_finite() -> float:
+        raise NonFiniteStateError(Path("out/nan_dumps/liquid-test.npz"))
+
+    monkeypatch.setattr(stages.liquid, "max_advance_s", found_non_finite)
+    assert stages.step_simulation(1.0 / 60.0) == 0.0
+    _press(stages, glfw.KEY_F5)  # refused while frozen
+
+    assert stages.checkpoints.saved_times_s() == [good_s]
+    _press(stages, glfw.KEY_F9)
+    assert stages.simulation.frozen_by is None
