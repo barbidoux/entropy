@@ -21,13 +21,16 @@ from bench.harness import (
     Conditions,
     PowerMode,
     PowerState,
+    TelemetrySampler,
     parse_nvidia_smi,
     power_mode_from_guids,
     read_gpu_telemetry,
     read_power_state,
     result_path,
     summarize,
+    summarize_telemetry,
     time_device,
+    time_interleaved,
     warm_up,
     write_result,
 )
@@ -225,6 +228,7 @@ def test_bench_session_rereads_power_around_each_result(tmp_path: Path) -> None:
         repo_root=tmp_path,
         telemetry=lambda: next(readings),
         power_state=lambda: next(power),
+        sampler=lambda: TelemetrySampler(lambda: None),
         stamp=STAMP,
     )
 
@@ -235,6 +239,7 @@ def test_bench_session_rereads_power_around_each_result(tmp_path: Path) -> None:
     assert path.parent == tmp_path / "out" / "benchmarks"
     assert data["telemetry"] == {
         "before": {"temperature_c": 70.0},
+        "during": {"samples": 0},
         "after": {"temperature_c": 72.0},
     }
     assert data["conditions"]["reasons_not_official"] == ["not on mains power"]
@@ -291,3 +296,155 @@ def test_cuda_event_timing_scales_with_the_work() -> None:
 @pytest.mark.gpu
 def test_warm_up_on_cuda_lasts_at_least_the_requested_time() -> None:
     assert warm_up(1.0, device="cuda:0") >= 1.0
+
+
+def test_interleaved_timing_alternates_the_compared_passes() -> None:
+    """#25: compared passes run repeat by repeat, so clock drift hits them alike."""
+    order: list[str] = []
+    fns = {"a": lambda: order.append("a"), "b": lambda: order.append("b")}
+
+    samples = time_interleaved(fns, rounds=3, device="cpu", warmup_calls=1)
+
+    assert order == ["a", "b"] + ["a", "b"] * 3  # one warm-up call each, then rounds
+    assert {name: len(s) for name, s in samples.items()} == {"a": 3, "b": 3}
+    assert all(t >= 0.0 for s in samples.values() for t in s)
+
+
+def _smi_line(sm: float, power: float) -> str:
+    return f"GPU, 581.0, {sm}, 9001, 70, {power}, 120.0, P0, 0x0"
+
+
+def test_telemetry_sampled_during_a_run_is_summarised() -> None:
+    lines = iter([_smi_line(2000.0, 100.0), _smi_line(1500.0, 110.0), _smi_line(1800.0, 90.0)])
+    sampler = TelemetrySampler(lambda: next(lines, None))
+
+    sampler.start()
+    deadline = time.perf_counter() + 2.0
+    while len(sampler.samples) < 3 and time.perf_counter() < deadline:
+        time.sleep(0.01)
+    samples = sampler.stop()
+
+    summary = summarize_telemetry(samples)
+    assert summary["sm_clock_mhz"] == {
+        "min": 1500.0,
+        "median": 1800.0,
+        "max": 2000.0,
+        "count": 3,
+    }
+    assert summary["power_w"] == {"min": 90.0, "median": 100.0, "max": 110.0, "count": 3}
+    assert summary["samples"] == 3
+    assert summary["pstate"] == {"P0": 3}  # text fields: how often each value was seen
+
+
+def test_telemetry_summary_of_nothing_is_empty() -> None:
+    assert summarize_telemetry([]) == {"samples": 0}
+
+
+def test_bench_session_records_telemetry_during_the_run(tmp_path: Path) -> None:
+    lines = iter([_smi_line(2100.0, 105.0)] * 50)
+    session = BenchSession(
+        conditions=Conditions(on_ac=True, power_mode=PowerMode.BEST_PERFORMANCE, warmup_s=300.0),
+        repo_root=tmp_path,
+        telemetry=lambda: None,
+        power_state=lambda: PowerState(
+            on_ac=True, power_mode=PowerMode.BEST_PERFORMANCE, energy_saver=False
+        ),
+        sampler=lambda: TelemetrySampler(lambda: next(lines, None)),
+    )
+
+    session.start("run")
+    time.sleep(0.05)
+    path = session.record("run", {"ms": 1.0})
+
+    during = json.loads(path.read_text("utf-8"))["telemetry"]["during"]
+    assert during["sm_clock_mhz"]["max"] == 2100.0
+    assert during["samples"] >= 1
+
+
+def test_an_unreadable_sample_does_not_hide_the_others() -> None:
+    """#25 review: one [N/A] power reading keeps the other nine."""
+    samples = [parse_nvidia_smi(_smi_line(2000.0, 100.0 + n)) for n in range(9)]
+    samples.append(parse_nvidia_smi("GPU, 581.0, 2000, 9001, 70, [N/A], 120.0, P2, 0x4"))
+
+    summary = summarize_telemetry(samples)
+
+    assert summary["power_w"]["count"] == 9
+    assert summary["power_w"]["max"] == 108.0
+    assert summary["pstate"] == {"P0": 9, "P2": 1}
+    assert summary["clock_event_reasons"] == {"0x0": 9, "0x4": 1}
+
+
+class _FakeSampler:
+    def __init__(self) -> None:
+        self.stopped = 0
+        self.samples: list[dict] = []
+
+    def start(self) -> None:
+        pass
+
+    def stop(self) -> list[dict]:
+        self.stopped += 1
+        return []
+
+
+def _session(tmp_path: Path, samplers: list[_FakeSampler]) -> BenchSession:
+    def make() -> _FakeSampler:
+        samplers.append(_FakeSampler())
+        return samplers[-1]
+
+    return BenchSession(
+        conditions=OFFICIAL,
+        repo_root=tmp_path,
+        telemetry=lambda: None,
+        power_state=lambda: PLUGGED_FAST,
+        sampler=make,  # type: ignore[arg-type]
+    )
+
+
+def test_closing_a_session_stops_the_samplers_of_failed_benchmarks(tmp_path: Path) -> None:
+    """#25 review: a benchmark that raises between start and record must not leave
+    nvidia-smi running."""
+    samplers: list[_FakeSampler] = []
+    session = _session(tmp_path, samplers)
+
+    session.start("fails")
+    session.close()
+
+    assert [s.stopped for s in samplers] == [1]
+
+
+def test_starting_a_name_again_stops_its_first_sampler(tmp_path: Path) -> None:
+    samplers: list[_FakeSampler] = []
+    session = _session(tmp_path, samplers)
+
+    session.start("twice")
+    session.start("twice")
+    session.record("twice", {"ms": 1.0})
+
+    assert [s.stopped for s in samplers] == [1, 1]
+
+
+@pytest.mark.gpu
+def test_interleaved_cuda_timing_keeps_each_pass_s_own_time() -> None:
+    """GPU-bound passes of 1 and 4 times the work time about 4x apart, under their own
+    names, when interleaved round by round."""
+    n = 1 << 22
+    x = wp.zeros(n, dtype=float, device="cuda:0")
+    y = wp.zeros(n, dtype=float, device="cuda:0")
+
+    def work(times: int) -> None:
+        for _ in range(times):
+            wp.launch(_double, dim=n, inputs=[x, y], device="cuda:0")
+
+    samples = time_interleaved(
+        {"one": lambda: work(1), "four": lambda: work(4)}, rounds=10, device="cuda:0"
+    )
+
+    ratio = float(np.median(samples["four"]) / np.median(samples["one"]))
+    assert 3.0 < ratio < 5.0
+
+
+@wp.kernel
+def _double(x: wp.array(dtype=float), y: wp.array(dtype=float)):
+    i = wp.tid()
+    y[i] = 2.0 * x[i]

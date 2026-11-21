@@ -9,11 +9,13 @@ unofficial; only official runs are written to `docs/benchmarks/results/`.
 
 from __future__ import annotations
 
+import atexit
 import ctypes
 import json
 import platform
 import subprocess
 import sys
+import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
@@ -290,6 +292,152 @@ def read_gpu_telemetry(query: Callable[[], str] = _query_nvidia_smi) -> dict[str
         return None
 
 
+class TelemetrySampler:
+    """GPU telemetry read in the background while a benchmark runs (#25).
+
+    `lines` returns the next `nvidia-smi` CSV line, or None when there is none; by
+    default it reads a single `nvidia-smi -lms 100` process (10 lines a second), so
+    sampling spawns one process per benchmark rather than one per sample. A short
+    benchmark under the power cap can change P-state between `start` and `stop`: the
+    samples show it.
+    """
+
+    def __init__(self, lines: Callable[[], str | None] | None = None) -> None:
+        self._lines = lines
+        self._process: subprocess.Popen[str] | None = None
+        self._thread: threading.Thread | None = None
+        self._stop = threading.Event()
+        self.samples: list[dict[str, Any]] = []
+
+    def _default_lines(self) -> Callable[[], str | None]:
+        query = ",".join(name for _, name, _ in _NVIDIA_SMI_FIELDS)
+        self._process = subprocess.Popen(
+            [
+                "nvidia-smi",
+                f"--query-gpu={query}",
+                "--format=csv,noheader,nounits",
+                "-i",
+                "0",
+                "-lms",
+                "100",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+        # Last resort, should a benchmark's process end without `stop`: on Windows an
+        # orphaned nvidia-smi keeps polling the GPU until reboot.
+        atexit.register(self._process.kill)
+        stdout = self._process.stdout
+        return lambda: stdout.readline() or None if stdout is not None else None
+
+    def _run(self, lines: Callable[[], str | None]) -> None:
+        while not self._stop.is_set():
+            line = lines()
+            if line is None:
+                if self._stop.wait(0.01):
+                    break
+                continue
+            try:
+                self.samples.append(parse_nvidia_smi(line.strip()))
+            except ValueError:
+                continue
+
+    def start(self) -> None:
+        try:
+            lines = self._lines or self._default_lines()
+        except OSError:
+            return  # no nvidia-smi: no telemetry, never a lost measurement
+        self._thread = threading.Thread(target=self._run, args=(lines,), daemon=True)
+        self._thread.start()
+
+    def stop(self) -> list[dict[str, Any]]:
+        """Stop sampling and the nvidia-smi process; safe to call more than once."""
+        self._stop.set()
+        process = self._process
+        if process is not None:
+            process.terminate()
+        if self._thread is not None:
+            self._thread.join(timeout=2.0)
+        if process is not None:
+            try:
+                process.wait(timeout=2.0)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=2.0)
+            if process.stdout is not None:
+                process.stdout.close()
+            atexit.unregister(process.kill)
+            self._process = None
+        return list(self.samples)
+
+
+def summarize_telemetry(samples: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """The samples, field by field: min, median, max and count of the readable values of
+    a numeric field (an unreadable one, `[N/A]`, drops only itself), and how often each
+    value of a text field was seen (P-states, clock event reasons: why clocks dropped)."""
+    summary: dict[str, Any] = {"samples": len(samples)}
+    keys = {key for sample in samples for key in sample}
+    for key in sorted(keys):
+        present = [s[key] for s in samples if s.get(key) is not None]
+        numbers = [v for v in present if isinstance(v, int | float) and not isinstance(v, bool)]
+        if numbers:
+            summary[key] = {
+                "min": float(min(numbers)),
+                "median": float(np.median(numbers)),
+                "max": float(max(numbers)),
+                "count": len(numbers),
+            }
+        elif present:
+            counts: dict[str, int] = {}
+            for value in present:
+                counts[str(value)] = counts.get(str(value), 0) + 1
+            summary[key] = counts
+    return summary
+
+
+def time_interleaved(
+    fns: Mapping[str, Callable[[], object]], *, rounds: int, device: str, warmup_calls: int = 3
+) -> dict[str, list[float]]:
+    """Durations of each of `fns` over `rounds` rounds, one call of each per round (#25).
+
+    Compared passes interleaved repeat by repeat feel the same clock drift while the
+    GPU throttles, so their ratios hold (ADR 0022). For GPU-bound passes only: on CUDA a
+    pass's span starts when the GPU reaches it, so a host-bound pass that follows a long
+    GPU pass is partly enqueued before its span starts and reads short (measured: 1,000
+    tiny launches 30 % short after a 33 ms pass). Time host-bound passes with
+    `time_device`.
+    """
+    wp.init()
+    for _ in range(warmup_calls):
+        for fn in fns.values():
+            fn()
+    wp.synchronize_device(device)
+    samples: dict[str, list[float]] = {name: [] for name in fns}
+    cuda = wp.get_device(device).is_cuda
+    stream = wp.get_stream(device) if cuda else None
+    events: list[tuple[str, Any, Any]] = []
+    for _ in range(rounds):
+        for name, fn in fns.items():
+            if stream is not None:
+                start = wp.Event(device, enable_timing=True)
+                end = wp.Event(device, enable_timing=True)
+                stream.record_event(start)
+                fn()
+                stream.record_event(end)
+                events.append((name, start, end))
+            else:
+                begin = time.perf_counter()
+                fn()
+                wp.synchronize_device(device)
+                samples[name].append(time.perf_counter() - begin)
+    if stream is not None:
+        wp.synchronize_device(device)
+        for name, start, end in events:
+            samples[name].append(wp.get_event_elapsed_time(start, end) * 1e-3)
+    return samples
+
+
 def time_device(
     fn: Callable[[], object], *, repeats: int, device: str, warmup_calls: int = 3
 ) -> list[float]:
@@ -437,19 +585,36 @@ class BenchSession:
     repo_root: Path
     telemetry: Callable[[], Mapping[str, Any] | None] = read_gpu_telemetry
     power_state: Callable[[], PowerState] = read_power_state
+    sampler: Callable[[], TelemetrySampler] = TelemetrySampler
     stamp: datetime = field(default_factory=lambda: datetime.now().replace(microsecond=0))
-    _started: dict[str, tuple[Mapping[str, Any] | None, PowerState]] = field(default_factory=dict)
+    _started: dict[str, tuple[Mapping[str, Any] | None, PowerState, TelemetrySampler]] = field(
+        default_factory=dict
+    )
 
     def start(self, name: str) -> None:
-        """Call right before measuring `name`."""
-        self._started[name] = (self.telemetry(), self.power_state())
+        """Call right before measuring `name`; telemetry is sampled until `record`. A name
+        started again stops its first sampler."""
+        previous = self._started.pop(name, None)
+        if previous is not None:
+            previous[2].stop()
+        before, power = self.telemetry(), self.power_state()
+        sampler = self.sampler()
+        sampler.start()  # last, so no sample predates the measurement
+        self._started[name] = (before, power, sampler)
+
+    def close(self) -> None:
+        """Stop every sampler still running: benchmarks that raised before `record`."""
+        for _, _, sampler in self._started.values():
+            sampler.stop()
+        self._started.clear()
 
     def record(self, name: str, metrics: Mapping[str, Any]) -> Path:
         """Write the result of `name`; `start(name)` must have been called."""
         if name not in self._started:
             raise RuntimeError(f"call bench_session.start({name!r}) before measuring {name!r}")
-        before, power_before = self._started.pop(name)
-        telemetry = {"before": before, "after": self.telemetry()}
+        before, power_before, sampler = self._started.pop(name)
+        during = summarize_telemetry(sampler.stop())
+        telemetry = {"before": before, "during": during, "after": self.telemetry()}
         conditions = self.conditions.after(power_before).after(self.power_state())
         return write_result(
             name, metrics, conditions, self.repo_root, stamp=self.stamp, telemetry=telemetry

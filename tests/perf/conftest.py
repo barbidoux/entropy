@@ -10,6 +10,7 @@ and go to `out/benchmarks/` instead of `docs/benchmarks/results/`.
 
 import os
 import warnings
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -37,7 +38,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
 
 
 @pytest.fixture(scope="session")
-def bench_session() -> BenchSession:
+def bench_session() -> Iterator[BenchSession]:
     """Warmed-up GPU and the conditions every result of this session starts from."""
     assert wp.is_cuda_available(), "Benchmarks need the laptop's CUDA GPU."
     warmup_target_s = float(os.environ.get("ENTROPY_WARMUP_S", WARMUP_REQUIRED_S))
@@ -53,7 +54,11 @@ def bench_session() -> BenchSession:
     if not conditions.official:
         reasons = "; ".join(conditions.reasons_not_official())
         warnings.warn(f"Unofficial benchmark session ({reasons})", stacklevel=1)
-    return BenchSession(conditions=conditions, repo_root=REPO_ROOT)
+    session = BenchSession(conditions=conditions, repo_root=REPO_ROOT)
+    try:
+        yield session
+    finally:
+        session.close()  # a benchmark that raised leaves no nvidia-smi behind
 
 
 @pytest.fixture(autouse=True)
