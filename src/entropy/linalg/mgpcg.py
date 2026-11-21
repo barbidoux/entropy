@@ -38,7 +38,7 @@ from graphs). Iterations past convergence only lower the residual further.
 Named limit: every connected body of fluid must touch air, or A is singular. A
 sealed pocket does not converge (`converged` is false after `max_iterations`), and
 an isolated fluid cell gets an arbitrary pressure through the diagonal's 1e-12
-floor. The liquid labels such pockets (#49).
+floor. Detecting such pockets is #69.
 """
 
 from __future__ import annotations
@@ -77,8 +77,9 @@ class PoissonSystem:
     air_theta: float = 1.0
     """θ of every air face, used again when the operator is refreshed from new labels."""
     face_theta: tuple[wp.array, wp.array, wp.array] | None = None
-    """One θ per face (x, y and z faces), replacing `air_theta` when given: the liquid
-    writes them from its level set (second-order free surface). Clamped to [1e-3, 1]."""
+    """One θ per face (x, y and z faces), instead of `air_theta`: the liquid writes them
+    from its level set (second-order free surface). Clamped to [1e-3, 1], a safety
+    floor for any caller; the liquid floors θ at 0.01 itself (ADR 0017)."""
 
     def __post_init__(self) -> None:
         nx, ny, nz = self.labels.shape
@@ -100,9 +101,13 @@ class PoissonSystem:
             for name, theta, w in zip(
                 "xyz", self.face_theta, (self.wx, self.wy, self.wz), strict=True
             ):
-                if theta.shape != w.shape or theta.device != w.device:
+                if theta.shape != w.shape:
                     raise ValueError(
                         f"face_theta {name} has shape {theta.shape}, its faces {w.shape}"
+                    )
+                if theta.device != w.device:
+                    raise ValueError(
+                        f"face_theta {name} is on {theta.device}, labels on {w.device}"
                     )
 
     @property
@@ -136,10 +141,12 @@ def system_from_labels(
 
     `labels` is an int32 cell array; `air_theta` in (0, 1] places p = 0 between a
     fluid cell and an air neighbour (½: on the face, second order; 1: at the air
-    cell's centre).
+    cell's centre). `face_theta` gives one θ per face instead: pass one or the other.
     """
     if not (math.isfinite(air_theta) and 0.0 < air_theta <= 1.0):
         raise ValueError(f"air_theta must be in (0, 1], got {air_theta}")
+    if face_theta is not None and air_theta != 1.0:
+        raise ValueError("give air_theta or face_theta, not both")
     if labels.dtype != wp.int32 or labels.ndim != 3:
         raise ValueError("labels must be a 3D int32 array")
     nx, ny, nz = labels.shape

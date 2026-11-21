@@ -348,25 +348,35 @@ def test_one_theta_per_face_equal_everywhere_gives_the_single_theta_system(devic
     np.testing.assert_allclose(per_face.diag.numpy(), single.diag.numpy(), rtol=1e-6)
 
 
-def test_the_operator_with_one_theta_per_face_is_symmetric(device: str) -> None:
-    shape = (7, 6, 5)
+def test_each_face_theta_weighs_its_own_face(device: str) -> None:
+    """A fluid cell in air: each of its six faces adds 1/θ of that face to the diagonal."""
+    labels = np.full((3, 3, 3), CELL_AIR)
+    labels[1, 1, 1] = CELL_FLUID
+    thetas = [np.ones(face) for face in ((4, 3, 3), (3, 4, 3), (3, 3, 4))]
+    own = {(0, 1): 0.2, (0, 2): 0.25, (1, 1): 0.4, (1, 2): 0.5, (2, 1): 0.8, (2, 2): 1.0}
+    for (axis, index), value in own.items():
+        face = [1, 1, 1]
+        face[axis] = index
+        thetas[axis][tuple(face)] = value
+    dx_m = 0.1
+
     system = system_from_labels(
-        _labels(_random_labels(shape, 41), device),
-        dx_m=0.1,
-        face_theta=_face_thetas(shape, device, seed=42),
+        _labels(labels, device),
+        dx_m=dx_m,
+        face_theta=(
+            _field(thetas[0], device),
+            _field(thetas[1], device),
+            _field(thetas[2], device),
+        ),
     )
-    rng = np.random.default_rng(43)
-    x, y = rng.standard_normal(shape), rng.standard_normal(shape)
-    ax = wp.zeros(shape, dtype=float, device=device)
-    ay = wp.zeros(shape, dtype=float, device=device)
 
-    apply(system, _field(x, device), ax)
-    apply(system, _field(y, device), ay)
+    unit = np.zeros((3, 3, 3))
+    unit[1, 1, 1] = 1.0
+    out = wp.zeros((3, 3, 3), dtype=float, device=device)
+    apply(system, _field(unit, device), out)
 
-    fluid = system.labels.numpy() == CELL_FLUID
-    assert np.dot(x[fluid], ay.numpy()[fluid]) == pytest.approx(
-        np.dot(y[fluid], ax.numpy()[fluid]), rel=1e-4
-    )
+    expected = sum(1.0 / v for v in own.values()) / dx_m**2
+    assert out.numpy()[1, 1, 1] == pytest.approx(expected, rel=1e-6)
 
 
 def test_refresh_reads_the_face_thetas_again(device: str) -> None:
@@ -389,4 +399,19 @@ def test_face_thetas_must_match_the_faces() -> None:
     labels = _labels(np.full((4, 4, 4), CELL_FLUID), "cpu")
     thetas = _face_thetas((4, 4, 3), "cpu", value=0.5)
     with pytest.raises(ValueError, match="theta"):
+        system_from_labels(labels, dx_m=0.1, face_theta=thetas)
+
+
+def test_one_theta_for_all_and_one_per_face_cannot_both_be_given() -> None:
+    labels = _labels(np.full((4, 4, 4), CELL_FLUID), "cpu")
+    thetas = _face_thetas((4, 4, 4), "cpu", value=0.5)
+    with pytest.raises(ValueError, match="air_theta or face_theta"):
+        system_from_labels(labels, dx_m=0.1, air_theta=0.5, face_theta=thetas)
+
+
+@pytest.mark.gpu
+def test_face_thetas_must_be_on_the_labels_device() -> None:
+    labels = _labels(np.full((4, 4, 4), CELL_FLUID), "cuda:0")
+    thetas = _face_thetas((4, 4, 4), "cpu", value=0.5)
+    with pytest.raises(ValueError, match="face_theta x is on cpu"):
         system_from_labels(labels, dx_m=0.1, face_theta=thetas)
