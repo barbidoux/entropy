@@ -86,12 +86,20 @@ def _surface_heights(liquid: LiquidSolver, columns: slice = slice(1, -1)) -> np.
     return z[k] + DX_M * lo / (lo - hi)
 
 
+def _in_cell_order(positions_m: np.ndarray, shape: tuple[int, int, int]) -> np.ndarray:
+    """`positions_m` in the order the liquid keeps its particles (#65): by cell, x-major,
+    stable. Water that stays in its cells keeps this order frame after frame."""
+    cells = np.clip(np.floor(positions_m / DX_M).astype(int), 0, np.array(shape) - 1)
+    keys = (cells[:, 0] * shape[1] + cells[:, 1]) * shape[2] + cells[:, 2]
+    return positions_m[np.argsort(keys, kind="stable")]
+
+
 def test_still_water_stays_still(device: str) -> None:
     """A tank of still water with a flat surface: after 1 s nothing has moved by 1 mm
     (ADR 0017's falsifier), and the surface is where the water ends, within 1 mm."""
     liquid = LiquidSolver.create(_setup((12, 12, 16)), device)
     liquid.add_particles(fill_box((0.0, 0.0, 0.0), (0.75, 0.75, 0.5), DX_M, 8, seed=3, jitter=0.0))
-    start = liquid.particle_positions().copy()
+    start = _in_cell_order(liquid.particle_positions(), (12, 12, 16))
 
     for _ in range(60):
         liquid.step(1.0 / 60.0)
@@ -622,6 +630,23 @@ def test_a_particle_stands_for_a_cell_over_its_particles() -> None:
     assert setup.particle_volume_m3 == pytest.approx(DX_M**3 / 8)
 
 
+def test_each_frame_starts_with_the_particles_sorted_by_cell(device: str) -> None:
+    """#65: the liquid sorts its particles by cell (x-major) as each frame starts, so the
+    transfers read and write the grid in order. Still water on a lattice keeps its cells
+    through the frame, so the order is still there after it."""
+    shape = (12, 10, 16)
+    liquid = LiquidSolver.create(_setup(shape), device)
+    points = fill_box((0.0, 0.0, 0.0), (0.75, 0.625, 0.5), DX_M, 8, seed=26, jitter=0.0)
+    liquid.add_particles(points[np.random.default_rng(3).permutation(len(points))])
+
+    liquid.step(1.0 / 60.0)
+
+    cells = np.clip(
+        np.floor(liquid.particle_positions() / DX_M).astype(int), 0, np.array(shape) - 1
+    )
+    keys = (cells[:, 0] * shape[1] + cells[:, 1]) * shape[2] + cells[:, 2]
+    assert np.all(np.diff(keys) >= 0)
+    assert len(keys) == len(points)
 def test_the_grid_holds_at_most_its_volume_of_water(device: str) -> None:
     """Room for particles: the open cells times the particles per cell, at most the
     particle capacity; what is added takes room (#74's review, B1)."""
