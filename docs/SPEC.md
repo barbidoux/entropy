@@ -248,12 +248,12 @@ Each phenomenon uses a published method in SI units, and each method has validat
 - Ambient air is 293.15 K and 101,325 Pa.
 - Every material is one data file (`content/materials/<name>.toml`) holding all its constants and a `source` field citing where each value comes from. Tests read constants from these files, never from hard-coded numbers.
 
-Initial material values below are order-of-magnitude placeholders. Each one gets a cited source before the milestone that first uses it.
+Initial material values below are order-of-magnitude placeholders. Each one gets a cited source before the milestone that first uses it, and from then on the material file is the reference: water, glass and concrete densities are sourced since M1.
 
 | Material | Density (kg/m³) | Young's modulus (GPa) | Tensile strength (MPa) | Compressive strength (MPa) | Burns |
 | --- | --- | --- | --- | --- | --- |
 | Softwood (pine) | 500 | 10 | 40 | 35 | yes |
-| Concrete | 2,400 | 30 | 3 | 30 | no |
+| Concrete | 2,450 | 30 | 3 | 30 | no |
 | Brick masonry | 1,900 | 5 | 0.5 | 10 | no |
 | Annealed glass | 2,500 | 70 | 40 | 1,000 | no |
 | Plasterboard | 700 | 2 | 1 | 4 | facing only |

@@ -38,6 +38,8 @@ def parse_material(text: str, *, origin: str) -> Material:
     except tomllib.TOMLDecodeError as error:
         raise ValueError(f"{origin}: {error}") from error
     sources = raw.pop("source", {})
+    if not isinstance(sources, dict):
+        raise ValueError(f"{origin}: [source] must be a table of key = citation")
     name = raw.pop("name", None)
     if not isinstance(name, str) or not name.strip():
         raise ValueError(f"{origin}: name must be a non-empty string")

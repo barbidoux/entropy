@@ -3,4 +3,4 @@ name = "Annealed glass"
 density_kg_per_m3 = 2500.0
 
 [source]
-density_kg_per_m3 = "EN 572-1:2012, Glass in building - Basic soda lime silicate glass products - Part 1: Definitions and general physical and mechanical properties: density 2,500 kg/m³"
+density_kg_per_m3 = "EN 572-1:2012+A1:2016, Glass in building - Basic soda lime silicate glass products - Part 1: Definitions and general physical and mechanical properties: density 2,500 kg/m³"

@@ -30,11 +30,11 @@ def test_every_constant_cites_a_source(name: str) -> None:
     assert all(source.strip() for source in material.sources.values())
 
 
-def test_water_is_denser_than_air_and_lighter_than_glass() -> None:
+def test_water_is_lighter_than_glass() -> None:
     """A sanity check on the files, not a stored constant."""
     water, glass = load_material("water"), load_material("glass")
 
-    assert 1.2 < water.density_kg_per_m3 < glass.density_kg_per_m3
+    assert 0.0 < water.density_kg_per_m3 < glass.density_kg_per_m3
 
 
 def test_a_constant_without_a_source_is_an_error() -> None:
@@ -51,11 +51,18 @@ def test_unknown_keys_are_errors() -> None:
         parse_material(text, origin="x.toml")
 
 
-@pytest.mark.parametrize("density", ["0.0", "-5.0", "nan", '"heavy"'])
+@pytest.mark.parametrize("density", ["0.0", "-5.0", "nan", "inf", "true", '"heavy"'])
 def test_an_impossible_density_is_an_error(density: str) -> None:
     text = f'name = "x"\ndensity_kg_per_m3 = {density}\n[source]\ndensity_kg_per_m3 = "s"\n'
 
     with pytest.raises(ValueError, match="density_kg_per_m3"):
+        parse_material(text, origin="x.toml")
+
+
+def test_a_source_that_is_not_a_table_is_an_error() -> None:
+    text = 'name = "x"\ndensity_kg_per_m3 = 1.0\nsource = "somewhere"\n'
+
+    with pytest.raises(ValueError, match=re.escape("x.toml: [source] must be a table")):
         parse_material(text, origin="x.toml")
 
 

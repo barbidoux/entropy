@@ -1,18 +1,28 @@
 """Static solids as signed distance fields (SPEC 5.2: static geometry enters as an SDF).
 
-Solids are unions of axis-aligned boxes for now: enough for the Test Tank (an
-open glass box on a concrete floor). The signed distance is negative inside a
-solid and positive outside, in metres. The normal is the unit gradient of the
-distance: it points out of the nearest solid, which is the way to push a
-particle out of it.
+A solid is a union of primitives: axis-aligned boxes, open boxes (a tank: walls
+and a floor around a cavity open at the top) and half-spaces (a floor). The
+signed distance is negative inside a solid and positive outside, in metres. The
+normal is the unit gradient of the distance: it points out of the nearest
+solid surface, which is the way to push a particle out of it.
 
-Box distances are exact (Quilez's formula). For a union the distance is the
-minimum over boxes. It is exact outside the union, but inside where boxes
-overlap it is only a bound. The open box below builds its walls without
-overlaps for that reason.
+Exactness:
+- A box's distance is exact (Quilez's formula), and so is a half-space's.
+- An open box is its outer box minus its cavity, where the cavity extends
+  upward without end: d = max(d_outer, -d_cavity). This is exact inside the
+  walls and the floor, where push-out happens, and exact in the cavity and
+  beside the tank. Above the rim, over the cavity, it is a lower bound (the
+  nearest point is a rim edge).
+- A union takes the nearest primitive. This is exact outside every primitive,
+  and a bound inside where two primitives overlap. Build solids without
+  overlaps, as the open box does internally.
 
-This module knows grids only as plain numbers (origin, cell size): `world`
-sits beside `fields`, not above it (SPEC 8.1).
+Ties (a point equally near two faces of a box) resolve x first, then y, then z,
+and towards + on a mid-plane. Between primitives the first kind wins (boxes,
+then open boxes, then half-spaces), then the first of that kind.
+
+This module knows grids only as plain numbers (origin, cell size): `world` sits
+beside `fields`, not above it (SPEC 8.1).
 """
 
 from __future__ import annotations
@@ -24,6 +34,8 @@ from dataclasses import dataclass
 import numpy as np
 import warp as wp
 
+from entropy.world import _sdf_kernels as _k
+
 Vec3 = tuple[float, float, float]
 
 
@@ -33,7 +45,7 @@ def _finite(v: Sequence[float]) -> bool:
 
 @dataclass(frozen=True)
 class Box:
-    """An axis-aligned box: centre and half sizes in metres."""
+    """An axis-aligned solid box: centre and half sizes in metres."""
 
     centre_m: Vec3
     half_size_m: Vec3
@@ -46,135 +58,95 @@ class Box:
 
 
 @dataclass(frozen=True)
-class DeviceSolids:
-    """Box centres and half sizes as device arrays (vec3, m)."""
+class OpenBox:
+    """A tank: a floor and four walls `wall_m` thick around a cavity open at the top.
 
-    centres_m: wp.array
-    half_sizes_m: wp.array
+    The cavity spans `inner_min_m` to `inner_max_m`; the walls rise from the
+    bottom of the floor to the cavity's top.
+    """
+
+    inner_min_m: Vec3
+    inner_max_m: Vec3
+    wall_m: float
+
+    def __post_init__(self) -> None:
+        lo, hi = self.inner_min_m, self.inner_max_m
+        if not (_finite(lo) and _finite(hi)) or any(b <= a for a, b in zip(lo, hi, strict=True)):
+            raise ValueError(f"inner_min_m {lo} must be below inner_max_m {hi}")
+        if not (math.isfinite(self.wall_m) and self.wall_m > 0):
+            raise ValueError(f"wall_m must be positive and finite, got {self.wall_m}")
+
+
+@dataclass(frozen=True)
+class HalfSpace:
+    """Everything on the far side of the plane through `point_m` against `normal`."""
+
+    point_m: Vec3
+    normal: Vec3
+
+    def __post_init__(self) -> None:
+        if not (_finite(self.point_m) and _finite(self.normal)) or not any(self.normal):
+            raise ValueError(f"need a finite point and a non-zero normal, got {self.normal}")
+
+
+Shape = Box | OpenBox | HalfSpace
+
+
+@dataclass(frozen=True)
+class DeviceSolids:
+    """The primitives of a `Solids` as device arrays (vec3 and float, m), one set per kind."""
+
+    box_centres_m: wp.array
+    box_halves_m: wp.array
+    tank_lows_m: wp.array
+    tank_highs_m: wp.array
+    tank_walls_m: wp.array
+    plane_points_m: wp.array
+    plane_normals: wp.array
+
+    def arrays(self) -> list[wp.array]:
+        """The arrays in the order the kernels take them."""
+        return [
+            self.box_centres_m,
+            self.box_halves_m,
+            self.tank_lows_m,
+            self.tank_highs_m,
+            self.tank_walls_m,
+            self.plane_points_m,
+            self.plane_normals,
+        ]
 
 
 @dataclass(frozen=True)
 class Solids:
-    """A union of boxes."""
+    """A union of boxes, open boxes and half-spaces."""
 
-    boxes: tuple[Box, ...]
+    shapes: tuple[Shape, ...]
 
     def __post_init__(self) -> None:
-        if not self.boxes:
-            raise ValueError("a solid needs at least one box")
+        if not self.shapes:
+            raise ValueError("a solid needs at least one shape")
 
     def to_device(self, device: str) -> DeviceSolids:
-        centres = np.array([b.centre_m for b in self.boxes], dtype=np.float32)
-        halves = np.array([b.half_size_m for b in self.boxes], dtype=np.float32)
+        def vectors(values: Sequence[Sequence[float]] | Sequence[np.ndarray]) -> wp.array:
+            array = np.asarray(values, dtype=np.float32).reshape(-1, 3)
+            return wp.array(array, dtype=wp.vec3, device=device)
+
+        boxes = [s for s in self.shapes if isinstance(s, Box)]
+        tanks = [s for s in self.shapes if isinstance(s, OpenBox)]
+        planes = [s for s in self.shapes if isinstance(s, HalfSpace)]
+        walls = np.asarray([t.wall_m for t in tanks], dtype=np.float32)
         return DeviceSolids(
-            wp.array(centres, dtype=wp.vec3, device=device),
-            wp.array(halves, dtype=wp.vec3, device=device),
+            box_centres_m=vectors([b.centre_m for b in boxes]),
+            box_halves_m=vectors([b.half_size_m for b in boxes]),
+            tank_lows_m=vectors([t.inner_min_m for t in tanks]),
+            tank_highs_m=vectors([t.inner_max_m for t in tanks]),
+            tank_walls_m=wp.array(walls, dtype=float, device=device),
+            plane_points_m=vectors([p.point_m for p in planes]),
+            plane_normals=vectors(
+                [np.asarray(p.normal) / np.linalg.norm(p.normal) for p in planes]
+            ),
         )
-
-
-def open_box(*, inner_min_m: Vec3, inner_max_m: Vec3, wall_m: float) -> tuple[Box, ...]:
-    """A box open at the top: a floor and four walls `wall_m` thick around the cavity.
-
-    The cavity spans `inner_min_m` to `inner_max_m`. The floor lies under it,
-    and the walls stand on the floor up to the cavity's top. The boxes do not
-    overlap, so the union distance is exact inside the walls too.
-    """
-    lo, hi = np.asarray(inner_min_m, float), np.asarray(inner_max_m, float)
-    if not (_finite(inner_min_m) and _finite(inner_max_m)) or np.any(hi <= lo):
-        raise ValueError(f"inner_min_m {inner_min_m} must be below inner_max_m {inner_max_m}")
-    if not (math.isfinite(wall_m) and wall_m > 0):
-        raise ValueError(f"wall_m must be positive and finite, got {wall_m}")
-    t = wall_m
-    outer_lo = lo - np.array([t, t, t])
-    outer_hi = np.array([hi[0] + t, hi[1] + t, hi[2]])
-
-    def box(a: np.ndarray, b: np.ndarray) -> Box:
-        centre, half = (a + b) / 2, (b - a) / 2
-        return Box(tuple(map(float, centre)), tuple(map(float, half)))  # pyright: ignore[reportArgumentType]
-
-    floor = box(outer_lo, np.array([outer_hi[0], outer_hi[1], lo[2]]))
-    z0, z1 = lo[2], hi[2]
-    x_low = box(np.array([outer_lo[0], outer_lo[1], z0]), np.array([lo[0], outer_hi[1], z1]))
-    x_high = box(np.array([hi[0], outer_lo[1], z0]), np.array([outer_hi[0], outer_hi[1], z1]))
-    y_low = box(np.array([lo[0], outer_lo[1], z0]), np.array([hi[0], lo[1], z1]))
-    y_high = box(np.array([lo[0], hi[1], z0]), np.array([hi[0], outer_hi[1], z1]))
-    return (floor, x_low, x_high, y_low, y_high)
-
-
-@wp.func
-def _box_distance(p: wp.vec3, centre: wp.vec3, half: wp.vec3) -> float:
-    d = p - centre
-    q = wp.vec3(wp.abs(d[0]), wp.abs(d[1]), wp.abs(d[2])) - half
-    outside = wp.vec3(wp.max(q[0], 0.0), wp.max(q[1], 0.0), wp.max(q[2], 0.0))
-    return wp.length(outside) + wp.min(wp.max(q[0], wp.max(q[1], q[2])), 0.0)  # pyright: ignore[reportCallIssue, reportArgumentType, reportOperatorIssue] (Warp kernel types)
-
-
-@wp.func
-def _sign(x: float) -> float:
-    if x < 0.0:
-        return -1.0
-    return 1.0
-
-
-@wp.func
-def _box_normal(p: wp.vec3, centre: wp.vec3, half: wp.vec3) -> wp.vec3:
-    """Unit gradient of `_box_distance`: away from the box, or to its nearest face inside."""
-    d = p - centre
-    q = wp.vec3(wp.abs(d[0]), wp.abs(d[1]), wp.abs(d[2])) - half
-    s = wp.vec3(_sign(d[0]), _sign(d[1]), _sign(d[2]))
-    if wp.max(q[0], wp.max(q[1], q[2])) > 0.0:  # pyright: ignore[reportCallIssue, reportArgumentType, reportOperatorIssue] (Warp kernel types)
-        ox = wp.max(q[0], 0.0) * s[0]  # pyright: ignore[reportCallIssue, reportArgumentType, reportOperatorIssue] (Warp kernel types)
-        oy = wp.max(q[1], 0.0) * s[1]  # pyright: ignore[reportCallIssue, reportArgumentType, reportOperatorIssue] (Warp kernel types)
-        oz = wp.max(q[2], 0.0) * s[2]  # pyright: ignore[reportCallIssue, reportArgumentType, reportOperatorIssue] (Warp kernel types)
-        outside = wp.vec3(ox, oy, oz)
-        return wp.normalize(outside)  # pyright: ignore[reportCallIssue, reportArgumentType, reportOperatorIssue] (Warp kernel types)
-    if q[0] >= q[1] and q[0] >= q[2]:
-        return wp.vec3(s[0], 0.0, 0.0)
-    if q[1] >= q[2]:
-        return wp.vec3(0.0, s[1], 0.0)
-    return wp.vec3(0.0, 0.0, s[2])
-
-
-@wp.func
-def _nearest(p: wp.vec3, centres: wp.array(dtype=wp.vec3), halves: wp.array(dtype=wp.vec3)) -> int:
-    best = wp.int32(0)  # a typed constructor makes it mutable in the loop
-    best_d = _box_distance(p, centres[0], halves[0])
-    for b in range(1, centres.shape[0]):
-        d = _box_distance(p, centres[b], halves[b])
-        if d < best_d:
-            best_d = d
-            best = b
-    return best  # pyright: ignore[reportReturnType] (Warp int32 is the kernel int)
-
-
-@wp.kernel
-def _distance_kernel(
-    centres: wp.array(dtype=wp.vec3),
-    halves: wp.array(dtype=wp.vec3),
-    points_m: wp.array(dtype=wp.vec3),
-    distance_m: wp.array(dtype=float),
-    normals: wp.array(dtype=wp.vec3),
-):
-    t = wp.tid()
-    p = points_m[t]
-    b = _nearest(p, centres, halves)
-    distance_m[t] = _box_distance(p, centres[b], halves[b])
-    normals[t] = _box_normal(p, centres[b], halves[b])
-
-
-@wp.kernel
-def _grid_kernel(
-    centres: wp.array(dtype=wp.vec3),
-    halves: wp.array(dtype=wp.vec3),
-    origin_m: wp.vec3,
-    dx_m: float,
-    out: wp.array3d(dtype=float),
-):
-    # 3D launch: tid() returns three indices, which Warp's stubs do not express.
-    i, j, k = wp.tid()  # pyright: ignore[reportGeneralTypeIssues, reportAssignmentType]
-    p = origin_m + wp.vec3(float(i) + 0.5, float(j) + 0.5, float(k) + 0.5) * dx_m
-    b = _nearest(p, centres, halves)
-    out[i, j, k] = _box_distance(p, centres[b], halves[b])
 
 
 def signed_distance(
@@ -183,26 +155,32 @@ def signed_distance(
     """Signed distance (m) and outward unit normal of the union at each point."""
     if not points_m.shape == distance_m.shape == normals.shape:
         raise ValueError("points, distances and normals must have one shape")
-    device = solids.centres_m.device
+    device = solids.box_centres_m.device
     if not points_m.device == distance_m.device == normals.device == device:
         raise ValueError("solids, points and outputs must be on one device")
     wp.launch(
-        _distance_kernel,
+        _k.distance_kernel,
         dim=points_m.shape[0],
-        inputs=[solids.centres_m, solids.half_sizes_m, points_m, distance_m, normals],
+        inputs=[*solids.arrays(), points_m, distance_m, normals],
         device=device,
     )
 
 
 def sample_on_grid(solids: DeviceSolids, origin_m: Vec3, dx_m: float, out: wp.array) -> None:
-    """Signed distance (m) at the cell centres of a grid of `out.shape` cells of `dx_m`."""
+    """Signed distance (m) at the cell centres of a grid of `out.shape` cells of `dx_m`.
+
+    Cell (i, j, k) is centred at origin + (i + ½, j + ½, k + ½)·dx (ADR 0015).
+    Named limit: a solid thinner than a cell can miss every cell centre, so
+    its samples may all be positive. A solver must then use point queries,
+    face fractions or thicker walls.
+    """
     if not (math.isfinite(dx_m) and dx_m > 0) or not _finite(origin_m):
         raise ValueError(f"need a finite origin and a positive cell size, got {origin_m}, {dx_m}")
-    if out.device != solids.centres_m.device:
+    if out.device != solids.box_centres_m.device:
         raise ValueError("solids and the grid must be on one device")
     wp.launch(
-        _grid_kernel,
+        _k.grid_kernel,
         dim=out.shape,
-        inputs=[solids.centres_m, solids.half_sizes_m, wp.vec3(*origin_m), dx_m, out],
+        inputs=[*solids.arrays(), wp.vec3(*origin_m), dx_m, out],
         device=out.device,
     )
