@@ -9,6 +9,7 @@ unofficial; only official runs are written to `docs/benchmarks/results/`.
 
 from __future__ import annotations
 
+import atexit
 import ctypes
 import json
 import platform
@@ -324,6 +325,9 @@ class TelemetrySampler:
             stderr=subprocess.DEVNULL,
             text=True,
         )
+        # Last resort, should a benchmark's process end without `stop`: on Windows an
+        # orphaned nvidia-smi keeps polling the GPU until reboot.
+        atexit.register(self._process.kill)
         stdout = self._process.stdout
         return lambda: stdout.readline() or None if stdout is not None else None
 
@@ -348,32 +352,47 @@ class TelemetrySampler:
         self._thread.start()
 
     def stop(self) -> list[dict[str, Any]]:
+        """Stop sampling and the nvidia-smi process; safe to call more than once."""
         self._stop.set()
-        if self._process is not None:
-            self._process.terminate()
+        process = self._process
+        if process is not None:
+            process.terminate()
         if self._thread is not None:
             self._thread.join(timeout=2.0)
-        if self._process is not None:
+        if process is not None:
             try:
-                self._process.wait(timeout=2.0)
+                process.wait(timeout=2.0)
             except subprocess.TimeoutExpired:
-                self._process.kill()
+                process.kill()
+                process.wait(timeout=2.0)
+            if process.stdout is not None:
+                process.stdout.close()
+            atexit.unregister(process.kill)
+            self._process = None
         return list(self.samples)
 
 
 def summarize_telemetry(samples: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
-    """min, median and max of each numeric telemetry field, and the sample count."""
+    """The samples, field by field: min, median, max and count of the readable values of
+    a numeric field (an unreadable one, `[N/A]`, drops only itself), and how often each
+    value of a text field was seen (P-states, clock event reasons: why clocks dropped)."""
     summary: dict[str, Any] = {"samples": len(samples)}
-    if not samples:
-        return summary
-    for key in samples[0]:
-        values = [s[key] for s in samples if isinstance(s.get(key), int | float)]
-        if values and len(values) == len(samples):
+    keys = {key for sample in samples for key in sample}
+    for key in sorted(keys):
+        present = [s[key] for s in samples if s.get(key) is not None]
+        numbers = [v for v in present if isinstance(v, int | float) and not isinstance(v, bool)]
+        if numbers:
             summary[key] = {
-                "min": float(min(values)),
-                "median": float(np.median(values)),
-                "max": float(max(values)),
+                "min": float(min(numbers)),
+                "median": float(np.median(numbers)),
+                "max": float(max(numbers)),
+                "count": len(numbers),
             }
+        elif present:
+            counts: dict[str, int] = {}
+            for value in present:
+                counts[str(value)] = counts.get(str(value), 0) + 1
+            summary[key] = counts
     return summary
 
 
@@ -383,7 +402,11 @@ def time_interleaved(
     """Durations of each of `fns` over `rounds` rounds, one call of each per round (#25).
 
     Compared passes interleaved repeat by repeat feel the same clock drift while the
-    GPU throttles, so their ratios hold. Timed as `time_device` times one call.
+    GPU throttles, so their ratios hold (ADR 0022). For GPU-bound passes only: on CUDA a
+    pass's span starts when the GPU reaches it, so a host-bound pass that follows a long
+    GPU pass is partly enqueued before its span starts and reads short (measured: 1,000
+    tiny launches 30 % short after a 33 ms pass). Time host-bound passes with
+    `time_device`.
     """
     wp.init()
     for _ in range(warmup_calls):
@@ -569,10 +592,21 @@ class BenchSession:
     )
 
     def start(self, name: str) -> None:
-        """Call right before measuring `name`; telemetry is sampled until `record`."""
+        """Call right before measuring `name`; telemetry is sampled until `record`. A name
+        started again stops its first sampler."""
+        previous = self._started.pop(name, None)
+        if previous is not None:
+            previous[2].stop()
+        before, power = self.telemetry(), self.power_state()
         sampler = self.sampler()
-        sampler.start()
-        self._started[name] = (self.telemetry(), self.power_state(), sampler)
+        sampler.start()  # last, so no sample predates the measurement
+        self._started[name] = (before, power, sampler)
+
+    def close(self) -> None:
+        """Stop every sampler still running: benchmarks that raised before `record`."""
+        for _, _, sampler in self._started.values():
+            sampler.stop()
+        self._started.clear()
 
     def record(self, name: str, metrics: Mapping[str, Any]) -> Path:
         """Write the result of `name`; `start(name)` must have been called."""

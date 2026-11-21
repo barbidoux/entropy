@@ -7,11 +7,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-- Benchmarks sample GPU telemetry during each measurement (#25): one `nvidia-smi -lms 100`
-  process in the background, summarised as min, median and max of clocks, power and
-  temperature in each result; compared passes are timed interleaved, round by round
-  (`time_interleaved`, used by the stencil benchmark), so their ratios hold while
-  clocks drift.
+- Benchmarks sample GPU telemetry during each measurement (#25, ADR 0022): one
+  `nvidia-smi -lms 100` process in the background, summarised in each result (min,
+  median, max and count of each number; counts of P-states and clock event reasons),
+  and stopped even when a benchmark raises (not when Python is killed outright).
+  Compared passes are timed interleaved, round by round (`time_interleaved`, GPU-bound
+  passes only); the stencil benchmark uses it, with 50 rounds, so its results no
+  longer compare with M0's (the benchmark README says why).
 - Water on screen (#52, SPEC 7.2):
   - the frame is drawn in linear light into a half-float target and tone-mapped last
     (`entropy.render.frame`); the glass now blends in linear light;

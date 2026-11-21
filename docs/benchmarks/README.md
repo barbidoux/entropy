@@ -24,8 +24,11 @@ $env:ENTROPY_WARMUP_S = "20"; uv run pytest -m perf -s
 
 Each benchmark writes one JSON file, named after the session start time and the
 benchmark, with its metrics, its conditions, GPU telemetry (clocks, temperature, power,
-enforced power limit, clock event reasons) before and after, and the software versions
-including `git describe --dirty` (`bench/harness.py`, method in ADR 0007).
+enforced power limit, P-state, clock event reasons) before, during and after, and the
+software versions including `git describe --dirty` (`bench/harness.py`, method in
+ADR 0007 and ADR 0022). "During" summarises a background `nvidia-smi -lms 100`: min,
+median, max and count of each number, and how often each P-state and clock event reason
+was seen. A measurement shorter than a few tenths of a second gets only 2–3 samples.
 
 - **Official**: on mains power, energy saver off, in a performance power mode, after at
   least 300 s of warm-up, with the power state checked again around each benchmark.
@@ -35,7 +38,16 @@ including `git describe --dirty` (`bench/harness.py`, method in ADR 0007).
 
 GPU times come from CUDA events recorded around the measured work; CPU-side costs
 (kernel launches from Python) use wall-clock time. Each benchmark repeats its
-measurement and reports the median with the 10th and 90th percentiles.
+measurement and reports the median with the 10th and 90th percentiles. Passes a
+benchmark compares are timed interleaved, one call of each per round
+(`time_interleaved`), so clock drift hits them alike; this suits GPU-bound passes only.
+
+Comparability: from #25 the stencil benchmark's passes are interleaved (50 rounds),
+where M0 timed them one after the other (single first, after an idle gap, in the boost
+window). M0's "single faster than graph" at 192³ was mostly that ordering; and with
+the GPU queue now backlogged, the single pass no longer includes the time the GPU
+waits for Python, which made M0's single-sweep p90. Compare new stencil results with
+each other, not with the M0 reports.
 
 ## Reports
 

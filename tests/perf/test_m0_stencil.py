@@ -73,7 +73,7 @@ def test_jacobi_sweep_cost(bench_session: BenchSession, shape: tuple[int, int, i
             "graph": lambda: wp.capture_launch(graph),
             "streaming": lambda: wp.capture_launch(streaming),
         },
-        rounds=20,
+        rounds=50,
         device=DEVICE,
     )
     single, batched, graphed, streamed = (
