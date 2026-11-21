@@ -160,6 +160,8 @@ class FrameInput:
     tool_released: bool = False
     wheel_steps: int = 0
     """Mouse wheel notches this frame, up positive."""
+    alternate_pressed: bool = False
+    """The tool's other action (right mouse), pressed this frame with the mouse captured."""
 
 
 class InputState:
@@ -176,6 +178,7 @@ class InputState:
         self._tool_held = False
         self._tool_pressed = False
         self._tool_released = False
+        self._alternate_pressed = False
         self._wheel = 0.0
 
     def on_key(self, key: int, event: int) -> None:
@@ -213,6 +216,10 @@ class InputState:
     def on_mouse_button(self, button: int, event: int) -> None:
         """A GLFW mouse button event. The left button uses the tool, but only while the
         mouse is captured: the click that captures it does not."""
+        if button == glfw.MOUSE_BUTTON_RIGHT:
+            if event == glfw.PRESS and self._mouse_captured:
+                self._alternate_pressed = True
+            return
         if button != glfw.MOUSE_BUTTON_LEFT:
             return
         if event == glfw.PRESS and self._mouse_captured:
@@ -238,10 +245,11 @@ class InputState:
             tool_pressed=self._tool_pressed,
             tool_released=self._tool_released,
             wheel_steps=steps,
+            alternate_pressed=self._alternate_pressed,
         )
         self._pressed.clear()
         self._dx_px = self._dy_px = 0.0
-        self._tool_pressed = self._tool_released = False
+        self._tool_pressed = self._tool_released = self._alternate_pressed = False
         self._wheel -= steps
         return frame
 

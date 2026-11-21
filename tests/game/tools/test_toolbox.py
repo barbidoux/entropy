@@ -135,3 +135,17 @@ def test_the_palette_lists_the_m1_tools_and_says_when_the_bucket_misses() -> Non
 
     assert "1 Tuyau" in text and "2 Seau" in text and "3 Crue" in text
     assert "visez la cuve" in text
+
+
+def test_right_click_reaches_the_tool_in_hand() -> None:
+    state = InputState()
+    state.set_mouse_captured(True)
+    state.on_mouse_button(glfw.MOUSE_BUTTON_RIGHT, glfw.PRESS)
+    frame = state.take_frame()
+    toolbox = _toolbox(_Liquid())
+    toolbox.handle(_frame(pressed=frozenset({Action.TOOL_2})))
+
+    toolbox.handle(frame)
+
+    assert frame.alternate_pressed
+    assert getattr(toolbox.current, "shape", None) == "barrage"

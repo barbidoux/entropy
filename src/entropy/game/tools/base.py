@@ -117,6 +117,8 @@ class Tool(Protocol):
 
     def change_power(self, steps: int) -> None: ...
 
+    def on_alternate(self) -> None: ...
+
     def on_press(self, ctx: ToolContext) -> None: ...
 
     def on_hold(self, ctx: ToolContext, dt_s: float) -> None: ...
@@ -135,6 +137,9 @@ class ToolBase:
         parameter = self.spec.parameters[self.spec.power]
         value = self.values[parameter.name] + steps * parameter.step
         self.values[parameter.name] = parameter.clamp(value)
+
+    def on_alternate(self) -> None:
+        """The tool's other action (right click, SPEC 4.5); none by default."""
 
     def on_press(self, ctx: ToolContext) -> None:
         pass

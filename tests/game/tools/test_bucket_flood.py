@@ -102,3 +102,32 @@ def test_the_flood_source_adds_its_rate_from_the_floor(time_scale: float) -> Non
     assert liquid.positions[:, 2].max() < DX_M  # from the floor
     rise_m_per_s = 0.1 / (4.0 * 4.0)
     np.testing.assert_allclose(liquid.velocities[:, 2], rise_m_per_s)
+
+
+def test_right_click_turns_the_bucket_into_a_dam_against_the_far_wall() -> None:
+    """US-02: the bucket's other shape is Martin & Moyce's column, a wide and 2a high,
+    across the tank's whole width, against the wall the player faces."""
+    liquid = _Liquid()
+    bucket = Bucket(load_tool_spec("bucket"))
+    bucket.values["volume_m3"] = 2.0
+
+    bucket.on_alternate()
+    bucket.on_press(_context(liquid, DOWN_INTO_TANK))  # facing +y
+
+    p = liquid.positions
+    assert len(p) * PARTICLE_M3 == pytest.approx(2.0, rel=0.02)
+    a = np.sqrt(2.0 / (2 * 4.0))  # 0.5 m for 2 m³ across 4 m
+    assert p[:, 1].min() == pytest.approx(2.0 - a, abs=DX_M / 2)  # against y = 2
+    assert p[:, 1].max() == pytest.approx(2.0, abs=DX_M / 2)
+    assert p[:, 2].max() == pytest.approx(2 * a, abs=DX_M / 2)
+    assert np.ptp(p[:, 0]) == pytest.approx(4.0, abs=DX_M)
+    assert "barrage" in bucket.status
+
+
+def test_right_click_again_brings_the_block_back() -> None:
+    bucket = Bucket(load_tool_spec("bucket"))
+
+    bucket.on_alternate()
+    bucket.on_alternate()
+
+    assert bucket.shape == "bloc"

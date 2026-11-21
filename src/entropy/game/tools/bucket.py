@@ -1,13 +1,19 @@
-"""The bucket (SPEC 4.2): a block of water dropped into the tank where the player aims.
+"""The bucket (SPEC 4.2): a volume of water dropped into the tank where the player aims.
 
 One click drops one bucketful: exactly the chosen volume, as a whole number of the
 liquid's particles (the last one rounded, under 0.01 % of the smallest bucket), at
-rest. The block is as wide as it is deep and hangs from the top of the liquid's grid,
-centred where the aim meets the rim's height over the tank; it then falls in. When the
-aim does not cross the tank there, nothing falls, and `status` says why.
+rest. Right click switches between two shapes:
+- "bloc": as wide as it is deep, hanging from the top of the liquid's grid, centred
+  where the aim meets the rim's height over the tank; it falls in;
+- "barrage" (a dam, US-02): Martin & Moyce's column, a wide and 2a high on the floor,
+  across the tank's whole width against the wall the player faces, so a = sqrt(V/2W)
+  for a tank W wide; released at once, it collapses like their dam break.
+When the aim does not cross the tank, nothing falls, and `status` says why.
 """
 
 from __future__ import annotations
+
+import math
 
 import numpy as np
 
@@ -45,10 +51,40 @@ def block_of(count: int, spacing_m: float, centre_xy: np.ndarray, top_z_m: float
     return np.column_stack([xy, z])
 
 
+def dam_of(
+    count: int, spacing_m: float, low_m: np.ndarray, high_m: np.ndarray, aim: np.ndarray
+) -> np.ndarray:
+    """`count` particles in a column a wide and 2a high on the floor, across the tank's
+    width, against the wall the horizontal aim points to, bottom layer first."""
+    axis = 0 if abs(aim[0]) >= abs(aim[1]) else 1
+    across = 1 - axis
+    width_m = high_m[across] - low_m[across]
+    a_m = math.sqrt(count * spacing_m**3 / (2.0 * width_m))
+    n_a = max(1, round(a_m / spacing_m))
+    n_w = max(1, round(width_m / spacing_m))
+    layers = math.ceil(count / (n_a * n_w))
+    i, j, k = np.meshgrid(np.arange(n_a), np.arange(n_w), np.arange(layers), indexing="ij")
+    cells = np.stack([i.ravel(), j.ravel(), k.ravel()], axis=1)
+    cells = cells[np.lexsort((cells[:, 1], cells[:, 0], cells[:, 2]))][:count]
+    points = np.empty((count, 3))
+    if aim[axis] >= 0.0:  # the far wall is the high one
+        points[:, axis] = high_m[axis] - (cells[:, 0] + 0.5) * spacing_m
+    else:
+        points[:, axis] = low_m[axis] + (cells[:, 0] + 0.5) * spacing_m
+    points[:, across] = low_m[across] + (cells[:, 1] + 0.5) * spacing_m
+    points[:, 2] = low_m[2] + (cells[:, 2] + 0.5) * spacing_m
+    return points
+
+
 class Bucket(ToolBase):
     def __init__(self, spec: ToolSpec) -> None:
         super().__init__(spec)
         self.status = ""
+        self.shape = "bloc"
+
+    def on_alternate(self) -> None:
+        self.shape = "barrage" if self.shape == "bloc" else "bloc"
+        self.status = f"forme : {self.shape}"
 
     def on_press(self, ctx: ToolContext) -> None:
         target = aim_over_tank(ctx)
@@ -57,6 +93,12 @@ class Bucket(ToolBase):
             return
         count = round(self.values["volume_m3"] / ctx.particle_volume_m3)
         spacing = ctx.particle_volume_m3 ** (1.0 / 3.0)
+        if self.shape == "barrage":
+            low, high = np.asarray(ctx.domain.low_m), np.asarray(ctx.domain.high_m)
+            points = dam_of(count, spacing, low, high, np.asarray(ctx.aim.direction))
+            ctx.liquid.add_particles(points.astype(np.float32), velocities=np.zeros_like(points))
+            self.status = f"barrage de {count * ctx.particle_volume_m3:.3g} m³ lâché"
+            return
         points = block_of(count, spacing, target[:2], ctx.domain.high_m[2] - 0.5 * spacing)
         low = np.asarray(ctx.domain.low_m) + 0.5 * spacing
         high = np.asarray(ctx.domain.high_m) - 0.5 * spacing

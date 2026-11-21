@@ -77,6 +77,8 @@ class Toolbox:
                 self.index = number
         if frame.wheel_steps:
             self.current.change_power(frame.wheel_steps)
+        if frame.alternate_pressed:
+            self.current.on_alternate()
         self._pressed = self._pressed or frame.tool_pressed
         self._released = self._released or frame.tool_released
         self._held = frame.tool_held
@@ -112,7 +114,7 @@ class Toolbox:
         power = tool.spec.parameters[tool.spec.power].label
         lines = [
             f"Outil : {tool.spec.label} ({settings})",
-            f"{keys}   clic gauche : utiliser   molette : {power}",
+            f"{keys}   clic gauche : utiliser   clic droit : autre forme   molette : {power}",
         ]
         status = getattr(tool, "status", "")
         if status:
