@@ -322,3 +322,25 @@ def test_collect_does_not_wait_for_the_gpu() -> None:
     wp.synchronize_device("cuda:0")
     (frame,) = timer.collect()
     assert frame["spin"] > 0.001
+
+
+def test_a_stage_no_longer_timed_leaves_after_a_window_of_frames() -> None:
+    """A solver switched off must not keep its old GPU time on the HUD (#43)."""
+    stats = FrameStats(window=4)
+    stats.record(1 / 60, {})
+    stats.record_gpu({"liquid": 0.002, "scene": 0.001})
+    for _ in range(4):
+        stats.record(1 / 60, {})
+        stats.record_gpu({"scene": 0.001})
+
+    assert stats.summary().gpu_ms_mean == pytest.approx({"scene": 1.0})
+
+
+def test_a_stage_timed_within_the_window_stays() -> None:
+    stats = FrameStats(window=4)
+    stats.record(1 / 60, {})
+    stats.record_gpu({"liquid": 0.002})
+    for _ in range(3):
+        stats.record(1 / 60, {})
+
+    assert stats.summary().gpu_ms_mean == pytest.approx({"liquid": 2.0})

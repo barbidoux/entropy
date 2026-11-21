@@ -63,6 +63,8 @@ class FrameStats:
         self._window = window
         self._frames: deque[_Frame] = deque(maxlen=window)
         self._gpu_s: dict[str, deque[float]] = {}
+        self._gpu_last_frame: dict[str, int] = {}
+        self._frame_count = 0
 
     def record_gpu(self, stages_s: Mapping[str, float]) -> None:
         """GPU seconds per stage of one frame, as `StageTimer.collect` gives them.
@@ -71,6 +73,7 @@ class FrameStats:
         separately and at different lags."""
         for stage, seconds in stages_s.items():
             self._gpu_s.setdefault(stage, deque(maxlen=self._window)).append(seconds)
+            self._gpu_last_frame[stage] = self._frame_count
 
     def record(
         self,
@@ -84,6 +87,7 @@ class FrameStats:
         """One frame, in seconds: its duration, its stages, and the simulated time it
         advanced over `real_s` of real time (by default the frame's duration), out of
         `requested_s` it asked for (by default all of it)."""
+        self._frame_count += 1
         self._frames.append(
             _Frame(
                 frame_s,
@@ -112,7 +116,12 @@ class FrameStats:
             stages_ms_mean=_mean_ms(frame.stages_s for frame in self._frames),
             world_speed=simulated_s / real_s if real_s > 0 else 0.0,
             time_kept=kept_s / requested_s if requested_s > 0 else 1.0,
-            gpu_ms_mean={stage: sum(s) / len(s) * 1e3 for stage, s in self._gpu_s.items()},
+            gpu_ms_mean={
+                stage: sum(s) / len(s) * 1e3
+                for stage, s in self._gpu_s.items()
+                # A stage not timed for a whole window of frames has stopped (#43).
+                if self._frame_count - self._gpu_last_frame[stage] < self._window
+            },
         )
 
 
