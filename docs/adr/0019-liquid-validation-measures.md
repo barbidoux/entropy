@@ -31,9 +31,11 @@ auditor then read the paper and the literature. What is known:
 - **The level set's volume wobbles.** With a few particles per cell it moves by a few
   tenths of a per cent from frame to frame. Sampling it at n³ points per cell snaps a
   flat surface to 1/n of a cell: with 4³ points, up to ±2 % of the test tank's depth;
-  with 8³, up to ±1 % (its water at rest, 6.42 cells deep, reads −0.67 %). Since the
-  drift is measured against the first second's mean, the snap of one surface height
-  cancels; the first frame is checked against the particles' volume within 1 %.
+  with 8³, up to ±1 % (its water at rest, 6.42 cells deep, reads −0.67 %). The snap
+  averages out while the surface moves. Water at rest, flat, can read up to ±1 % off,
+  so a run that ends at rest needs a finer measure or must allow for it (measured: a
+  slosh that came to rest drifted −0.51 % on 8³ points, −0.82 % on 24³). The first
+  frame is checked against the particles' volume within 1 %.
 
 Not known:
 - the exact delay of the front records, since their origin is only roughly the heater

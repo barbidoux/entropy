@@ -70,6 +70,10 @@ Named limits:
 - Water thinner than about a cell (a lone droplet, a thin sheet) has a density below ½
   everywhere, so the pressure ignores it: it falls freely and moves with the
   extrapolated velocity until it joins the water again.
+- At rest a thin film of particles can sit above the level set, uncounted: after 75 s
+  of sloshing, 21 of 3,286 particles (0.64 %), and a surface 4 mm (1 %) below the
+  height the particles' volume implies. The volume control counts only particles
+  inside the water, so it does not lift the surface for them.
 - The volume correction is a numerical correction, not physics: it moves water a few
   millimetres per second at most to undo the method's own drift. Errors smaller than
   its dead band (0.25 %) are left.

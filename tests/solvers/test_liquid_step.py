@@ -30,6 +30,7 @@ def _setup(
     shape: tuple[int, int, int],
     dump_dir: Path | None = None,
     solid_phi_m: np.ndarray | None = None,
+    particles_per_cell: int = 8,
 ) -> LiquidSetup:
     return LiquidSetup(
         spec=GridSpec(shape=shape, dx_m=DX_M),
@@ -37,6 +38,7 @@ def _setup(
         gravity_m_per_s2=GRAVITY,
         dump_dir=dump_dir,
         solid_phi_m=solid_phi_m,
+        particles_per_cell=particles_per_cell,
     )
 
 
@@ -484,19 +486,37 @@ def test_the_grid_clamp_keeps_a_fast_particle_inside(device: str) -> None:
     assert 0.0 < x <= 2e-4 * DX_M
 
 
-@pytest.mark.parametrize("depth_m", [0.5, 0.46875, 0.40625])
+@pytest.mark.parametrize(
+    ("per_cell", "depth_cells"), [(8, 8.0), (8, 7.5), (27, 7 + 1 / 3), (27, 7 + 2 / 3)]
+)
 def test_the_volume_control_measures_still_water_as_its_particles(
-    device: str, depth_m: float
+    device: str, per_cell: int, depth_cells: float
 ) -> None:
     """The control's own measure of the water (ADR 0018) agrees with the particles'
-    volume within 0.1 %, with the surface on a face, mid-cell or between."""
-    liquid = LiquidSolver.create(_setup((12, 12, 16)), device)
-    points = fill_box((0.0, 0.0, 0.0), (0.75, 0.75, depth_m), DX_M, 8, seed=19, jitter=0.0)
+    volume within 0.1 %, with the surface on a face, mid-cell, a third and two thirds of
+    the way through a cell (27 particles per cell, to put it there)."""
+    liquid = LiquidSolver.create(_setup((12, 12, 16), particles_per_cell=per_cell), device)
+    depth_m = depth_cells * DX_M
+    points = fill_box((0.0, 0.0, 0.0), (0.75, 0.75, depth_m), DX_M, per_cell, seed=19, jitter=0.0)
     liquid.add_particles(points)
     liquid.step(1e-5)
     liquid.max_advance_s()  # reads the frame's status
 
     diagnostics = liquid.diagnostics()
-    particles_m3 = len(points) * DX_M**3 / 8
+    particles_m3 = len(points) * DX_M**3 / per_cell
     assert diagnostics["particles_in_water"] == len(points)
     assert diagnostics["water_volume_m3"] == pytest.approx(particles_m3, rel=1e-3)
+
+
+@pytest.mark.slow
+def test_jittered_still_water_stays_still_for_ten_seconds(device: str) -> None:
+    """The volume correction must not stir still water (ADR 0018): its dead band ignores
+    the measure's small bias, and the local correction is gentle. After 10 s nothing
+    moves faster than 5 mm/s."""
+    liquid = LiquidSolver.create(_setup((16, 4, 16)), device)
+    liquid.add_particles(fill_box((0.0, 0.0, 0.0), (1.0, 0.25, 0.4), DX_M, 8, seed=9))
+
+    for _ in range(600):
+        liquid.step(1.0 / 60.0)
+
+    assert np.abs(liquid.particle_velocities()).max() < 5e-3
