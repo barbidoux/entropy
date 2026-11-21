@@ -13,8 +13,10 @@ jobs:
       # Mesa's software renderer offers OpenGL 4.5, not the game's 4.6 (ADR 0009).
       ENTROPY_TEST_GL_VERSION: "4.5"
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      # Exact versions on node24 (Node.js 20 is deprecated on runners, #42). setup-uv no
+      # longer moves its major tags (v8), so the version is pinned exactly.
+      - uses: actions/checkout@v7.0.1
+      - uses: astral-sh/setup-uv@v10.3.3
       - name: Software OpenGL for render tests (Mesa llvmpipe, SPEC 9.2)
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends xvfb libgl1 libegl1 libgl1-mesa-dri
       - name: Install

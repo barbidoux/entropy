@@ -130,6 +130,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- CI runs actions/checkout 7.0.1 and astral-sh/setup-uv 10.3.3, both on node24, pinned
+  exactly (#42).
 - The Dell thermal profile is *Optimized*, as Matt confirmed after the M0 sessions
   (2026-11-21). SPEC 3's measured limits are taken to apply to it and are no longer
   provisional. CLAUDE.md and the benchmark guide say so.
