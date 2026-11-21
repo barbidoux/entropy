@@ -121,8 +121,8 @@ Every tool exposes its parameters in SI units, so the player always knows what i
 | Tool | Effect | Parameters | Milestone |
 | --- | --- | --- | --- |
 | Hose | Water jet | flow 1–50 L/s, nozzle speed 5–30 m/s | M1 |
-| Bucket | Drops a volume of water | 0.01–2 m³ | M1 |
-| Flood source | Inflow that raises the water level | 0.01–5 m³/s | M1 |
+| Bucket | Drops a volume of water: a block, or a dam column against the far wall (right click) | 0.01–2 m³ | M1 |
+| Flood source | Inflow from the tank's whole floor that raises the water level | 0.01–5 m³/s | M1 |
 | Eraser | Removes an object, or liquid or gas in a radius | radius 0.1–5 m | M1 |
 | Spawner | Drops props: crate, barrel, furniture, blocks | prop, material, size | M2 |
 | Grabber | Picks up, carries and throws objects | up to 500 kg | M2 |

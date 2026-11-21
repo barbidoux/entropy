@@ -7,6 +7,22 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- The bucket, the flood source and the eraser (#54):
+  - the bucket drops exactly its volume (0.01–2 m³) where the aim meets the rim over
+    the tank; right click turns it into a dam, Martin & Moyce's column 2a high across
+    the tank against the far wall (US-02 passes in the Test Tank);
+  - the flood source raises the water from the whole floor at its rate (0.01–5 m³/s),
+    by accumulated volume;
+  - the eraser removes the water within its radius (0.1–5 m) of where the aim meets
+    it; the liquid removes particles on the GPU (prefix sum), keeping their order.
+- Time controls and checkpoints (#55): P pauses, [ and ] cycle 1x, 0.5x, 0.25x and
+  0.1x, the period steps one frame while paused; F5 saves and F9 restores; a ring of 6
+  checkpoints every 10 s of simulated time, copied to pinned host memory without
+  waiting. US-03: a dam break at 0.1x and at 1x both meet V-LIQ-03 and keep their
+  volume within 1 %.
+- The HUD counts the water (#56): particles, litres, cells of water, substeps, pressure
+  iterations and overruns; the liquid's GPU time per phase (transfers, pressure,
+  motion) through the step's context.
 - Tools and the hose (#53, #35, ADR 0020):
   - tool plug-ins with their parameters, limits and defaults in `content/tools/`;
     keys 1–9 choose, the mouse wheel sets the power, the left button (mouse
