@@ -40,25 +40,30 @@ nothing extra.
   first read-back (b·b and r·r) carries that flag. Only when there is no air does the
   solve take the sealed path, at the cost of one more read-back. With air, it costs one
   store per air cell. Measured on CUDA at 72 × 72 × 40 with air, `project()` takes
-  2.69 ms against 2.69 ms before, and a 4-iteration batch 924 µs against 927 µs.
+  2.69 ms against 2.69 ms before, and a 4-iteration batch 924 µs against 927 µs; with
+  air the results are bit for bit those of before on CPU. With no air, 4 iterations
+  cost about 0.5 ms more.
 - **Sealed path, at the start.**
   - The fluid cells are counted.
   - x loses its mean over the fluid cells, so the answer's mean is 0.
   - r = b − A x loses its mean. b's part along the constant cannot be reached, so the
     answer is the least-squares one: the answer for b minus its mean.
-  - z = M r and p = z are computed again.
+  - b·b is taken again for b minus its mean, so the tolerance holds for the part a
+    solve can reach, however large the uniform part.
+  - z = M r is computed again and loses its mean, then p = z.
 - **Sealed path, every iteration.** z loses its mean after the V-cycle, before r·z, in
   separate CUDA graphs for the sealed case. Without this, from rest the solve took up to
-  52 iterations on a 32 × 32 × 40 grid, or did not converge. Removing the mean of the
-  first V-cycle's z as well changes the level by only about 10⁻⁸ of the pressure range,
-  so that step is left out.
-- **Precision.** Means are summed and subtracted in float64.
+  52 iterations on a 32 × 32 × 40 grid, or did not converge.
+- **Precision.** Means are summed and subtracted in float64. This is insurance: with
+  the tolerance on b minus its mean and z centred, a float32 subtraction's constant
+  (half an ulp of the mean) stays below the tolerance, and no test can tell them apart.
 
 Measured after this decision:
 - The 32 × 32 × 40 column converges in 4 iterations from the last substep and in 8 from
   rest.
 - 600 frames at 72 × 72 × 40 on CUDA, lattice or jittered: every substep's solve
-  converges in at most 8 iterations (median 4), and the water stays under 0.4 mm/s.
+  converges in at most 8 iterations (median 4). A lattice stays under 2 µm/s. Jittered
+  particles settle from 12 mm/s at the first frame to 0.33 mm/s, as they do with air.
 - A closed box full of water under gravity has the hydrostatic gradient within 0.1 %.
 
 Named limits:
@@ -66,8 +71,7 @@ Named limits:
   detected.
 - **Several bodies separated by solids, in a grid with no air,** are not handled either:
   the global mean is not each body's mean. Measured on 16 × 8 × 16 with a solid plane
-  and a ±0.01/s target per body, the solve ran to its cap with pressures of 10⁹ to
-  10¹² Pa.
+  and a ±0.01/s target per body, the solve runs to its cap with pressures near 10⁹ Pa.
   The Test Tank cannot produce either case. Setups with static solids (`solid_phi_m`)
   can, and M2's moving solids will need per-body sums (connected components).
 - **The sealed pressure level (mean 0) is a convention.** Nothing reads it until solids

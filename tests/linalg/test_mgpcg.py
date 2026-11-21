@@ -529,3 +529,77 @@ def test_with_air_the_level_is_left_to_the_boundary(device: str) -> None:
     scale = np.abs(cold.numpy()).max()
     np.testing.assert_allclose(warm.numpy(), cold.numpy(), atol=1e-4 * scale)
     assert abs(cold.numpy()[fluid].mean()) > 1e-2 * scale
+
+
+def test_a_solver_that_saw_air_takes_the_sealed_path_once_the_air_is_gone(device: str) -> None:
+    """A tank filling to the lid has air for many substeps first: once relabelled with no
+    air, the same solver must treat the grid as sealed, every solve."""
+    weight_pa_per_m = DRIFTED_PA_PER_M[0]
+    solver, b, exact, column_pa = _sealed_column((32, 32, 40), weight_pa_per_m, 0, device)
+    labels = solver.system.labels
+    with_air = np.full(b.shape, CELL_FLUID)
+    with_air[:, :, -1] = CELL_AIR
+    labels.assign(with_air.astype(np.int32))
+    solver.refresh()
+    assert solver.solve(_field(b, device), wp.zeros(b.shape, dtype=float, device=device)).converged
+
+    labels.assign(np.full(b.shape, CELL_FLUID, dtype=np.int32))
+    solver.refresh()
+    for _ in range(4):
+        x = wp.zeros(b.shape, dtype=float, device=device)
+        result = solver.solve(_field(b, device), x)
+        assert result.converged and result.iterations <= 8
+        assert np.abs(x.numpy() - exact).max() < 1e-3 * column_pa
+
+
+def test_with_no_air_the_level_is_zero_from_rest_too(device: str) -> None:
+    """From rest, as at the first substep, the answer's mean is 0 as well."""
+    shape = (32, 32, 40)
+    solver = Mgpcg(system_from_labels(_labels(np.full(shape, CELL_FLUID), device), dx_m=0.0625))
+    b = np.random.default_rng(12).standard_normal(shape) * 1e4
+    b -= b.mean()
+    x = wp.zeros(shape, dtype=float, device=device)
+
+    result = solver.solve(_field(b, device), x)
+
+    answer = x.numpy().astype(np.float64)
+    assert result.converged
+    assert abs(answer.mean()) < 1e-6 * (answer.max() - answer.min())
+
+
+def test_with_no_air_the_tolerance_applies_to_the_part_a_solve_can_reach(device: str) -> None:
+    """The relative residual is measured against b minus its mean: a small variation over
+    a large uniform part (a uniform target divergence, say) is still solved, not taken
+    as converged at once."""
+    shape = (16, 16, 24)
+    solver = Mgpcg(system_from_labels(_labels(np.full(shape, CELL_FLUID), device), dx_m=0.1))
+    rest = np.random.default_rng(13).standard_normal(shape)
+    rest -= rest.mean()
+    reference = wp.zeros(shape, dtype=float, device=device)
+    x = wp.zeros(shape, dtype=float, device=device)
+
+    solver.solve(_field(rest, device), reference)
+    result = solver.solve(_field(1.0 + 1e-3 * rest, device), x)
+
+    # Measured against all of b, the solve stopped at 0.15 % of the variation's answer.
+    assert result.converged
+    expected = 1e-3 * reference.numpy()
+    np.testing.assert_allclose(x.numpy(), expected, atol=3e-4 * np.abs(expected).max())
+
+
+def test_with_no_air_cells_that_are_not_fluid_stay_zero(device: str) -> None:
+    """A solid block inside a grid with no air (one body around it): the solve leaves 0 on
+    the solid cells, even from a warm start that held values there."""
+    shape = (16, 16, 16)
+    labels = np.full(shape, CELL_FLUID)
+    labels[6:10, 6:10, 6:10] = CELL_SOLID
+    solver = Mgpcg(system_from_labels(_labels(labels, device), dx_m=0.1))
+    fluid = labels == CELL_FLUID
+    b = np.where(fluid, np.random.default_rng(14).standard_normal(shape), 0.0)
+    b[fluid] -= b[fluid].mean()
+    x = _field(np.full(shape, 5.0), device)
+
+    result = solver.solve(_field(b, device), x)
+
+    assert result.converged
+    assert np.all(x.numpy()[~fluid] == 0.0)

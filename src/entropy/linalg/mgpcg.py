@@ -41,11 +41,12 @@ solve counts the air cells on the device, and when there are none:
 - x loses its mean over the fluid cells first, so the answer's mean is 0;
 - r = b - A x loses its mean: b's part along the constant cannot be reached, so the
   answer is the least-squares one (that of b minus its mean);
-- z = M r loses its mean after every iteration's V-cycle, before r·z: the V-cycle's
-  sweeps and its singular coarsest grid put constants into z, and float32's A p never
-  sums to exactly 0, so without this x drifts along the constant and CG slows or fails
-  (from rest: up to 52 iterations, or none converging, at 32 x 32 x 40). The first
-  V-cycle's constant moves the level by about 1e-8 of the pressure's range only.
+- the relative residual is measured against b minus its mean, so the tolerance holds
+  for the part a solve can reach, however large the uniform part;
+- z = M r loses its mean after every V-cycle, before r·z: the V-cycle's sweeps and its
+  singular coarsest grid put constants into z, and float32's A p never sums to exactly
+  0, so without this x drifts along the constant and CG slows or fails (from rest: up
+  to 52 iterations, or none converging, at 32 x 32 x 40).
 Means are summed and subtracted in float64. The first read-back says whether any cell
 is air: only without air does the solve take this path, at the cost of one more
 read-back. With air the check costs one store per air cell.
@@ -246,7 +247,8 @@ class SolveResult:
     iterations: int
     relative_residual: float
     """‖r‖ / ‖b‖ over fluid cells, with r CG's recursively updated residual: an estimate
-    of ‖b - A x‖ / ‖b‖, close to it down to float32's floor (about 1e-6)."""
+    of ‖b - A x‖ / ‖b‖, close to it down to float32's floor (about 1e-6). With no air
+    (ADR 0021), b is taken minus its mean, the part a solve can reach."""
     converged: bool
 
 
@@ -518,7 +520,8 @@ class Mgpcg:
 
     def _seal(self, x: wp.array) -> None:
         """With no air (ADR 0021): x and r lose their means over the fluid cells (A·1 = 0, so
-        r stays b - A x), then z = M r, p = z, r·z and r·r again."""
+        r stays b - A x), and b·b becomes that of b minus its mean (still in q); then z = M
+        r without its mean, p = z, r·z and r·r again."""
         v, s = self._vectors, self.system
         scalars, partials = v["scalars"], v["partials"]
         wp.launch(_k.clear, dim=1, inputs=[scalars, int(_k.FLUID_CELLS)], device=s.device)
@@ -531,7 +534,10 @@ class Mgpcg:
         self._sum_partials(int(_k.FLUID_CELLS))
         self._remove_fluid_mean(x)
         self._remove_fluid_mean(v["r"])
+        self._remove_fluid_mean(v["q"])
+        self._dot(v["q"], v["q"], int(_k.BB))
         self.precondition(v["r"], v["z"])
+        self._remove_fluid_mean(v["z"])
         wp.copy(v["p"], v["z"])
         self._dot(v["r"], v["z"], int(_k.RZ))
         self._dot(v["r"], v["r"], int(_k.RR))
@@ -576,6 +582,10 @@ class Mgpcg:
         if sealed:  # the corner case pays one more read-back
             self._run("seal", (x,), lambda: self._seal(x))
             values = scalars.numpy()
+            b_norm = math.sqrt(float(values[int(_k.BB)]))
+            if b_norm == 0.0:  # b is uniform: nothing a solve can reach
+                x.zero_()
+                return SolveResult(iterations=0, relative_residual=0.0, converged=True)
         relative = math.sqrt(max(float(values[int(_k.RR)]), 0.0)) / b_norm
         done = 0
         suffix = "-sealed" if sealed else ""
