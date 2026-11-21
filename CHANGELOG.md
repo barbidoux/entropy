@@ -7,6 +7,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- MGPCG pressure solver (#46, `entropy.linalg.mgpcg`):
+  - cell labels (fluid, air, solid), face weights and a ghost-fluid θ, for the
+    second-order free surface;
+  - conjugate gradient preconditioned by a symmetric multigrid V-cycle;
+  - float64 scalars kept on the device, with the solve start and batches of 4
+    iterations replayed as CUDA graphs.
+
+  V-LIQ-05 passes: the error falls 4× per refinement, with Dirichlet and with Neumann
+  walls. `refresh()` relabels in place so graphs stay valid. Benchmark `-m perf`
+  (relabel and solve from zero, per substep): 4.0 ms on the Test Tank grid, 13.8 ms on
+  the full house grid. SPEC 3 is updated: both are at risk. ADR 0016.
 - One shared advance per frame (#34, ADR 0013):
   - `entropy.sim.simulation.Simulation` shrinks the frame's advance to the tightest
     solver limit (`max_advance_s()`, from the previous frame's speeds) before any solver
