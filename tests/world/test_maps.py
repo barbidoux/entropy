@@ -1,5 +1,6 @@
 """Map files, format v1, and the world built from them (SPEC 4.3, 4.4)."""
 
+import dataclasses
 import json
 import shutil
 from pathlib import Path
@@ -158,3 +159,95 @@ def test_a_bad_prefab_parameter_names_the_entity(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="entity 0: parameter wall_m"):
         build_world(load_map(folder))
+
+
+def test_the_tank_and_the_slab_sit_where_the_map_says() -> None:
+    """Cavity base centred on (0, 0, 0); glass floor 2 cm thick resting on the slab."""
+    world = build_world(load_map(TEST_TANK))
+    tank = next(s for s, _ in world.solids if isinstance(s, OpenBox))
+    slab = next(s for s, _ in world.solids if not isinstance(s, OpenBox))
+
+    np.testing.assert_allclose(tank.inner_min_m, (-2.0, -2.0, 0.0))
+    np.testing.assert_allclose(tank.inner_max_m, (2.0, 2.0, 2.0))
+    slab_top = slab.centre_m[2] + slab.half_size_m[2]  # type: ignore[union-attr]
+    assert slab_top == pytest.approx(tank.inner_min_m[2] - tank.wall_m)
+
+
+def test_the_glass_floor_and_the_slab_are_solid(device: str) -> None:
+    world = build_world(load_map(TEST_TANK))
+    points = wp.array(
+        np.array([[0, 0, -0.01], [0, 0, -0.1]], np.float32), dtype=wp.vec3, device=device
+    )
+    distance = wp.zeros(2, dtype=float, device=device)
+    normal = wp.zeros(2, dtype=wp.vec3, device=device)
+
+    signed_distance(world.solid_union().to_device(device), points, distance, normal)
+
+    assert np.all(distance.numpy() < 0.0)
+
+
+def test_migrations_run_one_step_at_a_time_in_order(tmp_path: Path) -> None:
+    folder = _copy_map(tmp_path)
+    text = (
+        (folder / "map.toml")
+        .read_text(encoding="utf-8")
+        .replace("schema_version = 1", "schema_version = 0")
+    )
+    (folder / "map.toml").write_text(text, encoding="utf-8")
+    steps: list[int] = []
+
+    def step(n: int):
+        def run(raw: dict) -> dict:
+            assert raw["map"]["schema_version"] == n  # written back after each step
+            steps.append(n)
+            return raw
+
+        return run
+
+    data = load_map(folder, migrations={0: step(0), 1: step(1)}, current_version=2)
+
+    assert steps == [0, 1]
+    assert data.schema_version == 2
+
+
+@pytest.mark.parametrize("version", ['"1"', "true", "-1"])
+def test_an_impossible_schema_version_is_refused(tmp_path: Path, version: str) -> None:
+    folder = _copy_map(tmp_path)
+    text = (
+        (folder / "map.toml")
+        .read_text(encoding="utf-8")
+        .replace("schema_version = 1", f"schema_version = {version}")
+    )
+    (folder / "map.toml").write_text(text, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="schema_version"):
+        load_map(folder)
+
+
+@pytest.mark.parametrize(
+    "name", ["tab\there", "del\x7fhere", 'quote " and \\ backslash', "naïve 🌊"]
+)
+def test_any_saved_name_loads_back(tmp_path: Path, name: str) -> None:
+    data = dataclasses.replace(load_map(TEST_TANK), name=name, description=name)
+
+    save_map(data, tmp_path / "copy")
+
+    assert load_map(tmp_path / "copy") == data
+
+
+@pytest.mark.parametrize("name", ["   ", "\ud800"])
+def test_save_refuses_what_load_would_refuse(tmp_path: Path, name: str) -> None:
+    data = dataclasses.replace(load_map(TEST_TANK), name=name)
+
+    with pytest.raises(ValueError, match="name"):
+        save_map(data, tmp_path / "copy")
+
+
+def test_a_description_must_be_text(tmp_path: Path) -> None:
+    folder = _copy_map(tmp_path)
+    text = (folder / "map.toml").read_text(encoding="utf-8")
+    text = text.replace('description = "', 'description = 42\nold_description = "')
+    (folder / "map.toml").write_text(text, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="description"):
+        load_map(folder)

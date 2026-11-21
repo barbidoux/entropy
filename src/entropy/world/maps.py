@@ -102,14 +102,14 @@ def _read(folder: Path) -> dict[str, Any]:
 
 
 def _migrate(
-    raw: dict[str, Any], migrations: Mapping[int, Migration], folder: Path
+    raw: dict[str, Any], migrations: Mapping[int, Migration], current: int, folder: Path
 ) -> dict[str, Any]:
     version = raw["map"].get("schema_version")
     if not isinstance(version, int) or isinstance(version, bool) or version < 0:
         raise ValueError(f"{folder}: schema_version must be a whole number, got {version!r}")
-    if version > SCHEMA_VERSION:
-        raise ValueError(f"{folder}: schema {version} is newer than this game ({SCHEMA_VERSION})")
-    while version < SCHEMA_VERSION:
+    if version > current:
+        raise ValueError(f"{folder}: schema {version} is newer than this game ({current})")
+    while version < current:
         step = migrations.get(version)
         if step is None:
             raise ValueError(f"{folder}: no migration from schema {version}")
@@ -149,31 +149,52 @@ def _parse(raw: dict[str, Any], folder: Path) -> MapData:
     name = meta.get("name")
     if not isinstance(name, str) or not name.strip():
         raise ValueError(f"{folder}: name must be a non-empty string")
+    description = meta.get("description", "")
+    if not isinstance(description, str):
+        raise ValueError(f"{folder}: description must be text, got {description!r}")
     return MapData(
         name=name,
         schema_version=meta["schema_version"],
-        description=str(meta.get("description", "")),
+        description=description,
         environment=environment,
         entities=tuple(entities),
     )
 
 
-def load_map(folder: Path, *, migrations: Mapping[int, Migration] = MIGRATIONS) -> MapData:
-    """The map in `folder`, migrated to the current schema."""
+def load_map(
+    folder: Path,
+    *,
+    migrations: Mapping[int, Migration] = MIGRATIONS,
+    current_version: int = SCHEMA_VERSION,
+) -> MapData:
+    """The map in `folder`, migrated to the current schema.
+
+    `current_version` exists for tests of the migration chain; the game uses the default.
+    """
     folder = Path(folder)
-    return _parse(_migrate(_read(folder), migrations, folder), folder)
+    return _parse(_migrate(_read(folder), migrations, current_version, folder), folder)
 
 
 def _toml_value(value: Any) -> str:
     if isinstance(value, str):
-        return json.dumps(value, ensure_ascii=False)  # a JSON string is a valid TOML basic string
+        # A JSON string is a TOML basic string, except that TOML also forbids a raw DEL.
+        return json.dumps(value, ensure_ascii=False).replace("\x7f", "\\u007f")
     if isinstance(value, tuple | list):
         return "[" + ", ".join(_toml_value(v) for v in value) + "]"
     return repr(float(value)) if isinstance(value, float) else str(value)
 
 
 def save_map(data: MapData, folder: Path) -> None:
-    """Write `data` as `map.toml` and `scene.json` in `folder` (created if needed)."""
+    """Write `data` as `map.toml` and `scene.json` in `folder` (created if needed).
+
+    Refuses what `load_map` would refuse, so a saved map always loads back."""
+    for key, text in (("name", data.name), ("description", data.description)):
+        try:
+            text.encode("utf-8")
+        except UnicodeEncodeError as error:
+            raise ValueError(f"{key} is not valid text: {error}") from error
+    if not data.name.strip():
+        raise ValueError("name must be a non-empty string")
     folder = Path(folder)
     folder.mkdir(parents=True, exist_ok=True)
     env = data.environment
