@@ -130,6 +130,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- The HUD drops a GPU stage that has not been timed for a whole window of frames, such
+  as a solver switched off (#43).
 - CI runs actions/checkout 7.0.1 and astral-sh/setup-uv 10.3.3, both on node24, pinned
   exactly (#42).
 - The Dell thermal profile is *Optimized*, as Matt confirmed after the M0 sessions
