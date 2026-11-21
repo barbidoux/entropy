@@ -28,12 +28,12 @@ edges, and changing them later would touch every kernel:
 
 ## Alternatives considered
 
-- **Collocated grid (everything at cell centres):** simpler interpolation, but it needs Rhie–Chow-style corrections against checkerboard pressure. No graphics liquid solver of the APIC/FLIP family uses it.
+- **Collocated grid (everything at cell centres):** simpler interpolation, but it needs Rhie–Chow-style corrections against checkerboard pressure. The incompressible APIC/FLIP liquid solvers we follow (Bridson 2015; Jiang et al. 2015) use MAC; collocated APIC suits MLS-MPM (SPEC 5.6), which has no pressure projection.
 - **Extrapolation, or zero, outside the grid:**
   - Linear extrapolation can return speeds the grid never held, which makes particles near the edge explode.
   - Zero velocity outside makes the edge look like a wall even where the map is open.
   - Clamping is the least surprising choice, and the domain is sized so the liquid stays inside it.
-- **Dirichlet boundary (as in `entropy.linalg.jacobi`):** wrong for a tank, whose walls must stop the flow. The free surface, the only Dirichlet part, is not on the grid boundary.
+- **Dirichlet boundary (as in `entropy.linalg.jacobi`):** wrong for a tank, whose walls must stop the flow. The Dirichlet parts, the free surface and open faces, are set by #49, not by the grid.
 
 ## How we would know it is wrong
 
