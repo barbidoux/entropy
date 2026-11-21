@@ -6,7 +6,8 @@ marked `perf` under `tests/perf/`; they run only on the laptop.
 ## Running
 
 On the laptop, plugged in, Windows power mode set to **Best performance** (Settings >
-System > Power & battery > Power mode), nothing heavy running:
+System > Power & battery > Power mode), Dell thermal profile *Optimized* (set in the
+Dell app; the harness cannot read it, so the report states it), nothing heavy running:
 
 ```powershell
 uv run pytest -m perf -s
