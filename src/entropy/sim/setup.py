@@ -9,6 +9,9 @@ Named limits:
   no liquid (M1).
 - A cavity that is not a whole number of cells is rounded to the nearest cell, so
   the grid's wall can sit up to half a cell from the glass.
+
+The other solids' distance is sampled once, at setup, on the CPU; the liquid copies it
+to its own device.
 """
 
 from __future__ import annotations

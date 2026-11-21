@@ -37,7 +37,7 @@ from entropy.render.world_frame import WorldFrame
 from entropy.sim.loop import FrameLoop, LoopSettings
 from entropy.sim.setup import liquid_setup
 from entropy.sim.simulation import Simulation
-from entropy.solvers.liquid.solver import LiquidSolver, NonFiniteStateError
+from entropy.solvers.liquid.solver import LiquidSolver
 from entropy.ui.hud import PerformanceHud, hud_lines
 from entropy.world.maps import load_map
 from entropy.world.materials import load_material
@@ -68,8 +68,6 @@ class GameStages:
         setup = liquid_setup(self.world)
         self.liquid = LiquidSolver.create(setup, self.device) if setup is not None else None
         self.simulation = Simulation([self.liquid] if self.liquid is not None else [])
-        self.frozen_because: str | None = None
-        """Why the world stopped (a NaN guard's alert), or None while it runs."""
         self.particles_drawn = 0
         # GPU time per stage for the HUD (SPEC 4.7): CUDA events around Warp work,
         # OpenGL timer queries around render passes.
@@ -84,8 +82,8 @@ class GameStages:
             self.particles = resources.enter_context(
                 SharedBuffer(ctx, capacity, wp.vec3, self.device)
             )
-            spec = setup.spec if setup is not None else None
-            volume_m3 = spec.dx_m**3 / setup.particles_per_cell if setup and spec else 1e-6
+            # Without a liquid nothing is drawn as water; any positive volume will do.
+            volume_m3 = setup.particle_volume_m3 if setup is not None else 1.0
             self.frame = WorldFrame(
                 ctx,
                 self.world,
@@ -131,8 +129,8 @@ class GameStages:
         """Extra HUD lines: an alert if the world froze, the controls, the map and its
         water, and why interop copies, if it does."""
         notes = []
-        if self.frozen_because:
-            notes.append(f"MONDE ARRÊTÉ : {self.frozen_because}")
+        if self.simulation.frozen_because:
+            notes.append(f"MONDE ARRÊTÉ : {self.simulation.frozen_because}")
         notes += [CONTROLS_HINT, f"{self.world.name} : {self._particle_count():,} particules d'eau"]
         if self.particles.fallback_reason:
             notes.append(f"host copy because: {self.particles.fallback_reason}")
@@ -150,15 +148,8 @@ class GameStages:
         self.hud.visible = self.mode.hud_visible
 
     def step_simulation(self, dt_s: float) -> float:
-        if self.frozen_because is not None:
-            return 0.0
-        try:
-            with self.cuda_timer.stage("liquid (CUDA)"):
-                return self.simulation.step(dt_s)
-        except NonFiniteStateError as error:
-            self.frozen_because = f"état non fini, sauvegardé dans {error.dump_path}"
-            _log.error("the world froze: %s", error)
-            return 0.0
+        with self.cuda_timer.stage("simulation (CUDA)"):
+            return self.simulation.step(dt_s)
 
     def render(self) -> None:
         width, height = self.window.framebuffer_size_px()
@@ -166,8 +157,7 @@ class GameStages:
             return  # minimised
         count = self._particle_count()
         if count and self.liquid is not None:
-            with self.particles.writable() as positions:
-                # Only the first `count` are drawn; the rest of the buffer is unused.
+            with self.particles.writable(count) as positions:
                 wp.copy(positions, self.liquid.fields()["positions_m"], count=count)
         self.particles_drawn = count
         camera = self.settings.camera

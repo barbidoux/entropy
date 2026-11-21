@@ -27,7 +27,7 @@ from entropy.world.world import build_world
 pytestmark = pytest.mark.render
 
 GOLDEN = Path(__file__).parent / "golden" / "still_pool.npy"
-SIZE = (160, 120)
+SIZE = (320, 240)
 DX_M = 0.0625
 
 
@@ -65,9 +65,11 @@ def test_ssim_is_one_for_equal_images_and_lower_for_noise() -> None:
 
 
 def _still_pool(window: GameWindow) -> np.ndarray:
-    """Half a metre of water in the Test Tank, seen from a corner above the rim."""
+    """Half a metre of water in the Test Tank, seen from a corner above the rim: particles
+    on a lattice and sprites of several pixels, so the image does not hang on the jitter of
+    single particles."""
     world = build_world(load_map(content_dir() / "maps" / "test_tank"))
-    points = fill_box((-2.0, -2.0, 0.0), (2.0, 2.0, 0.5), DX_M, 8, seed=1)
+    points = fill_box((-2.0, -2.0, 0.0), (2.0, 2.0, 0.5), DX_M, 8, seed=1, jitter=0.0)
     eye = (3.2, -3.6, 1.9)
     target = (0.0, 0.0, 0.2)
     forward = np.subtract(target, eye) / np.linalg.norm(np.subtract(target, eye))
@@ -102,6 +104,7 @@ def test_a_still_pool_looks_like_its_reference(window: GameWindow) -> None:
     reference = np.load(GOLDEN)
 
     assert image.shape == reference.shape
-    assert ssim(image, reference) >= 0.98
+    similarity = ssim(image, reference)
+    assert similarity >= 0.98, f"SSIM {similarity:.4f} against the reference"
     water = image[SIZE[1] // 2, SIZE[0] // 2].astype(int)
     assert water[2] > water[0]  # the pool tints the floor blue-green

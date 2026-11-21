@@ -11,9 +11,14 @@ solver's substep cap therefore shows in the HUD like one from the clamp.
 
 from __future__ import annotations
 
+import logging
 import math
 from collections.abc import Sequence
 from typing import Any, Protocol, runtime_checkable
+
+from entropy.solvers.interface import NonFiniteStateError
+
+_log = logging.getLogger(__name__)
 
 
 @runtime_checkable
@@ -38,6 +43,8 @@ class Simulation:
         self.solvers = tuple(solvers)
         self.context = context
         """What each solver's `step` receives for coupling; nothing until M2 couples solvers."""
+        self.frozen_because: str | None = None
+        """Why the world stopped (the NaN guard's alert), or None while it runs."""
 
     def advance_for(self, requested_s: float) -> float:
         """The advance every solver can take: `requested_s`, shrunk to the tightest limit."""
@@ -53,9 +60,24 @@ class Simulation:
         return advance_s
 
     def step(self, requested_s: float) -> float:
-        """Advance every solver by one shared advance; return it (s)."""
-        advance_s = self.advance_for(requested_s)
-        if advance_s > 0.0:
-            for solver in self.solvers:
-                solver.step(advance_s, self.context)
+        """Advance every solver by one shared advance; return it (s).
+
+        NaN guard (SPEC 5.9): when a solver finds its state non-finite, it has dumped it
+        and raises; the world then freezes, nothing advances until `unfreeze`, and
+        `frozen_because` says where the dump is."""
+        if self.frozen_because is not None:
+            return 0.0
+        try:
+            advance_s = self.advance_for(requested_s)
+            if advance_s > 0.0:
+                for solver in self.solvers:
+                    solver.step(advance_s, self.context)
+        except NonFiniteStateError as error:
+            self.frozen_because = f"état non fini, sauvegardé dans {error.dump_path}"
+            _log.error("the world froze: %s", error)
+            return 0.0
         return advance_s
+
+    def unfreeze(self) -> None:
+        """Run again, after the solvers were restored to a finite state."""
+        self.frozen_because = None

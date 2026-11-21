@@ -8,7 +8,17 @@ its docstring what it reads from `world`.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
+
+
+class NonFiniteStateError(RuntimeError):
+    """A solver's state holds NaN or infinity (SPEC 5.9); it was dumped to `dump_path`.
+    The simulation freezes the world when a solver raises it."""
+
+    def __init__(self, dump_path: Path) -> None:
+        super().__init__(f"the solver's state is not finite; dumped to {dump_path}")
+        self.dump_path = dump_path
 
 
 @runtime_checkable

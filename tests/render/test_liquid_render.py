@@ -118,7 +118,7 @@ def test_deep_water_absorbs_red_first(window: GameWindow) -> None:
     f0 = fresnel_f0(WATER.refractive_index or 0.0)
     expected = f0 * np.asarray(HORIZON) + (1.0 - f0) * np.exp(-absorption * 2.0)
     measured = _centre(out, half=8)
-    np.testing.assert_allclose(measured, expected, rtol=0.06)
+    np.testing.assert_allclose(measured, expected, rtol=0.03)
     assert measured[0] < measured[1] < measured[2]
 
 
@@ -143,6 +143,14 @@ def test_the_water_writes_its_depth(window: GameWindow) -> None:
 
     assert _centre(out_depth) < _centre(scene_depth) == 1.0
     assert out_depth[2, 2] == scene_depth[2, 2] == 1.0  # a corner: no water
+    # The slab's front: particle centres reach 2 m - half a spacing, spheres a radius
+    # more. Its window depth, from the eye 6 m away along x:
+    front_m = 2.0 - 0.5 * SPACING_M + 0.75 * SPACING_M
+    clip = view.projection(SIZE[0] / SIZE[1]) @ np.array([0.0, 0.0, -(6.0 - front_m), 1.0])
+    expected = clip[2] / clip[3] * 0.5 + 0.5
+    eye_depth = _eye_depth(view, float(_centre(out_depth, half=0)))
+    assert eye_depth == pytest.approx(6.0 - front_m, abs=0.01)
+    assert _centre(out_depth, half=0) == pytest.approx(expected, abs=1e-4)
 
 
 def test_water_s_optics_come_from_its_material() -> None:
@@ -150,3 +158,57 @@ def test_water_s_optics_come_from_its_material() -> None:
     absorption = WATER.absorption_per_m_rgb
     assert absorption is not None and absorption[0] > absorption[1] > absorption[2] > 0.0
     assert fresnel_f0(1.333) == pytest.approx(0.0204, abs=1e-4)
+
+
+def _eye_depth(view: CameraView, window_depth: float) -> float:
+    """Distance along the view axis (m) of a window depth in [0, 1]."""
+    p = view.projection(SIZE[0] / SIZE[1]).astype(np.float64)
+    ndc = 2.0 * window_depth - 1.0
+    return float(p[2, 3] / (ndc + p[2, 2]))
+
+
+def test_the_water_reflects_the_sky_by_fresnel_s_law(window: GameWindow) -> None:
+    """Over black, square on: only the reflection is seen, F0 = 2 % of the horizon behind
+    the camera (n = 1.333). At a grazing angle the same surface reflects far more."""
+    slab = fill_box((0.0, -0.5, -0.5), (2.0, 0.5, 0.5), DX_M, 8, seed=1, jitter=0.0)
+    square = _view((6.0, 0.0, 0.0), (0.0, 0.0, 0.0))
+
+    _, _, out, _ = _draw(window, slab, square, background=(0.0, 0.0, 0.0))
+
+    f0 = fresnel_f0(WATER.refractive_index or 0.0)
+    np.testing.assert_allclose(_centre(out, half=4), f0 * np.asarray(HORIZON), rtol=0.10)
+
+    pool = fill_box((-1.0, -1.0, -0.5), (1.0, 1.0, 0.0), DX_M, 8, seed=2, jitter=0.0)
+    grazing = _view((-6.0, 0.0, 0.4), (0.0, 0.0, 0.0))  # about 86° from the normal
+    _, _, out, _ = _draw(window, pool, grazing, background=(0.0, 0.0, 0.0))
+    assert _centre(out, half=4).sum() > 10.0 * f0 * float(np.sum(HORIZON))
+
+
+def test_looking_down_the_water_reflects_the_zenith(window: GameWindow) -> None:
+    """Straight down onto a pool, over black: the reflection is of the sky overhead, F0 of
+    the zenith's deep blue, not the pale horizon (a reflected ray turned the wrong way, or
+    a view rotation transposed, would see the horizon)."""
+    pool = fill_box((-1.0, -1.0, -0.5), (1.0, 1.0, 0.0), DX_M, 8, seed=2, jitter=0.0)
+    down = _view((0.001, 0.0, 3.0), (0.0, 0.0, 0.0))
+
+    _, _, out, _ = _draw(window, pool, down, background=(0.0, 0.0, 0.0))
+
+    f0 = fresnel_f0(WATER.refractive_index or 0.0)
+    zenith = np.array([0.10, 0.25, 0.70])  # SKY_GLSL's colour straight up
+    np.testing.assert_allclose(_centre(out, half=4), f0 * zenith, rtol=0.15)
+
+
+def test_at_45_degrees_the_water_reflects_the_sky_45_degrees_up(window: GameWindow) -> None:
+    """An oblique view, so the view-to-world rotation is not symmetric: the reflection is
+    the sky at 45° (SKY_GLSL: horizon to zenith by the square root of the sine), weighted
+    by Schlick's Fresnel at 45°."""
+    pool = fill_box((-1.5, -1.5, -0.5), (1.5, 1.5, 0.0), DX_M, 8, seed=2, jitter=0.0)
+    view = _view((-2.0, 1.0, 2.0), (0.0, 1.0, 0.0))
+
+    _, _, out, _ = _draw(window, pool, view, background=(0.0, 0.0, 0.0))
+
+    f0 = fresnel_f0(WATER.refractive_index or 0.0)
+    fresnel = f0 + (1 - f0) * (1 - np.cos(np.radians(45.0))) ** 5
+    zenith, horizon = np.array([0.10, 0.25, 0.70]), np.asarray(HORIZON)
+    sky = horizon + (zenith - horizon) * np.sqrt(np.sin(np.radians(45.0)))
+    np.testing.assert_allclose(_centre(out, half=4), fresnel * sky, rtol=0.15)

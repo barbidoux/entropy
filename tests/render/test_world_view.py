@@ -204,3 +204,19 @@ def test_a_solid_without_a_colour_is_drawn_neutral_grey() -> None:
     (drawn,) = opaque_boxes(world)
 
     assert drawn.albedo_linear_rgb == (0.5, 0.5, 0.5)
+
+
+def test_glass_behind_something_nearer_is_hidden(window: GameWindow, test_tank: World) -> None:
+    """The glass pass tests depth: behind water (or anything) already drawn nearer, a pane
+    adds nothing."""
+    view = _view((5.0, 0.0, 1.0), (0.0, 0.0, 1.0))
+    hdr = HdrTarget(window.ctx, SIZE)
+    panes = GlassRenderer(window.ctx, glass_panels(test_tank))
+    try:
+        hdr.framebuffer.clear(0.1, 0.1, 0.1, 1.0, depth=0.01)  # something just ahead
+        panes.render(hdr.framebuffer, view, SIZE)
+        colour = np.frombuffer(hdr.colour.read(), dtype=np.float16).astype(np.float32)
+    finally:
+        panes.release()
+        hdr.release()
+    np.testing.assert_allclose(colour.reshape(-1, 4)[:, :3], 0.1, atol=1e-3)

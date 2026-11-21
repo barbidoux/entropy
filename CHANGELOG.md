@@ -28,7 +28,6 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
     and the glass as panels that reflect the sky by Fresnel's law (n from
     `glass.toml`; no refraction, a named simplification); the ground lies under the
     lowest solid;
-  - the liquid's particles show as blue points until the liquid pass (#52);
   - a non-finite liquid stops the world, which stays on screen, and the HUD says
     where the dump is (SPEC 5.9);
   - materials take optional constants with sources: refractive index, albedo, and

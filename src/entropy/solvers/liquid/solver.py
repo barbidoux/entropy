@@ -59,6 +59,9 @@ import warp as wp
 
 from entropy.core.paths import out_dir
 from entropy.fields.mac import GridSpec, MacVelocity, sample_cells, sample_velocity
+from entropy.solvers.interface import NonFiniteStateError
+
+__all__ = ["LiquidSetup", "LiquidSolver", "NonFiniteStateError", "fill_box", "load_dump"]
 from entropy.solvers.liquid import _solver_kernels as _k
 from entropy.solvers.liquid.particles import LiquidParticles
 from entropy.solvers.liquid.projection import Projection
@@ -105,6 +108,11 @@ class LiquidSetup:
     dump_dir: Path | None = None
     """Where the NaN guard writes its dumps; `out/nan_dumps` by default."""
 
+    @property
+    def particle_volume_m3(self) -> float:
+        """The volume of water one particle stands for: a cell over its particles."""
+        return self.spec.dx_m**3 / self.particles_per_cell
+
     def __post_init__(self) -> None:
         per_axis = (
             round(self.particles_per_cell ** (1.0 / 3.0)) if self.particles_per_cell > 0 else 0
@@ -133,14 +141,6 @@ def _head(a: wp.array, n: int) -> wp.array:
 
 def _arrays(particles: LiquidParticles) -> tuple[wp.array, wp.array, wp.array]:
     return particles.position_m, particles.velocity_m_per_s, particles.affine_per_s
-
-
-class NonFiniteStateError(RuntimeError):
-    """The liquid's state holds NaN or infinity; it was dumped to `dump_path`."""
-
-    def __init__(self, dump_path: Path) -> None:
-        super().__init__(f"the liquid's state is not finite; dumped to {dump_path}")
-        self.dump_path = dump_path
 
 
 def fill_box(

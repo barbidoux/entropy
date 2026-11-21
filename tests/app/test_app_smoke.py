@@ -89,7 +89,7 @@ def test_the_game_records_gpu_time_per_stage(window_settings: WindowSettings) ->
     gpu = stats.summary().gpu_ms_mean
     passes = {"scene", "liquid", "glass", "tone map", "HUD"}
     assert {f"{name} (OpenGL)" for name in passes} <= gpu.keys()
-    assert ("liquid (CUDA)" in gpu) == wp.is_cuda_available()
+    assert ("simulation (CUDA)" in gpu) == wp.is_cuda_available()
     assert all(ms >= 0.0 for ms in gpu.values())
 
 

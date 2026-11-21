@@ -12,7 +12,7 @@ The game draws the HUD after this. Each pass can be timed by a `StageTimer`
 from __future__ import annotations
 
 import math
-from contextlib import nullcontext
+from contextlib import ExitStack, nullcontext
 
 import moderngl
 
@@ -29,7 +29,10 @@ from entropy.world.world import World
 PARTICLE_RADIUS_SPACINGS = 0.75
 """Radius of a drawn particle, in particle spacings: large enough for neighbouring
 spheres to overlap into a closed surface, small enough to keep its detail (a look
-choice; the thickness is rescaled so that it stays the length of water crossed)."""
+choice; the thickness is rescaled so that it stays the length of water crossed).
+Named simplification: at 6.25 cm cells that is 2.3 cm, more than the Test Tank's 2 cm
+glass, so the drawn water reaches into the pane it touches (by about 1.5 cm once
+smoothed), and there the pane's inner surface reflects nothing."""
 
 
 class WorldFrame:
@@ -45,18 +48,24 @@ class WorldFrame:
         water: Material,
     ) -> None:
         self.ctx = ctx
-        self.scene = SceneRenderer(ctx, opaque_boxes(world), ground_z_m=ground_height_m(world))
-        self.glass = GlassRenderer(ctx, glass_panels(world))
-        spacing_m = particle_volume_m3 ** (1.0 / 3.0)
-        self.liquid = LiquidRenderer(
-            ctx,
-            particles,
-            radius_m=PARTICLE_RADIUS_SPACINGS * spacing_m,
-            particle_volume_m3=particle_volume_m3,
-            water=water,
-        )
-        self.tone_map = ToneMapper(ctx)
         self._targets: tuple[HdrTarget, HdrTarget] | None = None
+        spacing_m = particle_volume_m3 ** (1.0 / 3.0)
+        # If a renderer fails to build, those made before it are released at once.
+        with ExitStack() as made:
+            self.scene = SceneRenderer(ctx, opaque_boxes(world), ground_z_m=ground_height_m(world))
+            made.callback(self.scene.release)
+            self.glass = GlassRenderer(ctx, glass_panels(world))
+            made.callback(self.glass.release)
+            self.liquid = LiquidRenderer(
+                ctx,
+                particles,
+                radius_m=PARTICLE_RADIUS_SPACINGS * spacing_m,
+                particle_volume_m3=particle_volume_m3,
+                water=water,
+            )
+            made.callback(self.liquid.release)
+            self.tone_map = ToneMapper(ctx)
+            made.pop_all()
 
     def _hdr(self, size: tuple[int, int]) -> tuple[HdrTarget, HdrTarget]:
         if self._targets is None or self._targets[0].size_px != size:

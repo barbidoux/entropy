@@ -160,3 +160,14 @@ def test_a_failed_map_is_an_error_not_a_write_through_a_null_pointer(
 
     still_working = wp.full(4, 1.0, dtype=float, device="cuda:0")
     assert still_working.numpy().sum() == 4.0
+
+
+def test_only_the_first_count_values_need_writing(window: GameWindow) -> None:
+    """The contract: a frame writes the first `count` values; on the host path only those
+    travel to OpenGL (a 2 M particle buffer holding 1,000 particles copies 1,000)."""
+    with SharedBuffer(window.ctx, COUNT, wp.vec3, device="cpu") as shared:
+        with shared.writable(count=10) as points:
+            assert points.shape == (10,)
+            points.assign(np.full((10, 3), 7.0, dtype=np.float32))
+        values = np.frombuffer(shared.buffer.read(), dtype=np.float32).reshape(COUNT, 3)
+    np.testing.assert_array_equal(values[:10], 7.0)

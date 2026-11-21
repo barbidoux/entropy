@@ -19,7 +19,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from enum import StrEnum
 from types import TracebackType
-from typing import Any
+from typing import Any, cast
 
 import moderngl
 import warp as wp
@@ -95,14 +95,20 @@ class SharedBuffer:
                 self._staging = wp.empty(self.count, dtype=self.dtype, device="cpu", pinned=True)
 
     @contextmanager
-    def writable(self) -> Iterator[wp.array]:
-        """A Warp array to write this frame's values into; OpenGL sees them on exit.
+    def writable(self, count: int | None = None) -> Iterator[wp.array]:
+        """A Warp array of the first `count` values (all by default) to write this
+        frame; OpenGL sees them on exit.
 
         Contract: the array is valid only inside the block (its address may change
         from frame to frame, so it must not be kept or captured in a CUDA graph);
-        kernels launch on the device's current stream; every element is written,
-        since the zero-copy path does not keep last frame's values.
+        kernels launch on the device's current stream; every one of the `count` values
+        is written, since the zero-copy path does not keep last frame's values. Values
+        past `count` are undefined: draw only the first `count`. On the host path only
+        those `count` values travel to OpenGL.
         """
+        count = self.count if count is None else count
+        if not 0 <= count <= self.count:
+            raise ValueError(f"count must be between 0 and {self.count}, got {count}")
         if self._registered is not None:
             array = self._registered.map(dtype=self.dtype, shape=(self.count,))
             if array.ptr == 0:
@@ -112,18 +118,20 @@ class SharedBuffer:
                     "current on this thread?"
                 )
             try:
-                yield array
+                yield cast(wp.array, array[:count])
             finally:
                 self._registered.unmap()
         else:
             assert self._scratch is not None
-            yield self._scratch
+            yield cast(wp.array, self._scratch[:count])
+            if count == 0:
+                return
             if self._staging is not None:
-                wp.copy(self._staging, self._scratch)
+                wp.copy(self._staging, self._scratch, count=count)
                 wp.synchronize_device(self.device)
-                self.buffer.write(self._staging.numpy())
+                self.buffer.write(self._staging.numpy()[:count])
             else:
-                self.buffer.write(self._scratch.numpy())
+                self.buffer.write(self._scratch.numpy()[:count])
 
     def release(self) -> None:
         """Unregister from CUDA, then free the OpenGL buffer. Safe to call twice."""

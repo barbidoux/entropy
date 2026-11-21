@@ -29,6 +29,9 @@ Simplifications, named (CLAUDE.md rule 7):
   front of the water;
 - only the sky is reflected, not the scene;
 - absorption uses one wavelength per sRGB primary (`water.toml`);
+- a sprite is at least one pixel: far water whose spheres are smaller adds a whole
+  chord to one pixel, so its thickness reads high;
+- glass behind the water is never seen through it (the water writes its depth);
 - no foam, spray or caustics (later passes, SPEC 7.2).
 """
 
