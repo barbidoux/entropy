@@ -325,3 +325,68 @@ def test_settings_cannot_change_after_construction() -> None:
     solver = Mgpcg(system_from_labels(_labels(_random_labels((8, 8, 8), 24), "cpu"), dx_m=0.1))
     with pytest.raises(AttributeError):
         solver.omega = 0.5  # type: ignore[misc]
+
+
+def _face_thetas(shape: tuple[int, int, int], device: str, value=None, seed: int = 0):
+    nx, ny, nz = shape
+    rng = np.random.default_rng(seed)
+    arrays = []
+    for face in ((nx + 1, ny, nz), (nx, ny + 1, nz), (nx, ny, nz + 1)):
+        data = np.full(face, value) if value is not None else rng.uniform(0.05, 1.0, face)
+        arrays.append(_field(data, device))
+    return tuple(arrays)
+
+
+def test_one_theta_per_face_equal_everywhere_gives_the_single_theta_system(device: str) -> None:
+    shape = (8, 7, 6)
+    labels = _random_labels(shape, 40)
+    single = system_from_labels(_labels(labels, device), dx_m=0.1, air_theta=0.5)
+    per_face = system_from_labels(
+        _labels(labels, device), dx_m=0.1, face_theta=_face_thetas(shape, device, value=0.5)
+    )
+
+    np.testing.assert_allclose(per_face.diag.numpy(), single.diag.numpy(), rtol=1e-6)
+
+
+def test_the_operator_with_one_theta_per_face_is_symmetric(device: str) -> None:
+    shape = (7, 6, 5)
+    system = system_from_labels(
+        _labels(_random_labels(shape, 41), device),
+        dx_m=0.1,
+        face_theta=_face_thetas(shape, device, seed=42),
+    )
+    rng = np.random.default_rng(43)
+    x, y = rng.standard_normal(shape), rng.standard_normal(shape)
+    ax = wp.zeros(shape, dtype=float, device=device)
+    ay = wp.zeros(shape, dtype=float, device=device)
+
+    apply(system, _field(x, device), ax)
+    apply(system, _field(y, device), ay)
+
+    fluid = system.labels.numpy() == CELL_FLUID
+    assert np.dot(x[fluid], ay.numpy()[fluid]) == pytest.approx(
+        np.dot(y[fluid], ax.numpy()[fluid]), rel=1e-4
+    )
+
+
+def test_refresh_reads_the_face_thetas_again(device: str) -> None:
+    """The liquid rewrites θ every substep from its level set, then refreshes."""
+    shape = (8, 7, 6)
+    labels = _random_labels(shape, 44)
+    thetas = _face_thetas(shape, device, value=1.0)
+    solver = Mgpcg(system_from_labels(_labels(labels, device), dx_m=0.1, face_theta=thetas))
+
+    new = _face_thetas(shape, device, seed=45)
+    for target, source in zip(thetas, new, strict=True):
+        wp.copy(target, source)
+    solver.refresh()
+
+    fresh = system_from_labels(_labels(labels, device), dx_m=0.1, face_theta=new)
+    np.testing.assert_allclose(solver.system.diag.numpy(), fresh.diag.numpy(), rtol=1e-6)
+
+
+def test_face_thetas_must_match_the_faces() -> None:
+    labels = _labels(np.full((4, 4, 4), CELL_FLUID), "cpu")
+    thetas = _face_thetas((4, 4, 3), "cpu", value=0.5)
+    with pytest.raises(ValueError, match="theta"):
+        system_from_labels(labels, dx_m=0.1, face_theta=thetas)

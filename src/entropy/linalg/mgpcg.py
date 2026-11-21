@@ -76,6 +76,9 @@ class PoissonSystem:
     take 1 between fluid cells without reading the weight arrays."""
     air_theta: float = 1.0
     """θ of every air face, used again when the operator is refreshed from new labels."""
+    face_theta: tuple[wp.array, wp.array, wp.array] | None = None
+    """One θ per face (x, y and z faces), replacing `air_theta` when given: the liquid
+    writes them from its level set (second-order free surface). Clamped to [1e-3, 1]."""
 
     def __post_init__(self) -> None:
         nx, ny, nz = self.labels.shape
@@ -93,6 +96,14 @@ class PoissonSystem:
                 raise ValueError(f"{name} is on {array.device}, labels on {self.labels.device}")
         if not (math.isfinite(self.dx_m) and self.dx_m > 0):
             raise ValueError(f"dx_m must be a positive length, got {self.dx_m}")
+        if self.face_theta is not None:
+            for name, theta, w in zip(
+                "xyz", self.face_theta, (self.wx, self.wy, self.wz), strict=True
+            ):
+                if theta.shape != w.shape or theta.device != w.device:
+                    raise ValueError(
+                        f"face_theta {name} has shape {theta.shape}, its faces {w.shape}"
+                    )
 
     @property
     def shape(self) -> tuple[int, int, int]:
@@ -114,7 +125,13 @@ class PoissonSystem:
         ]
 
 
-def system_from_labels(labels: wp.array, *, dx_m: float, air_theta: float = 1.0) -> PoissonSystem:
+def system_from_labels(
+    labels: wp.array,
+    *,
+    dx_m: float,
+    air_theta: float = 1.0,
+    face_theta: tuple[wp.array, wp.array, wp.array] | None = None,
+) -> PoissonSystem:
     """The system with unit face weights between non-solid cells and one θ for every air face.
 
     `labels` is an int32 cell array; `air_theta` in (0, 1] places p = 0 between a
@@ -132,7 +149,15 @@ def system_from_labels(labels: wp.array, *, dx_m: float, air_theta: float = 1.0)
         for shape in ((nx + 1, ny, nz), (nx, ny + 1, nz), (nx, ny, nz + 1))
     ]
     diag = wp.empty(labels.shape, dtype=float, device=device)
-    system = PoissonSystem(labels, diag, *faces, dx_m=dx_m, unit_weights=True, air_theta=air_theta)
+    system = PoissonSystem(
+        labels,
+        diag,
+        *faces,
+        dx_m=dx_m,
+        unit_weights=True,
+        air_theta=air_theta,
+        face_theta=face_theta,
+    )
     _assemble(system)
     return system
 
@@ -146,6 +171,21 @@ def _assemble(system: PoissonSystem) -> None:
             wp.launch(
                 _k.face_weights, dim=w.shape, inputs=[system.labels, *offset, w], device=device
             )
+    if system.face_theta is not None:
+        wp.launch(
+            _k.diagonal_face_theta,
+            dim=system.shape,
+            inputs=[
+                system.labels,
+                system.wx,
+                system.wy,
+                system.wz,
+                *system.face_theta,
+                system.diag,
+            ],
+            device=device,
+        )
+        return
     wp.launch(
         _k.diagonal,
         dim=system.shape,

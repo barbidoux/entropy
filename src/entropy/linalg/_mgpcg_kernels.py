@@ -84,6 +84,47 @@ def diagonal(
 
 
 @wp.func
+def _face_term(labels: wp.array3d(dtype=wp.int32), i: int, j: int, k: int, w: float, theta: float):
+    """Like `_term` with this face's own θ, kept in [1e-3, 1] so 1/θ stays finite."""
+    return _term(labels, i, j, k, w, 1.0 / wp.clamp(theta, 1.0e-3, 1.0))
+
+
+@wp.kernel
+def diagonal_face_theta(
+    labels: wp.array3d(dtype=wp.int32),
+    wx: wp.array3d(dtype=float),
+    wy: wp.array3d(dtype=float),
+    wz: wp.array3d(dtype=float),
+    tx: wp.array3d(dtype=float),
+    ty: wp.array3d(dtype=float),
+    tz: wp.array3d(dtype=float),
+    diag: wp.array3d(dtype=float),
+):
+    """`diagonal` with one θ per face (tx, ty, tz shaped like wx, wy, wz)."""
+    i, j, k = wp.tid()
+    if labels[i, j, k] != FLUID:
+        diag[i, j, k] = 1.0
+        return
+    nx = labels.shape[0]
+    ny = labels.shape[1]
+    nz = labels.shape[2]
+    d = wp.float32(0.0)
+    if i > 0:
+        d += _face_term(labels, i - 1, j, k, wx[i, j, k], tx[i, j, k])
+    if i < nx - 1:
+        d += _face_term(labels, i + 1, j, k, wx[i + 1, j, k], tx[i + 1, j, k])
+    if j > 0:
+        d += _face_term(labels, i, j - 1, k, wy[i, j, k], ty[i, j, k])
+    if j < ny - 1:
+        d += _face_term(labels, i, j + 1, k, wy[i, j + 1, k], ty[i, j + 1, k])
+    if k > 0:
+        d += _face_term(labels, i, j, k - 1, wz[i, j, k], tz[i, j, k])
+    if k < nz - 1:
+        d += _face_term(labels, i, j, k + 1, wz[i, j, k + 1], tz[i, j, k + 1])
+    diag[i, j, k] = wp.max(d, 1.0e-12)
+
+
+@wp.func
 def _neighbour(
     labels: wp.array3d(dtype=wp.int32), x: wp.array3d(dtype=float), i: int, j: int, k: int, w: float
 ):

@@ -7,6 +7,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Pressure projection of the liquid (#49, `entropy.solvers.liquid.projection`):
+  - faces against static solids and walls carry no flow;
+  - one θ per fluid-air face from the liquid's level set (second-order free surface,
+    Enright et al. 2003), which MGPCG now accepts per face;
+  - a warm start from the last pressure.
+
+  V-LIQ-01 (hydrostatic pressure within 2 %, with the surface on or between faces) and
+  V-LIQ-04 (divergence below 1e-5) pass. ADR 0017: the tank's walls are the grid's walls,
+  static solids are voxelized, and water cannot leave the tank (named limits).
 - Solver interface and APIC transfers (#48):
   - `entropy.solvers.interface.Solver` (SPEC 8.2), re-exported by the package root;
   - `entropy.solvers.liquid`: particles with position, velocity and the APIC affine
