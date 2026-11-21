@@ -14,8 +14,10 @@ Exactness:
   beside the tank. Above the rim, over the cavity, it is a lower bound (the
   nearest point is a rim edge).
 - A union takes the nearest primitive. This is exact outside every primitive,
-  and a bound inside where two primitives overlap. Build solids without
-  overlaps, as the open box does internally.
+  and only a bound inside where two primitives touch or overlap: there the
+  nearest surface can be the shared face, which is not a real surface, so the
+  normal may point into the other primitive. The Test Tank's glass resting on
+  its concrete floor is such a case (named limit, pinned by a test).
 
 Ties (a point equally near two faces of a box) resolve x first, then y, then z,
 and towards + on a mid-plane. Between primitives the first kind wins (boxes,

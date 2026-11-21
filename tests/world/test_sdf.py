@@ -180,3 +180,15 @@ def test_a_half_space_needs_a_normal() -> None:
 def test_no_solids_is_an_error() -> None:
     with pytest.raises(ValueError, match="at least one"):
         Solids(())
+
+
+def test_touching_primitives_only_bound_the_distance_inside(device: str) -> None:
+    """Named limit: glass resting on concrete. Inside either, the shared face looks like
+    the nearest surface, so the depth is underestimated and the normal points across."""
+    concrete = HalfSpace(point_m=(0.0, 0.0, -0.02), normal=(0.0, 0.0, 1.0))
+    points = [(2.0, 2.0, -0.019), (2.0, 2.0, -0.021)]
+
+    distance, normal = _query(Solids((TANK, concrete)), points, device)
+
+    np.testing.assert_allclose(distance, [-0.001, -0.001], atol=1e-6)  # true: -0.019, -0.021
+    np.testing.assert_allclose(normal, [(0, 0, -1), (0, 0, 1)], atol=1e-6)
