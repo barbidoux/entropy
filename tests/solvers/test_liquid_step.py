@@ -416,3 +416,87 @@ def test_cpu_and_cuda_fall_alike() -> None:
         wp.synchronize()
 
     np.testing.assert_allclose(means[0], means[1], atol=1e-3)
+
+
+def test_uneven_water_evens_out_with_its_volume_unchanged(device: str) -> None:
+    """ADR 0018's local correction: one half packed 15 % too densely, the other as much
+    too sparsely, so the total volume is right and the volume control sees nothing.
+    The densities even out within a second."""
+    liquid = LiquidSolver.create(_setup((16, 8, 12)), device)
+    points = fill_box((0.0, 0.0, 0.0), (1.0, 0.5, 0.5), DX_M, 8, seed=18)
+    x = points[:, 0]
+    split = 0.5 / 1.15  # the left half's particles fit in this
+    points[:, 0] = np.where(x < 0.5, x / 1.15, split + (x - 0.5) * (1.0 - split) / 0.5)
+    liquid.add_particles(points)
+    liquid.step(1e-5)
+    inner = (slice(2, -2), slice(2, -2), slice(2, 5))
+    uneven = liquid.density_ratio()[inner].std()
+
+    for _ in range(60):
+        liquid.step(1.0 / 60.0)
+
+    assert uneven > 0.08
+    assert liquid.density_ratio()[inner].std() < uneven / 3
+
+
+def test_particles_move_by_the_midpoint_rule(device: str) -> None:
+    """Second order in time (SPEC 5.2): in a solid-body rotation of 2 rad/s, particles keep
+    their radius over 100 steps of 1/60 s (forward Euler would spiral out by 5 %). The
+    rotation is linear in space, so the grid interpolates it exactly."""
+    liquid = LiquidSolver.create(_setup((16, 16, 4)), device)
+    angle = np.linspace(0.0, 2 * np.pi, 16, endpoint=False)
+    centre = np.array([0.5, 0.5, 0.125])
+    ring = centre + 0.2 * np.stack([np.cos(angle), np.sin(angle), 0 * angle], axis=1)
+    liquid.add_particles(ring.astype(np.float32))
+    spec = liquid.fields()["velocity"].spec
+    omega = 2.0
+    u = np.zeros(spec.face_shape(0), np.float32)
+    v = np.zeros(spec.face_shape(1), np.float32)
+    ys = (np.arange(spec.shape[1]) + 0.5) * DX_M
+    xs = (np.arange(spec.shape[0]) + 0.5) * DX_M
+    u[:, :, :] = (-omega * (ys - centre[1]))[None, :, None]
+    v[:, :, :] = (omega * (xs - centre[0]))[:, None, None]
+    velocity = liquid.fields()["velocity"]
+    velocity.u.assign(u)
+    velocity.v.assign(v)
+    velocity.w.zero_()
+
+    for _ in range(100):
+        liquid.move_particles(1.0 / 60.0)
+
+    radius = np.linalg.norm(liquid.particle_positions()[:, :2] - centre[:2], axis=1)
+    np.testing.assert_allclose(radius, 0.2, rtol=1e-3)
+
+
+def test_the_grid_clamp_keeps_a_fast_particle_inside(device: str) -> None:
+    """ADR 0017: the grid's walls are the tank's; a particle the velocity would carry
+    through one stays 1e-4 of a cell inside."""
+    liquid = LiquidSolver.create(_setup((8, 8, 8)), device)
+    liquid.add_particles(np.array([[0.05, 0.25, 0.25]], dtype=np.float32))
+    velocity = liquid.fields()["velocity"]
+    velocity.u.fill_(-30.0)  # through the x = 0 wall in one step
+    velocity.v.zero_()
+    velocity.w.zero_()
+
+    liquid.move_particles(1.0 / 60.0)
+
+    x = liquid.particle_positions()[0, 0]
+    assert 0.0 < x <= 2e-4 * DX_M
+
+
+@pytest.mark.parametrize("depth_m", [0.5, 0.46875, 0.40625])
+def test_the_volume_control_measures_still_water_as_its_particles(
+    device: str, depth_m: float
+) -> None:
+    """The control's own measure of the water (ADR 0018) agrees with the particles'
+    volume within 0.1 %, with the surface on a face, mid-cell or between."""
+    liquid = LiquidSolver.create(_setup((12, 12, 16)), device)
+    points = fill_box((0.0, 0.0, 0.0), (0.75, 0.75, depth_m), DX_M, 8, seed=19, jitter=0.0)
+    liquid.add_particles(points)
+    liquid.step(1e-5)
+    liquid.max_advance_s()  # reads the frame's status
+
+    diagnostics = liquid.diagnostics()
+    particles_m3 = len(points) * DX_M**3 / 8
+    assert diagnostics["particles_in_water"] == len(points)
+    assert diagnostics["water_volume_m3"] == pytest.approx(particles_m3, rel=1e-3)

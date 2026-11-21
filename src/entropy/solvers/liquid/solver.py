@@ -73,8 +73,11 @@ SURFACE_SLOPE_PER_CELL = 2.0 / 3.0
 quadratic B-spline's 3/4 on the faces level with the cell, 1/2 on those above and
 below, averaged over the six faces. phi = (fill - density) * dx / slope is then close
 to the distance to the surface (m) near it."""
-VOLUME_CORRECTION_RATE = 0.1
-"""Share of a cell's density error the local correction removes per substep (ADR 0018)."""
+VOLUME_CORRECTION_PER_S = 6.0
+"""Local correction's rate (1/s): a cell's density error asks for this divergence per
+unit of error (ADR 0018). Per second, not per substep, so slow motion corrects as fast
+per simulated second (ADR 0013); capped so that one substep never asks for more than
+its whole error."""
 VOLUME_CONTROL_PER_S = 1.2
 """Volume control, proportional gain (1/s): divergence per unit of relative volume error."""
 VOLUME_CONTROL_PER_S2 = 0.36
@@ -227,9 +230,10 @@ class LiquidSolver:
         self._solid_distance = wp.zeros(capacity, dtype=float, device=device)
         self._shifted = wp.zeros(3 * capacity, dtype=wp.vec3, device=device)
         self._shifted_distance = wp.zeros(3 * capacity, dtype=float, device=device)
-        self._status = wp.zeros(2, dtype=float, device=device)
+        self._status = wp.zeros(4, dtype=float, device=device)
         cuda = wp.get_device(device).is_cuda
-        self._status_host = wp.zeros(2, dtype=float, device="cpu", pinned=cuda)
+        self._status_host = wp.zeros(4, dtype=float, device="cpu", pinned=cuda)
+        self._water = (0.0, 0.0)  # (volume in cells, particles in the water), a frame late
         self._status_event = wp.Event(device) if cuda else None
         self._status_pending = False
         self._frozen: NonFiniteStateError | None = None
@@ -238,9 +242,11 @@ class LiquidSolver:
         self._diagnostics = {"substeps": 0, "pressure_iterations": 0, "overruns": 0}
         self._density = wp.zeros(spec.shape, dtype=float, device=device)
         self._rest_mass = self._mass_at_rest()
-        self._volume_cells = wp.zeros(1, dtype=wp.float64, device=device)
-        self._inside_particles = wp.zeros(1, dtype=wp.float64, device=device)
+        self._volume_slots = wp.zeros(int(_k.SLOTS), dtype=wp.float64, device=device)
+        self._inside_slots = wp.zeros(int(_k.SLOTS), dtype=wp.float64, device=device)
+        self._totals = wp.zeros(2, dtype=wp.float64, device=device)
         self._volume_error = wp.zeros(2, dtype=wp.float64, device=device)
+        self._before_volume_error = wp.zeros(2, dtype=wp.float64, device=device)
         """[relative volume error, its integral over time (s)]: the volume control's state."""
         self._phi_at = wp.zeros(capacity, dtype=float, device=device)
 
@@ -296,6 +302,7 @@ class LiquidSolver:
         _head(self._particles.affine_per_s, self._count).assign(state["affine_per_s"])
         self._projection.pressure_pa.assign(state["pressure_pa"])
         self._volume_error.assign(state.get("volume_error", np.zeros(2)))
+        self._water = (0.0, 0.0)
         velocities = np.asarray(state["velocities_m_per_s"], dtype=float).reshape(-1, 3)
         speeds = np.linalg.norm(velocities, axis=1) if len(velocities) else np.zeros(1)
         finite = speeds[np.isfinite(speeds)]
@@ -306,7 +313,22 @@ class LiquidSolver:
         return self._density.numpy()
 
     def diagnostics(self) -> dict[str, float]:
-        return {"particles": self._count, **self._diagnostics}
+        """Counts for the HUD. The water's volume (from the level set, m³) and the
+        particles inside it come from the last frame's status, so reading them never
+        waits for the GPU."""
+        volume_cells, inside = self._water
+        return {
+            "particles": self._count,
+            "water_volume_m3": volume_cells * self._spec().dx_m ** 3,
+            "particles_in_water": inside,
+            **self._diagnostics,
+        }
+
+    def move_particles(self, dt_s: float) -> None:
+        """Step 8 alone: move the particles through the grid's current velocity by
+        `dt_s`, kept inside the grid and out of the solids (to check the integrator)."""
+        if self._count:
+            self._advect(self._active(), dt_s)
 
     # Particles ------------------------------------------------------------------------
 
@@ -380,6 +402,7 @@ class LiquidSolver:
             for source, target in zip(_arrays(self._particles), _arrays(self._before), strict=True):
                 wp.copy(target, source, count=n)
         wp.copy(self._before_pressure, self._projection.pressure_pa)
+        wp.copy(self._before_volume_error, self._volume_error)
         self._before_count = n
 
     def _mass_at_rest(self) -> wp.array:
@@ -414,6 +437,7 @@ class LiquidSolver:
     def _send_status(self) -> None:
         active = self._active()
         self._status.zero_()
+        wp.launch(_k.copy_totals, dim=1, inputs=[self._totals, self._status], device=self._device)
         if self._count:
             wp.launch(
                 _k.status,
@@ -436,7 +460,8 @@ class LiquidSolver:
         if self._status_event is not None:
             wp.synchronize_event(self._status_event)
         self._status_pending = False
-        speed, nonfinite = (float(v) for v in self._status_host.numpy())
+        speed, nonfinite, volume_cells, inside = (float(v) for v in self._status_host.numpy())
+        self._water = (volume_cells, inside)
         if nonfinite > 0.0:
             self._frozen = NonFiniteStateError(self._dump())
             raise self._frozen
@@ -468,6 +493,7 @@ class LiquidSolver:
             affine_per_s=state["affine_per_s"],
             pressure_pa=state["pressure_pa"],
             before_pressure_pa=self._before_pressure.numpy().copy(),
+            before_volume_error=self._before_volume_error.numpy().copy(),
             dt_s=np.asarray(self._last_frame[0] if self._last_frame else np.nan),
             origin_m=np.asarray(setup.spec.origin_m),
             dx_m=np.asarray(setup.spec.dx_m),
@@ -518,31 +544,30 @@ class LiquidSolver:
             inputs=[projection.phi_m, self._solid_phi, has_solids, projection.labels],
             device=device,
         )
-        self._volume_cells.zero_()
+        self._volume_slots.zero_()
         wp.launch(
             _k.fluid_volume,
             dim=spec.shape,
-            inputs=[projection.phi_m, projection.labels, spec.dx_m, self._volume_cells],
+            inputs=[projection.phi_m, projection.labels, spec.dx_m, self._volume_slots],
             device=device,
         )
-        self._inside_particles.zero_()
+        self._inside_slots.zero_()
         if n:
             phi_at = _head(self._phi_at, n)
             sample_cells(spec, projection.phi_m, active.position_m, phi_at)
-            wp.launch(
-                _k.count_inside, dim=n, inputs=[phi_at, self._inside_particles], device=device
-            )
+            wp.launch(_k.count_inside, dim=n, inputs=[phi_at, self._inside_slots], device=device)
         wp.launch(
             _k.volume_error,
             dim=1,
             inputs=[
-                self._volume_cells,
-                self._inside_particles,
+                self._volume_slots,
+                self._inside_slots,
                 float(setup.particles_per_cell),
                 VOLUME_CONTROL_DEAD_BAND,
                 VOLUME_CONTROL_INTEGRAL_LIMIT_S,
                 dt_s,
                 self._volume_error,
+                self._totals,
             ],
             device=device,
         )
@@ -552,7 +577,7 @@ class LiquidSolver:
             inputs=[
                 self._density,
                 projection.labels,
-                VOLUME_CORRECTION_RATE / dt_s,
+                min(VOLUME_CORRECTION_PER_S, 1.0 / dt_s),
                 self._volume_error,
                 VOLUME_CONTROL_PER_S,
                 VOLUME_CONTROL_PER_S2,

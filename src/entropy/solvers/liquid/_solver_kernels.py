@@ -163,6 +163,13 @@ def offsets(positions_m: wp.array(dtype=wp.vec3), step_m: float, out: wp.array(d
 
 
 @wp.kernel
+def copy_totals(totals: wp.array(dtype=wp.float64), out: wp.array(dtype=float)):
+    """out[2:4] = the last substep's water volume (cells) and particles in the water."""
+    out[2] = float(totals[0])
+    out[3] = float(totals[1])
+
+
+@wp.kernel
 def status(
     positions_m: wp.array(dtype=wp.vec3),
     velocities: wp.array(dtype=wp.vec3),
@@ -228,12 +235,17 @@ def density_and_level_set(
     phi_m[i, j, k] = (surface_fill - d) * phi_per_fill_m
 
 
+SLOTS = wp.constant(1024)
+"""Sums are spread over this many slots, then added up: one address for every thread
+would make them wait on each other."""
+
+
 @wp.kernel
 def fluid_volume(
     phi_m: wp.array3d(dtype=float),
     labels: wp.array3d(dtype=wp.int32),
     dx_m: float,
-    cells: wp.array(dtype=wp.float64),
+    slots: wp.array(dtype=wp.float64),
 ):
     """The water's volume in cells: each cell counts clamp(1/2 - phi/dx, 0, 1), its
     share below the surface when phi is the distance to it (ADR 0018)."""
@@ -242,35 +254,46 @@ def fluid_volume(
         return
     share = wp.clamp(0.5 - phi_m[i, j, k] / dx_m, 0.0, 1.0)
     if share > 0.0:
-        wp.atomic_add(cells, 0, wp.float64(share))
+        slot = ((i * labels.shape[1] + j) * labels.shape[2] + k) % SLOTS
+        wp.atomic_add(slots, slot, wp.float64(share))
 
 
 @wp.kernel
-def count_inside(phi_at: wp.array(dtype=float), counter: wp.array(dtype=wp.float64)):
+def count_inside(phi_at: wp.array(dtype=float), slots: wp.array(dtype=wp.float64)):
     """How many particles lie inside the water (the level set negative where they are)."""
     t = wp.tid()
     if phi_at[t] < 0.0:
-        wp.atomic_add(counter, 0, wp.float64(1.0))
+        wp.atomic_add(slots, t % SLOTS, wp.float64(1.0))
 
 
 @wp.kernel
 def volume_error(
-    volume_cells: wp.array(dtype=wp.float64),
-    inside_particles: wp.array(dtype=wp.float64),
+    volume_slots: wp.array(dtype=wp.float64),
+    inside_slots: wp.array(dtype=wp.float64),
     particles_per_cell: float,
     dead_band: float,
     integral_limit_s: float,
     dt_s: float,
     error: wp.array(dtype=wp.float64),
+    totals: wp.array(dtype=wp.float64),
 ):
-    """One thread. e = (V_target - V) / V_target, with V the level set's volume and
-    V_target that of the particles inside it. error[0] is e less the dead band (0 within
-    it); error[1] adds error[0] dt, clamped to the limit (no wind-up against a bias of
-    the measure smaller than the dead band)."""
-    target = inside_particles[0] / wp.float64(particles_per_cell)
+    """One thread. Adds up the slots: totals = [V (cells), particles inside the water].
+    e = (V_target - V) / V_target, with V_target the volume of the particles inside the
+    water. error[0] is e less the dead band (0 within it); error[1] adds error[0] dt,
+    clamped to the limit (no wind-up against a bias of the measure smaller than the
+    dead band)."""
+    volume = wp.float64(0.0)
+    inside = wp.float64(0.0)
+    for s in range(SLOTS):
+        volume = volume + volume_slots[s]
+        inside = inside + inside_slots[s]
+    totals[0] = volume
+    totals[1] = inside
+    volume_cells = volume
+    target = inside / wp.float64(particles_per_cell)
     e = wp.float64(0.0)
     if target > wp.float64(0.0):
-        e = (target - volume_cells[0]) / target
+        e = (target - volume_cells) / target
     band = wp.float64(dead_band)
     outside = wp.float64(0.0)
     if e > band:

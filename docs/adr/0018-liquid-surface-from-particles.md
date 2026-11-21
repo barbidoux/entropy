@@ -39,8 +39,10 @@ measured during #50 and its review, shape how:
 - **Volume correction**, a target divergence the projection gives each fluid cell
   instead of zero, with two terms:
   - Local density: rate · (density − 1) in cells with no air within two cells (nearer
-    the surface the density reads low for lack of water), at a rate of 0.1 per
-    substep. Crowded cells expand, sparse ones contract.
+    the surface the density reads low for lack of water), at 6 /s, capped so that one
+    substep never asks for more than its whole error. A rate per second, not per
+    substep, so slow motion corrects as fast per simulated second (ADR 0013). Crowded
+    cells expand, sparse ones contract.
   - Volume control (Kim et al. 2007): the same in every fluid cell, proportional and
     integral in the relative error between the level set's volume and the volume of
     the particles inside it. Gains 1.2 /s and 0.36 /s² (critically damped), a dead
@@ -59,7 +61,10 @@ measured during #50 and its review, shape how:
 Measured with this decision (16 × 4 × 16 sloshing tank unless noted):
 - still water, jittered, 800 frames: volume unchanged, particles at rest (0.4 mm/s);
 - sloshing, 2,000 frames: the one-second mean volume stays within 0.6 %; 8,000 frames:
-  within 0.7 %; a 2× finer grid over 6,000 frames: within 0.43 %.
+  within 0.75 %; a 2× finer grid over 6,000 frames: within 0.43 %, with 8.00 particles
+  per bulk cell at the end (8.76 without the correction);
+- the volume control asked for at most 0.014 /s of divergence over 8,000 frames, about
+  6 mm/s across 0.4 m of water.
 
 Named limits:
 - Water thinner than about a cell (a lone droplet, a thin sheet) has a density below ½

@@ -29,8 +29,11 @@ auditor then read the paper and the literature. What is known:
   find dam-break experiments differ most for t* < 1, where t* = t·√(g/H) with H = 2a,
   that is T < 2.
 - **The level set's volume wobbles.** With a few particles per cell it moves by a few
-  tenths of a per cent from frame to frame. Sampling it at 4³ points per cell snaps a
-  flat surface to quarter cells (±2 % of the test tank's depth); 8³ points do not.
+  tenths of a per cent from frame to frame. Sampling it at n³ points per cell snaps a
+  flat surface to 1/n of a cell: with 4³ points, up to ±2 % of the test tank's depth;
+  with 8³, up to ±1 % (its water at rest, 6.42 cells deep, reads −0.67 %). Since the
+  drift is measured against the first second's mean, the snap of one surface height
+  cancels; the first frame is checked against the particles' volume within 1 %.
 
 Not known:
 - the exact delay of the front records, since their origin is only roughly the heater
@@ -69,8 +72,10 @@ Measured with this decision:
   1⅛ in column (not asserted): −7.2 to +1.4 %.
 - What V-LIQ-03 catches: gravity × 0.8 reaches −13.3 % and gravity × 1.2 +9.3 %, so
   both fail by 2 points or more; gravity × 0.9 (−7.9 %) fails, gravity × 1.1 (+4.3 %)
-  passes. It does not separate a first-order free surface, PIC or forward Euler from
-  the right method; V-LIQ-01 and the full-step tests cover those.
+  passes; velocity damped by 0.5 % per substep fails. It does not separate a
+  first-order free surface, PIC or forward Euler from the right method: the full-step
+  tests do (a rough surface settling for the first two, a solid-body rotation keeping
+  its radius for the third).
 
 ## Alternatives considered
 
@@ -78,8 +83,9 @@ Measured with this decision:
   resolution, for a cause in the paper's clock, not the solver.
 - **A delay fitted per run** (the rejected first version): it absorbs gravity errors of
   ±20 %.
-- **PySPH's digitisation of Figure 3:** within about 0.04 in T of Table 2 but about
-  2 % low in Z at T = 2.0–2.55.
+- **PySPH's digitisation of Figure 3:** for the 2¼ in column, within about 0.04 in T
+  of Table 2 but about 2 % low in Z at T = 2.0–2.55; for the 1⅛ in column one point is
+  0.12 later than the table.
 - **A 10 % tolerance:** gravity × 1.2 would pass.
 - **Volume per frame within 1 %:** it fails on the measure's wobble, not on lost
   water.

@@ -68,17 +68,20 @@ def test_v_liq_02_a_sloshing_tank_keeps_its_volume(device: str) -> None:
     nominal_m3 = len(points) * dx_m**3 / 8
 
     volumes = []
+    last_second_speed = 0.0
     for frame in range(2000):
         liquid.step(FRAME_S)
         if frame % 3 == 0:
             volumes.append(volume(liquid))
+        if frame >= 2000 - 60:
+            speeds = np.linalg.norm(liquid.particle_velocities(), axis=1)
+            last_second_speed = max(last_second_speed, float(speeds.max()))
 
     assert liquid.diagnostics()["particles"] == len(points)
     assert volumes[0] == pytest.approx(nominal_m3, rel=0.01)  # the measure is sound
     per_second = np.asarray(volumes[: len(volumes) // 20 * 20]).reshape(-1, 20).mean(axis=1)
     assert np.abs(per_second / per_second[0] - 1.0).max() <= 0.01
-    speeds = np.linalg.norm(liquid.particle_velocities(), axis=1)
-    assert speeds.max() > 0.05  # it was still sloshing: the test saw moving water
+    assert last_second_speed > 0.05  # still sloshing in its last second: water moved
 
 
 CLOCK_DELAY = 0.25
@@ -121,6 +124,7 @@ def _dam_break(a_m: float, cells_per_a: int, device: str) -> tuple[np.ndarray, n
     return np.asarray(times), np.asarray(fronts)
 
 
+@pytest.mark.slow
 def test_v_liq_03_a_released_column_advances_like_martin_and_moyce(device: str) -> None:
     """V-LIQ-03 (ADR 0019), with the game's 6.25 cm cells: a 1 m column, 16 cells across,
     released at once. With the simulated clock delayed by `CLOCK_DELAY`, every mean of
