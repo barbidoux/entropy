@@ -148,18 +148,31 @@ class PendingCheckpoint:
     """A copy of the liquid's state on its way to host memory (`checkpoint_async`).
 
     On CUDA the copies go to pinned memory on the device's stream, and an event marks
-    their end; `result()` waits for it, so only restoring can wait, not taking."""
+    their end; `result()` waits for it, so only restoring can wait, not taking. The host
+    buffers (`buffers`) can be larger than the state (`arrays` are views of their heads),
+    so that a checkpoint handed back to `checkpoint_async` lends them to the next one."""
 
-    def __init__(self, arrays: dict[str, wp.array], event: wp.Event | None, extra: dict) -> None:
+    def __init__(
+        self,
+        arrays: dict[str, wp.array],
+        event: wp.Event | None,
+        extra: dict,
+        buffers: dict[str, wp.array] | None = None,
+    ) -> None:
         self._arrays = arrays
         self._event = event
         self._extra = extra
+        self.buffers = buffers if buffers is not None else dict(arrays)
 
-    def result(self) -> dict[str, Any]:
-        """The state, as `checkpoint()` gives it."""
+    def wait(self) -> None:
+        """Until the copies have landed."""
         if self._event is not None:
             wp.synchronize_event(self._event)
             self._event = None
+
+    def result(self) -> dict[str, Any]:
+        """The state, as `checkpoint()` gives it."""
+        self.wait()
         state: dict[str, Any] = {name: a.numpy().copy() for name, a in self._arrays.items()}
         state.update(self._extra)
         return state
@@ -234,11 +247,12 @@ class LiquidSolver:
         self._velocity = MacVelocity.zeros(spec, device)
         self._mass = MacVelocity.zeros(spec, device)
         self._projection = Projection(spec, setup.density_kg_per_m3, device)
-        self._solid_phi = wp.array(
-            setup.solid_phi_m if setup.solid_phi_m is not None else np.ones(spec.shape),
-            dtype=float,
-            device=device,
-        )
+        solid_phi = setup.solid_phi_m if setup.solid_phi_m is not None else np.ones(spec.shape)
+        self._solid_phi = wp.array(solid_phi, dtype=float, device=device)
+        open_cells = int(np.count_nonzero(np.asarray(solid_phi) > 0.0))
+        self._water_capacity = min(capacity, open_cells * setup.particles_per_cell)
+        """The most particles the grid holds: its volume of water at rest, outside the
+        solids (a closed box in M1, ADR 0017), and at most the particle capacity."""
         self._valid = [
             (
                 wp.zeros(spec.face_shape(a), dtype=wp.int32, device=device),  # pyright: ignore[reportArgumentType]
@@ -318,34 +332,52 @@ class LiquidSolver:
             "volume_error": self._volume_error.numpy().copy(),
         }
 
-    def checkpoint_async(self) -> PendingCheckpoint:
+    def checkpoint_async(self, reuse: PendingCheckpoint | None = None) -> PendingCheckpoint:
         """A copy of the full state to host memory, enqueued without waiting (SPEC 4.6):
-        the game takes one every 10 s without a hitch. `restore` accepts it."""
+        the game takes one every 10 s without a hitch. `restore` accepts it.
+
+        `reuse`, a checkpoint no longer needed (the one falling off the ring), lends its
+        pinned buffers: allocating pinned memory costs milliseconds of CPU per save
+        (measured 5.6 ms at 262 k particles, 11 ms at 655 k). Buffers grow by a quarter
+        more than needed when they are too small. `reuse` must not be used again."""
         n, device = self._count, self._device
         cuda = wp.get_device(device).is_cuda
-        sources = {
-            "positions_m": (self._particles.position_m, wp.vec3, n),
-            "velocities_m_per_s": (self._particles.velocity_m_per_s, wp.vec3, n),
-            "affine_per_s": (self._particles.affine_per_s, wp.mat33, n),
-        }
+        if reuse is not None:
+            reuse.wait()
+        lent = reuse.buffers if reuse is not None else {}
+
+        def buffer(name: str, length: int, dtype: Any, grow: bool) -> wp.array:
+            host = lent.get(name)
+            if host is None or host.dtype != dtype or host.shape[0] < length:
+                size = max(length + length // 4 if grow else length, 1)  # a view needs one
+                host = wp.empty(size, dtype=dtype, device="cpu", pinned=cuda)
+            return host
+
+        buffers: dict[str, wp.array] = {}
         arrays: dict[str, wp.array] = {}
-        for name, (source, dtype, count) in sources.items():
-            host = wp.empty(count, dtype=dtype, device="cpu", pinned=cuda)
-            if count:
-                wp.copy(host, source, count=count)
-            arrays[name] = host
+        for name, source, dtype in (
+            ("positions_m", self._particles.position_m, wp.vec3),
+            ("velocities_m_per_s", self._particles.velocity_m_per_s, wp.vec3),
+            ("affine_per_s", self._particles.affine_per_s, wp.mat33),
+        ):
+            buffers[name] = buffer(name, n, dtype, grow=True)
+            arrays[name] = _head(buffers[name], n)
+            if n:
+                wp.copy(arrays[name], source, count=n)
         for name, source in (
             ("pressure_pa", self._projection.pressure_pa),
             ("volume_error", self._volume_error),
         ):
-            host = wp.empty(source.shape, dtype=source.dtype, device="cpu", pinned=cuda)
+            host = lent.get(name)
+            if host is None or host.shape != source.shape or host.dtype != source.dtype:
+                host = wp.empty(source.shape, dtype=source.dtype, device="cpu", pinned=cuda)
             wp.copy(host, source)
-            arrays[name] = host
+            buffers[name] = arrays[name] = host
         event = None
         if cuda:
             event = wp.Event(device)
             wp.get_device(device).stream.record_event(event)
-        return PendingCheckpoint(arrays, event, {"count": n})
+        return PendingCheckpoint(arrays, event, {"count": n}, buffers)
 
     def restore(self, state: dict[str, Any] | PendingCheckpoint) -> None:
         """Return to `state` (a `checkpoint()`, or a `checkpoint_async()` waited for here);
@@ -455,13 +487,23 @@ class LiquidSolver:
             inputs=[keep, index, *_arrays(active), *_arrays(target)],
             device=device,
         )
-        last_keep, last_index = keep.numpy()[-1], index.numpy()[-1]
+        # Only the last entry of each is read back (two values, not 2 n).
+        last_keep, last_index = keep[n - 1 :].numpy()[0], index[n - 1 :].numpy()[0]
         kept = int(last_index + last_keep)
         for source, destination in zip(_arrays(target), _arrays(self._particles), strict=True):
             if kept:
                 wp.copy(destination, source, count=kept)
         self._count = kept
         return n - kept
+
+    def particle_count(self) -> int:
+        """How many particles the liquid holds now (no GPU read)."""
+        return self._count
+
+    def room_particles(self) -> int:
+        """How many more particles the grid holds (`_water_capacity`): tools add no more
+        than this, and lose the rest (`entropy.game.tools.base.Inflow`)."""
+        return max(self._water_capacity - self._count, 0)
 
     def particle_positions(self) -> np.ndarray:
         return self._active().position_m.numpy()

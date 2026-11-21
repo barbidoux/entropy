@@ -11,19 +11,24 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   - the bucket drops exactly its volume (0.01–2 m³) where the aim meets the rim over
     the tank; right click turns it into a dam, Martin & Moyce's column 2a high across
     the tank against the far wall (US-02 passes in the Test Tank);
-  - the flood source raises the water from the whole floor at its rate (0.01–5 m³/s),
-    by accumulated volume;
+  - the flood source raises the water over the whole floor at its rate (0.01–5 m³/s,
+    the wheel scaling it by 1.25 per notch), by accumulated volume; its water comes in
+    at the level the water stands at (a named simplification: from the floor, 2 m³ in
+    4 s stood at half its depth);
   - the eraser removes the water within its radius (0.1–5 m) of where the aim meets
-    it; the liquid removes particles on the GPU (prefix sum), keeping their order.
-- Time controls and checkpoints (#55): P pauses, [ and ] cycle 1x, 0.5x, 0.25x and
-  0.1x, the period steps one frame while paused; F5 saves and F9 restores; a ring of 6
-  checkpoints every 10 s of simulated time, copied to pinned host memory without
-  waiting. When the world freezes (NaN guard), the checkpoints saved since the last
-  step are dropped, since they may hold the non-finite state, and F5 does nothing
-  until F9 has restored finite water. US-03: a dam break at 0.1x and at 1x both meet
-  V-LIQ-03 and keep their volume within 1 %.
-- The HUD counts the water (#56): particles, litres, cells of water, substeps, pressure
-  iterations and overruns; the liquid's GPU time per phase (transfers, pressure,
+    it; the liquid removes particles on the GPU (prefix sum), keeping their order, and
+    the eraser reads back only its level-set samples and two counts;
+- Time controls and checkpoints (#55, ADR 0024): P pauses, [ and ] cycle 1x, 0.5x,
+  0.25x and 0.1x, the period steps one frame while paused (the HUD names these keys as
+  the keyboard prints them: ^ $ : on AZERTY); F5 saves and F9 restores, again to go
+  further back; a ring of 6 checkpoints every 10 s of simulated time plus one at the
+  start, copied to pinned host memory without waiting, the buffers of the checkpoint
+  that falls off reused. Checkpoints keep in step with the NaN guard: a freeze drops
+  those saved since the last good step, F9 checks the last step before restoring, and
+  F5 does nothing while frozen. Clicks while paused or frozen are dropped. US-03: a dam
+  break at 0.1x and at 1x both meet V-LIQ-03 and keep their volume within 1 %.
+- The HUD counts the water (#56): particles, litres (the particles' own volume),
+  cells of water, substeps, pressure iterations and overruns; the liquid's GPU time per phase (transfers, pressure,
   motion) through the step's context.
 - Tools and the hose (#53, #35, ADR 0020):
   - tool plug-ins with their parameters, limits and defaults in `content/tools/`;
@@ -35,6 +40,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
     the tank over the rim, and water that hits the glass or the ground is lost;
   - the tools act first in each frame, with the shared advance, inside the NaN guard
     (`Simulation.step(player=...)`): a frozen world takes no water;
+  - tools are found through a registry from their content files (`order` is the key);
+  - the grid holds at most its volume of water: past it, tools lose the water and the
+    HUD says "Cuve pleine";
+  - the hose's first frame of water is one frame long and its path is judged from the
+    camera, so it cannot reach through the glass at point-blank range;
   - US-01: 10 s of hose at 20 L/s puts 200 L ± 2 % in the Test Tank, at 1x and 0.1x.
 - Benchmarks sample GPU telemetry during each measurement (#25, ADR 0022): one
   `nvidia-smi -lms 100` process in the background, summarised in each result (min,

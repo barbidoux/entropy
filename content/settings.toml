@@ -29,3 +29,22 @@ up = "SPACE"
 down = "LEFT_CONTROL, RIGHT_CONTROL"
 toggle_hud = "F3"
 menu = "ESCAPE"
+# Les outils : 1 tuyau, 2 seau, 3 crue, 4 gomme (la rangée des chiffres).
+tool_1 = "1"
+tool_2 = "2"
+tool_3 = "3"
+tool_4 = "4"
+tool_5 = "5"
+tool_6 = "6"
+tool_7 = "7"
+tool_8 = "8"
+tool_9 = "9"
+# Le temps. LEFT_BRACKET et RIGHT_BRACKET sont les deux touches à droite du P
+# (^ et $ sur AZERTY), PERIOD celle à droite du ; (: sur AZERTY). Le HUD les affiche
+# telles qu'elles sont imprimées sur ton clavier.
+pause = "P"
+slower = "LEFT_BRACKET"
+faster = "RIGHT_BRACKET"
+step = "PERIOD"
+save_checkpoint = "F5"
+load_checkpoint = "F9"

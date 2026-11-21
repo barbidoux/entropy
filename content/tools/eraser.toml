@@ -3,6 +3,7 @@ name = "eraser"
 label = "Gomme"
 icon = "x"
 power = "radius_m"
+order = 4  # the key that chooses it
 
 [parameters.radius_m]
 label = "rayon"

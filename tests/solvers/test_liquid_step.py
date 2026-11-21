@@ -1,5 +1,6 @@
 """The liquid's full step (SPEC 5.2, 5.9; ADR 0013, 0016, 0017)."""
 
+import dataclasses
 import math
 from pathlib import Path
 
@@ -530,6 +531,10 @@ def test_particles_within_a_sphere_can_be_removed(device: str) -> None:
     points = fill_box((0.0, 0.0, 0.0), (0.5, 0.5, 0.25), DX_M, 8, seed=20)
     velocities = np.tile(np.arange(len(points), dtype=np.float32)[:, None], (1, 3))
     liquid.add_particles(points, velocities=velocities)
+    state = liquid.checkpoint()
+    affine = np.arange(len(points) * 9, dtype=np.float32).reshape(-1, 3, 3)
+    state["affine_per_s"] = affine
+    liquid.restore(state)
     centre, radius = np.array([0.25, 0.25, 0.1]), 0.12
     outside = np.linalg.norm(points - centre, axis=1) > radius
 
@@ -539,6 +544,7 @@ def test_particles_within_a_sphere_can_be_removed(device: str) -> None:
     assert liquid.diagnostics()["particles"] == int(outside.sum())
     np.testing.assert_allclose(liquid.particle_positions(), points[outside])
     np.testing.assert_allclose(liquid.particle_velocities(), velocities[outside])
+    np.testing.assert_array_equal(liquid.checkpoint()["affine_per_s"], affine[outside])
 
 
 def test_removing_nothing_changes_nothing(device: str) -> None:
@@ -614,6 +620,68 @@ def test_a_particle_stands_for_a_cell_over_its_particles() -> None:
     setup = _setup((4, 4, 4), particles_per_cell=8)
 
     assert setup.particle_volume_m3 == pytest.approx(DX_M**3 / 8)
+
+
+def test_the_grid_holds_at_most_its_volume_of_water(device: str) -> None:
+    """Room for particles: the open cells times the particles per cell, at most the
+    particle capacity; what is added takes room (#74's review, B1)."""
+    liquid = LiquidSolver.create(_setup((4, 4, 4)), device)
+    assert liquid.room_particles() == 4 * 4 * 4 * 8
+    liquid.add_particles(fill_box((0.0, 0.0, 0.0), (DX_M, DX_M, DX_M), DX_M, 8, seed=1))
+    assert liquid.room_particles() == 4 * 4 * 4 * 8 - 8
+
+    solid = np.ones((4, 4, 4))
+    solid[:, :, :2] = -1.0  # the lower half is solid
+    walled = LiquidSolver.create(_setup((4, 4, 4), solid_phi_m=solid), device)
+    assert walled.room_particles() == 4 * 4 * 2 * 8
+
+    small = dataclasses.replace(_setup((4, 4, 4)), max_particles=100)
+    assert LiquidSolver.create(small, device).room_particles() == 100
+
+
+def test_an_async_checkpoint_reuses_the_buffers_it_is_handed(device: str) -> None:
+    """#74's review, S5: a checkpoint handed back lends its pinned buffers to the next,
+    which grow by a quarter when too small; each result is the state it was taken of."""
+    liquid = LiquidSolver.create(_setup((8, 8, 8)), device)
+    liquid.add_particles(fill_box((0.0, 0.0, 0.0), (0.25, 0.25, 0.25), DX_M, 8, seed=2))
+    first = liquid.checkpoint_async()
+    first.result()
+
+    second = liquid.checkpoint_async(reuse=first)
+
+    assert second.buffers["positions_m"] is first.buffers["positions_m"]
+    np.testing.assert_array_equal(second.result()["positions_m"], liquid.particle_positions())
+    liquid.add_particles(fill_box((0.25, 0.0, 0.0), (0.5, 0.25, 0.25), DX_M, 8, seed=3))
+    third = liquid.checkpoint_async(reuse=second)
+    count = len(liquid.particle_positions())
+    assert third.buffers["positions_m"] is not second.buffers["positions_m"]
+    assert third.buffers["positions_m"].shape[0] == count + count // 4
+    state = third.result()
+    np.testing.assert_array_equal(state["positions_m"], liquid.particle_positions())
+    assert state["count"] == count
+
+
+def test_erasing_between_frames_keeps_the_nan_dump_s_starting_state(
+    device: str, tmp_path: Path
+) -> None:
+    """The guard reads a frame's state at the next one; the eraser acts between them, so it
+    must not touch the state the dump holds (#74's review, mutant M13)."""
+    liquid = LiquidSolver.create(_setup((8, 8, 8), dump_dir=tmp_path), device)
+    points = fill_box((0.0, 0.0, 0.0), (0.5, 0.5, 0.25), DX_M, 8, seed=23)
+    liquid.add_particles(points)
+    liquid.step(1.0 / 60.0)
+    poisoned = liquid.checkpoint()
+    poisoned["velocities_m_per_s"][3] = np.inf
+    liquid.restore(poisoned)
+    start = liquid.particle_positions().copy()
+    liquid.step(1.0 / 60.0)  # goes non-finite; seen at the next frame
+
+    assert liquid.remove_particles_within((0.25, 0.25, 0.1), 0.12) > 0
+    with pytest.raises(NonFiniteStateError) as raised:
+        liquid.step(1.0 / 60.0)
+
+    dump = load_dump(raised.value.dump_path)
+    np.testing.assert_array_equal(dump["before_positions_m"], start)
 @pytest.mark.parametrize("jitter", [0.0, 0.8])
 def test_a_grid_full_of_water_stays_still(device: str, jitter: float) -> None:
     """#69: water up to the grid's lid, no air anywhere: still, finite, converged."""

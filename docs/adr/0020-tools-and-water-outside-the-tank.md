@@ -15,8 +15,10 @@ about 14 m/s at 60 fps, 6.7 m/s at 30 fps).
 ## Decision
 
 - **Tools are plug-ins** (SPEC 8.2): a class with `on_press`, `on_hold(dt)` and
-  `on_release`, and `content/tools/<name>.toml` with its parameters in SI units, their
-  limits and defaults, and the parameter the mouse wheel sets. `dt` is simulated time,
+  `on_release`, registered under its name (`entropy.game.tools.registry`), and
+  `content/tools/<name>.toml` with its key (`order`), its parameters in SI units, their
+  limits and defaults, and the parameter the mouse wheel sets (by a step, or by a
+  factor for rates). `dt` is simulated time,
   so slow motion gives each frame less water and the flow per simulated second holds.
 - **Accumulated volume** (#35): a source carries the fraction of a particle it could not
   release to the next frame. At 20 L/s and 0.1x that is 1.1 particles per frame, and
@@ -25,14 +27,22 @@ about 14 m/s at 60 fps, 6.7 m/s at 30 fps).
   gravity only. A parcel joins the liquid where it enters the grid, through its open top
   or a side above the glass's rim. A side below the rim is glass, and the water that
   reaches it is lost; so is water that falls to the ground. Parcels in flight are drawn
-  with the liquid.
+  with the liquid. The hose's water leaves the nozzle at even times through the frame
+  and flies what is left of it; its first path is judged from the camera, so the nozzle
+  cannot reach through the glass.
+- **The grid holds at most its volume of water.** A tool adds what fits; the rest would
+  have spilled over the rim, which M1 cannot show, so it is lost, counted, and the HUD
+  says the tank is full.
 - **Default nozzle speed 10 m/s** (range 5–30 m/s). From above the rim it lands below
   14 m/s, which runs at full speed at 60 fps. Faster jets are allowed: the world then
   slows down rather than becoming unstable (ADR 0013), and the HUD says so.
 
 Named simplifications: no air drag or breakup of the jet outside the grid; water that
 misses the tank is lost (it cannot exist outside the tank in M1, ADR 0017); a parcel
-joins the liquid at the end of the frame it entered in.
+joins the liquid at the end of the frame it entered in; water past the grid's volume is
+lost; the flood's water comes in at the level the water stands at, not at the floor
+(coming in at the floor, it must push the column up through the volume correction,
+which lags in shallow water: 2 m³ flooded in 4 s stood at half its depth).
 
 ## Alternatives considered
 

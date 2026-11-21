@@ -2,7 +2,8 @@
 tank, at 1x and at 0.1x (ADR 0013: slow motion gives each frame less simulated time).
 
 Gameplay test: the toolbox, the jet and the real liquid, frame by frame as the game
-runs them. The Test Tank runs on the GPU; the CPU runs a 1 m tank at 2 L/s. The
+runs them (`Simulation.step` with the tools as its first step), with the hose at its
+default nozzle speed. The Test Tank runs on the GPU; the CPU runs a 1 m tank at 2 L/s. The
 "at 30 fps or more" part is checked on the laptop at the gate (#57)."""
 
 import math
@@ -15,6 +16,7 @@ from entropy.game.toolbox import Toolbox
 from entropy.game.tools.base import Aim
 from entropy.game.tools.jet import Domain
 from entropy.sim.setup import liquid_setup
+from entropy.sim.simulation import Simulation
 from entropy.solvers.liquid.solver import LiquidSolver
 from entropy.world.maps import Environment, load_map
 from entropy.world.materials import load_material
@@ -43,7 +45,7 @@ def _pour(world: World, flow_l_per_s: float, time_scale: float, device: str) -> 
         particle_volume_m3=volume_m3,
     )
     toolbox.current.values["flow_l_per_s"] = flow_l_per_s
-    toolbox.current.values["nozzle_speed_m_per_s"] = 5.0
+    simulation = Simulation([liquid])
     top = tank.inner_max_m[2] + 0.6
     aim = Aim(origin_m=(0.0, 0.0, top), direction=(0.0, 0.6, -0.8))
     dt_s = FRAME_S * time_scale
@@ -51,14 +53,17 @@ def _pour(world: World, flow_l_per_s: float, time_scale: float, device: str) -> 
     toolbox.handle(
         FrameInput(frozenset(), frozenset(), 0.0, 0.0, tool_held=True, tool_pressed=True)
     )
-    for _ in range(round(10.0 / dt_s)):
-        toolbox.apply(aim, dt_s)
-        liquid.step(dt_s)
+
+    def player(advance_s: float) -> None:
+        toolbox.apply(aim, advance_s)
+
+    simulated_s = 0.0
+    while simulated_s < 10.0 - 1e-9:
+        simulated_s += simulation.step(min(dt_s, 10.0 - simulated_s), player=player)
         toolbox.handle(hold)
     toolbox.handle(FrameInput(frozenset(), frozenset(), 0.0, 0.0, tool_released=True))
-    for _ in range(round(2.0 / dt_s)):
-        toolbox.apply(aim, dt_s)
-        liquid.step(dt_s)
+    while simulated_s < 12.0 - 1e-9:
+        simulated_s += simulation.step(dt_s, player=player)
     assert len(toolbox.jet) == 0 and toolbox.jet.lost_parcels == 0
     return liquid.diagnostics()["particles"] * volume_m3
 

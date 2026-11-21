@@ -3,9 +3,11 @@
 Each frame it releases flow * dt of water (dt is simulated time: slow motion gives
 less) as particles of the liquid's own volume. The fraction of a particle left over
 is carried to the next frame (#35), so no water is lost to rounding at any time scale.
-The frame's particles leave the nozzle at even times through the frame, so at the
-frame's end they are strung along the first stretch of the jet; each starts at a
-random point of the nozzle's opening, whose area is flow / speed.
+The frame's particles leave the nozzle at even times through the frame: each is
+launched at a random point of the nozzle's opening (whose area is flow / speed) with
+what is left of the frame to fly, so at the frame's end they are strung along one
+frame's flight beyond the nozzle. Their first path is judged from the camera, so the
+nozzle cannot reach through the glass.
 """
 
 from __future__ import annotations
@@ -15,11 +17,13 @@ import math
 import numpy as np
 
 from entropy.game.tools.base import ToolBase, ToolContext, ToolSpec
+from entropy.game.tools.registry import register_tool
 
 NOZZLE_AHEAD_M = 0.3
 """How far in front of the camera the water leaves the nozzle."""
 
 
+@register_tool("hose")
 class Hose(ToolBase):
     def __init__(self, spec: ToolSpec, seed: int = 0) -> None:
         super().__init__(spec)
@@ -51,10 +55,7 @@ class Hose(ToolBase):
         r = radius_m * np.sqrt(self._rng.random(count))
         angle = 2.0 * math.pi * self._rng.random(count)
         opening = nozzle + (r * np.cos(angle))[:, None] * side + (r * np.sin(angle))[:, None] * up
-        # Ages at the frame's end: they left at even times through the frame.
-        age = (np.arange(count) + 0.5) / count * dt_s
-        gravity = ctx.jet.gravity
-        velocity0 = speed * aim
-        positions = opening + velocity0 * age[:, None] + 0.5 * gravity * (age**2)[:, None]
-        velocities = velocity0 + gravity * age[:, None]
-        ctx.jet.launch(positions, velocities)
+        # They leave at even times through the frame, and fly what is left of it.
+        left_s = dt_s - (np.arange(count) + 0.5) / count * dt_s
+        velocities = np.broadcast_to(speed * aim, (count, 3))
+        ctx.jet.launch(opening, velocities, flight_s=left_s, from_m=opening - NOZZLE_AHEAD_M * aim)

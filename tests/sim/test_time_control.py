@@ -95,3 +95,14 @@ def test_the_hud_line_says_what_the_world_is_doing() -> None:
     assert control.hud_line() == "temps : x0.5 (ralenti)"
     control.toggle_pause()
     assert control.hud_line() == "temps : EN PAUSE (x0.5)"
+
+
+def test_pausing_or_resuming_forgets_a_requested_step() -> None:
+    control = TimeControl()
+    control.toggle_pause()
+    control.step_once()
+    assert control.step_requested
+
+    control.toggle_pause()
+
+    assert not control.step_requested

@@ -104,6 +104,30 @@ def glfw_key_label(key: int) -> str | None:
     return label or None
 
 
+_KEY_NAMES = {
+    value: name[len("KEY_") :].replace("_", " ")
+    for name, value in vars(glfw).items()
+    if name.startswith("KEY_")
+    and isinstance(value, int)
+    and name not in ("KEY_UNKNOWN", "KEY_LAST")
+}
+
+
+def key_names(
+    bindings: Mapping[int, Action],
+    action: Action,
+    *,
+    key_label: Callable[[int], str | None] = glfw_key_label,
+) -> str:
+    """The keys bound to `action`, as this keyboard prints them ("^" for the key right of
+    P on AZERTY, "F5", "LEFT CONTROL"), joined by " / "; for the HUD's hints."""
+    names = []
+    for key in sorted(k for k, bound in bindings.items() if bound is action):
+        label = key_label(key) if key in _PRINTABLE_KEYS else None
+        names.append(label.upper() if label else _KEY_NAMES.get(key, str(key)))
+    return " / ".join(names)
+
+
 def _key_for(setting: str, name: str, key_label: Callable[[int], str | None]) -> int:
     if name.startswith("@"):  # a position, named after the US-layout key there
         key = getattr(glfw, f"KEY_{name[1:].upper()}", None)

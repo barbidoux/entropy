@@ -14,7 +14,10 @@ Simplifications, named (CLAUDE.md rule 7):
   the tank in M1 (ADR 0017); `lost_parcels` counts it;
 - a parcel joins the liquid at the end of the frame it entered in, at its end-of-frame
   position: at most one frame of motion is approximated, inside the air above the
-  water.
+  water;
+- whether a frame's path crosses the glass or enters is judged on the straight chord
+  from where it started to where it ends (for a new parcel, from where the tool says
+  its path began, such as the camera): over one frame the arc is close to it.
 """
 
 from __future__ import annotations
@@ -51,6 +54,8 @@ class Jet:
         self.positions_m = np.zeros((0, 3))
         self.velocities_m_per_s = np.zeros((0, 3))
         self.lost_parcels = 0
+        self._flight_s = np.zeros(0)  # the next advance's duration per parcel; NaN: dt
+        self._from_m = np.zeros((0, 3))  # where the next advance's path starts
 
     def __len__(self) -> int:
         return len(self.positions_m)
@@ -59,12 +64,31 @@ class Jet:
         """Drop every parcel in flight (a checkpoint restored: they belong to later)."""
         self.positions_m = np.zeros((0, 3))
         self.velocities_m_per_s = np.zeros((0, 3))
+        self._flight_s = np.zeros(0)
+        self._from_m = np.zeros((0, 3))
 
-    def launch(self, positions_m: np.ndarray, velocities_m_per_s: np.ndarray) -> None:
-        self.positions_m = np.concatenate([self.positions_m, np.reshape(positions_m, (-1, 3))])
+    def launch(
+        self,
+        positions_m: np.ndarray,
+        velocities_m_per_s: np.ndarray,
+        *,
+        flight_s: np.ndarray | None = None,
+        from_m: np.ndarray | None = None,
+    ) -> None:
+        """New parcels at `positions_m` with `velocities_m_per_s`. On the next advance
+        each flies `flight_s` (what is left of the frame after it was launched; the whole
+        advance if None), and its path is judged from `from_m` (default: where it is), so
+        a tool can have the stretch it came along tested too."""
+        positions = np.reshape(positions_m, (-1, 3)).astype(float)
+        n = len(positions)
+        flight = np.full(n, np.nan) if flight_s is None else np.reshape(flight_s, n)
+        start = positions if from_m is None else np.reshape(from_m, (-1, 3)).astype(float)
+        self.positions_m = np.concatenate([self.positions_m, positions])
         self.velocities_m_per_s = np.concatenate(
             [self.velocities_m_per_s, np.reshape(velocities_m_per_s, (-1, 3))]
         )
+        self._flight_s = np.concatenate([self._flight_s, flight])
+        self._from_m = np.concatenate([self._from_m, start])
 
     def advance(
         self, dt_s: float, domain: Domain, liquid: Any = None
@@ -74,23 +98,25 @@ class Jet:
         others stay in flight or are dropped."""
         if not len(self):
             return np.zeros((0, 3)), np.zeros((0, 3))
-        start = self.positions_m
-        end = start + self.velocities_m_per_s * dt_s + 0.5 * self.gravity * dt_s**2
-        velocity = self.velocities_m_per_s + self.gravity * dt_s
+        flight = np.where(np.isnan(self._flight_s), dt_s, self._flight_s)[:, None]
+        end = self.positions_m + self.velocities_m_per_s * flight + 0.5 * self.gravity * flight**2
+        velocity = self.velocities_m_per_s + self.gravity * flight
+        start = self._from_m
         inside = domain.contains(end)
         low, high = np.asarray(domain.low_m), np.asarray(domain.high_m)
-        from_above = start[:, 2] >= high[2]
-        # Height where the path crosses the side it came through (linear along the path).
-        crossing_z = np.full(len(start), np.inf)
-        for axis in (0, 1):
-            for bound in (low[axis], high[axis]):
-                d0, d1 = start[:, axis] - bound, end[:, axis] - bound
-                crosses = (d0 * d1 < 0) & inside
-                share = np.where(crosses, d0 / np.where(crosses, d0 - d1, 1.0), 0.0)
-                z = start[:, 2] + share * (end[:, 2] - start[:, 2])
-                crossing_z = np.where(crosses, np.minimum(crossing_z, z), crossing_z)
-        through_side_above_rim = crossing_z >= domain.rim_z_m
-        enters = inside & (from_above | through_side_above_rim)
+        # Where the chord enters the grid's box: the last of its three slab entries (a
+        # ray-box test). The face it enters by says whether it may: the open top, or a
+        # side above the rim; a side below it is glass.
+        chord = end - start
+        with np.errstate(divide="ignore", invalid="ignore"):
+            to_low, to_high = (low - start) / chord, (high - start) / chord
+        slab_entry = np.where(chord != 0.0, np.minimum(to_low, to_high), -np.inf)
+        entry_axis = np.argmax(slab_entry, axis=1)
+        entry = start + np.clip(slab_entry.max(axis=1), 0.0, 1.0)[:, None] * chord
+        started_inside = domain.contains(start)
+        through_top = (entry_axis == 2) & (chord[:, 2] < 0.0)
+        through_side_above_rim = (entry_axis < 2) & (entry[:, 2] >= domain.rim_z_m)
+        enters = inside & (started_inside | through_top | through_side_above_rim)
         stopped = inside & ~enters
         # A side below the rim is glass, whether the path ended inside or beyond it.
         hits_glass = np.zeros(len(start), dtype=bool)
@@ -110,6 +136,8 @@ class Jet:
         keep = ~enters & ~lost
         entered = (end[enters], velocity[enters])
         self.positions_m, self.velocities_m_per_s = end[keep], velocity[keep]
+        self._flight_s = np.full(int(keep.sum()), np.nan)
+        self._from_m = self.positions_m.copy()
         if liquid is not None and len(entered[0]):
             liquid.add_particles(entered[0], velocities=entered[1])
         return entered

@@ -12,12 +12,9 @@ from __future__ import annotations
 from typing import Any
 
 from entropy.game.input import TOOL_ACTIONS, FrameInput
-from entropy.game.tools.base import Aim, Tool, ToolContext, load_tool_spec
-from entropy.game.tools.bucket import Bucket
-from entropy.game.tools.eraser import Eraser
-from entropy.game.tools.flood import Flood
-from entropy.game.tools.hose import Hose
+from entropy.game.tools.base import Aim, Inflow, Tool, ToolContext
 from entropy.game.tools.jet import Domain, Jet
+from entropy.game.tools.registry import discover_tools
 
 
 class Toolbox:
@@ -36,11 +33,12 @@ class Toolbox:
         self.index = 0
         self.jet = jet
         self.domain = domain
-        self.liquid = liquid
+        self.liquid = Inflow(liquid, particle_volume_m3) if liquid is not None else None
         self.particle_volume_m3 = particle_volume_m3
         self._held = False
         self._pressed = False
         self._released = False
+        self._let_go: Tool | None = None  # a tool switched away from with the button held
 
     @classmethod
     def standard(
@@ -51,19 +49,19 @@ class Toolbox:
         liquid: Any,
         particle_volume_m3: float,
     ) -> Toolbox:
-        """The tools of M1, in the order of keys 1, 2, ..."""
+        """Every tool with a content file, in the order of keys 1, 2, ... (the registry)."""
         return cls(
-            [
-                Hose(load_tool_spec("hose")),
-                Bucket(load_tool_spec("bucket")),
-                Flood(load_tool_spec("flood")),
-                Eraser(load_tool_spec("eraser")),
-            ],
+            discover_tools(),
             jet=Jet(gravity_m_per_s2),
             domain=domain,
             liquid=liquid,
             particle_volume_m3=particle_volume_m3,
         )
+
+    @property
+    def overflow_m3(self) -> float:
+        """Water the tools could not add: the tank was full (`Inflow`)."""
+        return self.liquid.lost_m3 if self.liquid is not None else 0.0
 
     @property
     def current(self) -> Tool:
@@ -73,7 +71,9 @@ class Toolbox:
         """Choose and set the tool from this frame's input; remember its button."""
         for number, action in enumerate(TOOL_ACTIONS):
             if action in frame.pressed and number < len(self.tools) and number != self.index:
-                self._released = self._held  # the old tool lets go
+                if self._held:  # the old tool lets go, the new one starts as if clicked
+                    self._let_go = self._let_go or self.current
+                    self._pressed = True
                 self.index = number
         if frame.wheel_steps:
             self.current.change_power(frame.wheel_steps)
@@ -93,6 +93,9 @@ class Toolbox:
             particle_volume_m3=self.particle_volume_m3,
             domain=self.domain,
         )
+        if self._let_go is not None:
+            self._let_go.on_release(ctx)
+            self._let_go = None
         tool = self.current
         if self._pressed:
             tool.on_press(ctx)
@@ -103,6 +106,13 @@ class Toolbox:
         self._pressed = self._released = False
         if self.domain is not None and dt_s > 0.0:
             self.jet.advance(dt_s, self.domain, self.liquid)
+
+    def forget_clicks(self) -> None:
+        """While the world stands still (paused or frozen) no tool acts: a click then is
+        dropped, not kept for when the world runs again, maybe with another tool."""
+        if self._let_go is not None:
+            self._let_go = None
+        self._pressed = self._released = False
 
     def palette(self) -> list[str]:
         """HUD lines: the tool in hand and its settings in SI units (SPEC 4.7)."""
@@ -119,4 +129,6 @@ class Toolbox:
         status = getattr(tool, "status", "")
         if status:
             lines.append(f"{tool.spec.label} : {status}")
+        if self.overflow_m3 > 0.0:
+            lines.append(f"Cuve pleine : {self.overflow_m3 * 1e3:,.0f} L perdus")
         return lines

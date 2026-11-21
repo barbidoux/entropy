@@ -3,6 +3,7 @@ name = "bucket"
 label = "Seau"
 icon = "U"
 power = "volume_m3"
+order = 2  # the key that chooses it
 
 [parameters.volume_m3]
 label = "volume"

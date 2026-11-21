@@ -1,6 +1,7 @@
 """The assembled game runs (`entropy.app.main`): window, loop, scene, interop, HUD."""
 
 import dataclasses
+import math
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -13,6 +14,8 @@ from entropy.app import main as app_main
 from entropy.app.main import GameStages, run
 from entropy.core.config import Settings, WindowSettings
 from entropy.core.profiler import FrameStats
+from entropy.game.free_camera import CameraPose
+from entropy.game.input import Action, FrameInput
 from entropy.render.context import GameWindow
 from entropy.solvers.liquid.solver import NonFiniteStateError, fill_box
 
@@ -66,7 +69,7 @@ def test_a_non_finite_liquid_freezes_the_world_and_says_so(
     assert stages.step_simulation(1.0 / 60.0) == 0.0
     assert stages.step_simulation(1.0 / 60.0) == 0.0  # stays frozen
     notes = "\n".join(stages.hud_notes())
-    assert "MONDE ARRÊTÉ" in notes and "liquid-test.npz" in notes
+    assert "MONDE ARRÊTÉ" in notes and "divergé" in notes and "liquid-test.npz" in notes
     assert np.isfinite(stages.loop_settings.time_scale)
 
 
@@ -121,7 +124,9 @@ def test_hud_notes_give_the_controls_and_any_interop_fallback(
             notes = stages.hud_notes()
 
             assert any("Échap" in note for note in notes)
-            assert "CUDA-OpenGL registration failed: test" in "\n".join(notes)
+            text = "\n".join(notes)
+            assert "CUDA-OpenGL registration failed: test" in text
+            assert "pause" in text and "F5" in text and "F9" in text  # the time keys
         finally:
             stages.release()
 
@@ -234,10 +239,12 @@ def test_f5_saves_and_f9_restores_the_water(stages: GameStages) -> None:
     for _ in range(5):
         stages.step_simulation(1.0 / 60.0)
 
+    stages.toolbox.jet.launch(np.array([[0.0, 0.0, 9.0]]), np.zeros((1, 3)))  # in flight
+
     _press(stages, glfw.KEY_F9)
 
     np.testing.assert_allclose(stages.liquid.particle_positions(), saved)
-    assert len(stages.toolbox.jet) == 0
+    assert len(stages.toolbox.jet) == 0  # water in flight is not saved (ADR 0024)
 
 
 def test_the_hud_counts_the_water(stages: GameStages) -> None:
@@ -249,7 +256,9 @@ def test_the_hud_counts_the_water(stages: GameStages) -> None:
 
     text = "\n".join(stages.hud_notes())
 
-    assert "particules" in text and " L" in text and "cellules" in text
+    litres = 16 * 16 * 8 * 8 * 0.0625**3 / 8 * 1e3  # the particles' own volume: 125 L
+    assert f"{litres:,.0f} L" in text
+    assert "particules" in text and "cellules" in text
     assert "sous-pas" in text and "itérations" in text
 
 
@@ -262,7 +271,7 @@ def test_a_frozen_world_saves_no_checkpoint_and_keeps_the_last_good_one(
     stages.liquid.add_particles(fill_box((-0.5, -0.5, 0.0), (0.5, 0.5, 0.25), 0.0625, 8, seed=5))
     stages.step_simulation(1.0 / 60.0)
     _press(stages, glfw.KEY_F5)  # checked by the next step
-    good_s = stages.checkpoints.clock_s
+    good_s = stages.rewind.ring.clock_s
     stages.step_simulation(1.0 / 60.0)
     _press(stages, glfw.KEY_F5)  # saved after the step that goes non-finite
 
@@ -273,6 +282,28 @@ def test_a_frozen_world_saves_no_checkpoint_and_keeps_the_last_good_one(
     assert stages.step_simulation(1.0 / 60.0) == 0.0
     _press(stages, glfw.KEY_F5)  # refused while frozen
 
-    assert stages.checkpoints.saved_times_s() == [good_s]
+    assert stages.rewind.ring.saved_times_s() == [0.0, good_s]  # and the one at the start
     _press(stages, glfw.KEY_F9)
     assert stages.simulation.frozen_by is None
+
+
+def test_a_click_while_paused_is_not_kept_for_later(stages: GameStages) -> None:
+    """Paused, no tool acts; the click must not drop the bucket when play resumes
+    (#74's review)."""
+    assert stages.liquid is not None
+    looking_in = CameraPose((0.0, -3.0, 3.0), math.radians(90.0), math.radians(-37.0))
+    stages.mode.pose = looking_in  # from above the rim, down into the tank
+    click = FrameInput(frozenset(), frozenset(), 0.0, 0.0, tool_pressed=True, tool_released=True)
+    stages.toolbox.handle(FrameInput(frozenset(), frozenset({Action.TOOL_2}), 0.0, 0.0))
+    stages.toolbox.handle(click)
+    stages.step_simulation(1.0 / 60.0)
+    dropped = stages.liquid.diagnostics()["particles"]
+    assert dropped > 0  # running, a click drops the bucket where the camera aims
+
+    stages.time_control.toggle_pause()
+    stages.toolbox.handle(click)
+    stages.update(1.0 / 60.0)
+    stages.time_control.toggle_pause()
+    stages.step_simulation(1.0 / 60.0)
+
+    assert stages.liquid.diagnostics()["particles"] == dropped

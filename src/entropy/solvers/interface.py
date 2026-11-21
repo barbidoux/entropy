@@ -53,3 +53,12 @@ class Solver(Protocol):
         Always positive for a finite state: 0 would hold the world for good, since a held
         world never updates the speeds the limit comes from."""
         ...
+
+
+@runtime_checkable
+class AsyncCheckpointed(Protocol):
+    """A solver that copies its checkpoint to host memory without waiting (SPEC 4.6):
+    `checkpoint_async` returns what `restore` accepts; `reuse`, a checkpoint no longer
+    needed, lends its host buffers to the new one (ADR 0024)."""
+
+    def checkpoint_async(self, reuse: Any = None) -> Any: ...

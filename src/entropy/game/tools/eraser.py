@@ -3,9 +3,10 @@
 While the button is held, each frame finds where the aim's ray first meets the water
 (the liquid's level set turning negative, sampled every quarter cell along the ray,
 the crossing interpolated between samples) and removes the particles within the radius
-of that point. `removed_m3` adds up the volume taken. Reading the level set and the new
-particle count waits for the GPU once per frame of erasing: a tool's action, not part of
-the step. Removing gas and objects comes with those solvers.
+of that point. `removed_m3` adds up the volume taken. The level set is sampled on the
+liquid's device, and only those samples and the new particle count come back: reading
+them waits for the GPU once per frame of erasing, a tool's action, not part of the
+step. Removing gas and objects comes with those solvers.
 """
 
 from __future__ import annotations
@@ -13,24 +14,26 @@ from __future__ import annotations
 from typing import Any
 
 import numpy as np
+import warp as wp
 
-from entropy.game.tools.base import Aim, ToolBase, ToolContext, ToolSpec
+from entropy.fields.mac import GridSpec, sample_cells
+from entropy.game.tools.base import (
+    Aim,
+    ErasableLiquid,
+    Inflow,
+    ToolBase,
+    ToolContext,
+    ToolSpec,
+)
+from entropy.game.tools.registry import register_tool
 
 
-def _sample(phi: np.ndarray, spec: Any, points: np.ndarray) -> np.ndarray:
-    """Trilinear interpolation of a cell-centred field, clamped at the grid's edge."""
-    g = (points - np.asarray(spec.origin_m)) / spec.dx_m - 0.5
-    shape = np.asarray(phi.shape)
-    g = np.clip(g, 0.0, shape - 1.0)
-    i0 = np.minimum(np.floor(g).astype(int), shape - 2)
-    f = g - i0
-    out = np.zeros(len(points))
-    for corner in range(8):
-        offset = np.array([(corner >> axis) & 1 for axis in range(3)])
-        weight = np.prod(np.where(offset, f, 1.0 - f), axis=1)
-        idx = i0 + offset
-        out += weight * phi[idx[:, 0], idx[:, 1], idx[:, 2]]
-    return out
+def _sample(phi: wp.array, spec: GridSpec, points: np.ndarray) -> np.ndarray:
+    """The cell-centred level set at `points` (m), interpolated on its own device."""
+    where = wp.array(points.astype(np.float32), dtype=wp.vec3, device=phi.device)
+    out = wp.zeros(len(points), dtype=float, device=phi.device)
+    sample_cells(spec, phi, where, out)
+    return out.numpy()
 
 
 def first_water_along(liquid: Any, aim: Aim) -> np.ndarray | None:
@@ -52,7 +55,7 @@ def first_water_along(liquid: Any, aim: Aim) -> np.ndarray | None:
     if len(t) < 2:
         return None
     points = origin + t[:, None] * direction
-    phi = _sample(fields["phi_m"].numpy(), spec, points)
+    phi = _sample(fields["phi_m"], spec, points)
     inside = np.nonzero(phi < 0.0)[0]
     if not len(inside):
         return None
@@ -63,6 +66,7 @@ def first_water_along(liquid: Any, aim: Aim) -> np.ndarray | None:
     return points[k - 1] + (points[k] - points[k - 1]) * (a / (a - b))
 
 
+@register_tool("eraser")
 class Eraser(ToolBase):
     def __init__(self, spec: ToolSpec) -> None:
         super().__init__(spec)
@@ -70,14 +74,14 @@ class Eraser(ToolBase):
         self.status = ""
 
     def on_hold(self, ctx: ToolContext, dt_s: float) -> None:
-        liquid = ctx.liquid
-        remove = getattr(liquid, "remove_particles_within", None)
-        if liquid is None or remove is None:
+        liquid = ctx.liquid.liquid if isinstance(ctx.liquid, Inflow) else ctx.liquid
+        if not isinstance(liquid, ErasableLiquid):
             return
         point = first_water_along(liquid, ctx.aim)
         if point is None:
             self.status = "visez l'eau"
             return
-        removed = remove(tuple(float(c) for c in point), self.values["radius_m"])
+        centre = (float(point[0]), float(point[1]), float(point[2]))
+        removed = liquid.remove_particles_within(centre, self.values["radius_m"])
         self.removed_m3 += removed * ctx.particle_volume_m3
         self.status = f"{self.removed_m3 * 1e3:.0f} L enlevés"

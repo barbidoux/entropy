@@ -19,6 +19,12 @@ class _Liquid:
         self.positions = np.zeros((0, 3))
         self.velocities = np.zeros((0, 3))
 
+    def room_particles(self) -> int:
+        return 10**9
+
+    def particle_count(self) -> int:
+        return len(self.positions)
+
     def add_particles(self, positions_m, *, velocities=None) -> None:
         added = np.asarray(positions_m, dtype=float).reshape(-1, 3)
         moving = np.zeros_like(added) if velocities is None else np.asarray(velocities)
@@ -135,3 +141,98 @@ def test_the_jet_leaves_the_nozzle_at_the_nozzle_speed() -> None:
 def test_a_tool_context_needs_a_unit_aim() -> None:
     with pytest.raises(ValueError, match="direction"):
         Aim(origin_m=(0.0, 0.0, 0.0), direction=(0.0, 0.0, 2.0))
+
+
+def _one_frame_of_hose(aim: Aim, dt_s: float, domain: Domain = TANK) -> tuple[Jet, _Liquid]:
+    """One frame as the toolbox runs it: the hose releases, then the jet moves."""
+    hose = Hose(load_tool_spec("hose"))
+    jet = Jet(GRAVITY)
+    liquid = _Liquid()
+    context = ToolContext(aim=aim, liquid=liquid, jet=jet, particle_volume_m3=PARTICLE_M3)
+    hose.on_press(context)
+    hose.on_hold(context, dt_s)
+    jet.advance(dt_s, domain, liquid)
+    return jet, liquid
+
+
+def test_after_its_first_frame_the_water_is_one_frame_down_the_jet() -> None:
+    """Water leaves the nozzle (0.3 m ahead) at even times through the frame: at the
+    frame's end it lies between the nozzle and one frame's flight beyond it, not two
+    (#74's review, S1)."""
+    aim = Aim(origin_m=(20.0, 0.0, 5.0), direction=(1.0, 0.0, 0.0))  # far from the tank
+    dt_s = 1.0 / 60.0
+
+    jet, _ = _one_frame_of_hose(aim, dt_s)
+
+    ahead = jet.positions_m[:, 0] - 20.0
+    assert len(ahead) > 0
+    assert ahead.min() >= 0.3 - 1e-9
+    assert ahead.max() <= 0.3 + 10.0 * dt_s + 1e-9
+    # Strung along that stretch, as they left at even times through the frame.
+    assert ahead.min() < 0.3 + 0.1 * 10.0 * dt_s
+    assert ahead.max() > 0.3 + 0.9 * 10.0 * dt_s
+
+
+@pytest.mark.parametrize(("distance_m", "fps"), [(0.2, 60.0), (1.0, 30.0)])
+def test_the_hose_cannot_spray_through_the_glass(distance_m: float, fps: float) -> None:
+    """The camera just outside the glass, aiming at it below the rim: the path from the
+    camera on is tested, so no water gets in, however close the nozzle is (S1)."""
+    aim = Aim(origin_m=(2.0 + distance_m, 0.0, 1.0), direction=(-1.0, 0.0, 0.0))
+    hose = Hose(load_tool_spec("hose"))
+    hose.values["nozzle_speed_m_per_s"] = 30.0
+    jet = Jet(GRAVITY)
+    liquid = _Liquid()
+    context = ToolContext(aim=aim, liquid=liquid, jet=jet, particle_volume_m3=PARTICLE_M3)
+    hose.on_press(context)
+    for _ in range(10):
+        hose.on_hold(context, 1.0 / fps)
+        jet.advance(1.0 / fps, TANK, liquid)
+
+    assert len(liquid.positions) == 0
+    assert jet.lost_parcels > 0
+
+
+def test_a_parcel_crossing_the_whole_tank_in_one_frame_still_hits_the_glass() -> None:
+    """Fast enough to pass through both walls between two frames: the glass on its way
+    still stops it (mutant M5)."""
+    jet = Jet(GRAVITY)
+    jet.launch(np.array([[3.0, 0.0, 1.0]]), np.array([[-600.0, 0.0, 0.0]]))
+
+    entered, _ = jet.advance(1.0 / 60.0, TANK)
+
+    assert len(entered) == 0 and len(jet) == 0 and jet.lost_parcels == 1
+
+
+def test_a_parcel_from_above_the_grid_that_comes_in_through_a_side_below_the_rim_is_lost() -> None:
+    """Starting above the grid's top is not enough to enter: this one dives past the top's
+    edge and crosses the side below the rim (mutant M6)."""
+    jet = Jet(GRAVITY)
+    jet.launch(np.array([[2.05, 0.0, 2.6]]), np.array([[-6.0, 0.0, -120.0]]))
+
+    entered, _ = jet.advance(1.0 / 60.0, TANK)
+
+    assert len(entered) == 0 and jet.lost_parcels == 1
+
+
+def test_a_parcel_that_misses_the_side_s_face_does_not_count_as_crossing_it() -> None:
+    """A path that crosses a side's plane beside the tank, then comes in over the open top,
+    enters: the side's plane alone is not its face."""
+    jet = Jet(GRAVITY)
+    jet.launch(np.array([[2.5, 3.0, 2.7]]), np.array([[-60.0, -120.0, -12.0]]))
+
+    entered, _ = jet.advance(1.0 / 60.0, TANK)
+
+    assert len(entered) == 1
+
+
+def test_water_is_lost_on_the_frame_it_reaches_the_ground() -> None:
+    """From 1 m up, it reaches the ground 0.32 m under the floor after
+    sqrt(2 * 1.32 / 9.81) = 0.519 s: lost on frame 32, in flight on frame 31 (M7)."""
+    jet = Jet(GRAVITY)
+    jet.launch(np.array([[6.0, 0.0, 1.0]]), np.array([[0.0, 0.0, 0.0]]))
+
+    for _ in range(31):
+        jet.advance(1.0 / 60.0, TANK)
+    assert len(jet) == 1
+    jet.advance(1.0 / 60.0, TANK)
+    assert len(jet) == 0 and jet.lost_parcels == 1

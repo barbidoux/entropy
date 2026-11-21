@@ -17,6 +17,7 @@ import ctypes
 import logging
 import math
 import sys
+from collections.abc import Mapping
 from contextlib import ExitStack
 from pathlib import Path
 from typing import Any
@@ -28,7 +29,7 @@ from entropy.core.config import Settings, default_settings_path, load_settings
 from entropy.core.paths import content_dir, out_dir
 from entropy.core.profiler import FrameStats, StageTimer, cuda_stage_timer, gpu_memory
 from entropy.game.god_mode import GodMode
-from entropy.game.input import Action, bindings_from_settings
+from entropy.game.input import Action, bindings_from_settings, key_names
 from entropy.game.toolbox import Toolbox
 from entropy.game.tools.base import Aim
 from entropy.game.tools.jet import Domain
@@ -38,7 +39,7 @@ from entropy.render.gl_timer import GlQueries
 from entropy.render.interop import SharedBuffer
 from entropy.render.world_frame import WorldFrame
 from entropy.render.world_view import ground_height_m
-from entropy.sim.checkpoints import CheckpointRing
+from entropy.sim.checkpoints import CheckpointRing, Rewind
 from entropy.sim.loop import FrameLoop, LoopSettings
 from entropy.sim.setup import liquid_setup
 from entropy.sim.simulation import Simulation, StepContext
@@ -57,6 +58,20 @@ START_MAP = "test_tank"
 DEFAULT_LOG_PATH = out_dir() / "entropy.log"
 """Where the game logs, next to the clone (`out/` is ignored by git)."""
 CONTROLS_HINT = "clic : regarder   Échap : libérer la souris   F3 : HUD"
+
+
+def time_hint(bindings: Mapping[int, Action]) -> str:
+    """The time keys, named as this keyboard prints them (SPEC 4.5, 4.6)."""
+
+    def keys(action: Action) -> str:
+        return f"[{key_names(bindings, action)}]"
+
+    return (
+        f"{keys(Action.PAUSE)} pause   {keys(Action.SLOWER)} {keys(Action.FASTER)} plus lent, "
+        f"plus vite   {keys(Action.STEP)} une image (en pause)   "
+        f"{keys(Action.SAVE_CHECKPOINT)} sauver   {keys(Action.LOAD_CHECKPOINT)} revenir "
+        "(encore : plus loin)"
+    )
 
 
 def tank_domain(world: World, spec_origin_m, spec_high_m) -> Domain:
@@ -79,6 +94,7 @@ class GameStages:
         self.stats = stats
         self.loop_settings = LoopSettings()
         bindings = bindings_from_settings(settings.controls)  # needs GLFW running
+        self.time_hint = time_hint(bindings)
         self.mode = GodMode.from_settings(settings.camera, bindings)
         self.device = "cuda:0" if wp.is_cuda_available() else "cpu"
         self._mouse_captured = False
@@ -102,8 +118,11 @@ class GameStages:
             # Without a liquid no tool adds water; any positive volume will do.
             particle_volume_m3=setup.particle_volume_m3 if setup is not None else 1.0,
         )
+        self.particle_volume_m3 = setup.particle_volume_m3 if setup is not None else 1.0
         self.time_control = TimeControl()
-        self.checkpoints = CheckpointRing([self.liquid] if self.liquid is not None else [])
+        self.rewind = Rewind(
+            self.simulation, CheckpointRing([self.liquid] if self.liquid is not None else [])
+        )
         self.particles_drawn = 0
         # GPU time per stage for the HUD (SPEC 4.7): CUDA events around Warp work,
         # OpenGL timer queries around render passes.
@@ -171,9 +190,10 @@ class GameStages:
         if self.liquid is None:
             return f"{self.world.name} : pas d'eau possible"
         d = self.liquid.diagnostics()
+        litres = d["particles"] * self.particle_volume_m3 * 1e3  # the water itself, exactly
         return (
             f"{self.world.name} : {int(d['particles']):,} particules, "
-            f"{d['water_volume_m3'] * 1e3:,.0f} L, {int(d['water_cells']):,} cellules d'eau, "
+            f"{litres:,.0f} L, {int(d['water_cells']):,} cellules d'eau, "
             f"{int(d['substeps'])} sous-pas, {int(d['pressure_iterations'])} itérations de "
             f"pression, {int(d['overruns'])} dépassements"
         )
@@ -184,10 +204,13 @@ class GameStages:
         notes = []
         if self.simulation.frozen_by is not None:
             dump = self.simulation.frozen_by.dump_path
-            notes.append(f"MONDE ARRÊTÉ : état non fini, sauvegardé dans {dump} (F9 : revenir)")
+            notes.append(
+                f"MONDE ARRÊTÉ : la simulation a divergé (NaN), état sauvegardé dans {dump}"
+                " (F9 : revenir en arrière)"
+            )
         notes.append(self.time_control.hud_line())
         notes += self.toolbox.palette()
-        notes += [CONTROLS_HINT, self._water_line()]
+        notes += [CONTROLS_HINT, self.time_hint, self._water_line()]
         if self.particles.fallback_reason:
             notes.append(f"host copy because: {self.particles.fallback_reason}")
         return notes
@@ -201,6 +224,10 @@ class GameStages:
         if frame is not None:
             self.toolbox.handle(frame)
             self._handle_time(frame.pressed)
+            control = self.time_control
+            standing = control.paused and not control.step_requested
+            if standing or self.simulation.frozen_by is not None:
+                self.toolbox.forget_clicks()
 
     def _handle_time(self, pressed: frozenset[Action]) -> None:
         """Pause, slow motion, single step and checkpoints (SPEC 4.5, 4.6)."""
@@ -213,11 +240,10 @@ class GameStages:
             control.faster()
         if Action.STEP in pressed:
             control.step_once()
-        if Action.SAVE_CHECKPOINT in pressed and self.simulation.frozen_by is None:
-            self.checkpoints.save_now()  # never the non-finite state of a frozen world
-        if Action.LOAD_CHECKPOINT in pressed and self.checkpoints.restore_latest() is not None:
-            self.toolbox.jet.clear()  # water in flight belongs to the time left behind
-            self.simulation.unfreeze()
+        if Action.SAVE_CHECKPOINT in pressed:
+            self.rewind.save()
+        if Action.LOAD_CHECKPOINT in pressed and self.rewind.restore() is not None:
+            self.toolbox.jet.clear()  # water in flight is not saved (ADR 0024)
         captured = self.mode.input.mouse_captured
         if captured != self._mouse_captured:
             self.window.set_mouse_captured(captured)
@@ -228,15 +254,10 @@ class GameStages:
         pose = self.mode.pose
         forward = pose.forward()
         aim = Aim(pose.position_m, (float(forward[0]), float(forward[1]), float(forward[2])))
-        running = self.simulation.frozen_by is None
         with self.cuda_timer.stage("simulation (CUDA)"):
-            advanced_s = self.simulation.step(
+            return self.rewind.step(
                 dt_s, player=lambda advance_s: self.toolbox.apply(aim, advance_s)
             )
-        if running and self.simulation.frozen_by is not None:
-            self.checkpoints.drop_unchecked()
-        self.checkpoints.advance(advanced_s)
-        return advanced_s
 
     def render(self) -> None:
         width, height = self.window.framebuffer_size_px()
@@ -270,8 +291,7 @@ class GameStages:
             self.stats.summary(),
             gpu_memory(self.device),
             interop=self.particles.mode.value,
-            time_scale=0.0 if self.time_control.paused else self.time_control.scale,
-            notes=self.hud_notes(),
+            notes=self.hud_notes(),  # the time control says the time scale, in French
         )
         with self.gl_timer.stage("HUD (OpenGL)"):
             self.hud.draw(lines)

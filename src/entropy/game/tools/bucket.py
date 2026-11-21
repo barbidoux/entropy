@@ -18,6 +18,7 @@ import math
 import numpy as np
 
 from entropy.game.tools.base import ToolBase, ToolContext, ToolSpec
+from entropy.game.tools.registry import register_tool
 
 
 def aim_over_tank(ctx: ToolContext) -> np.ndarray | None:
@@ -76,6 +77,7 @@ def dam_of(
     return points
 
 
+@register_tool("bucket")
 class Bucket(ToolBase):
     def __init__(self, spec: ToolSpec) -> None:
         super().__init__(spec)

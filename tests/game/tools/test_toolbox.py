@@ -1,10 +1,11 @@
 """The toolbox (`entropy.game.toolbox`): choosing a tool, its power, using it (SPEC 4.5)."""
 
 import glfw
+import pytest
 
 from entropy.game.input import Action, FrameInput, InputState
 from entropy.game.toolbox import Toolbox
-from entropy.game.tools.base import Aim
+from entropy.game.tools.base import Aim, Tool
 from entropy.game.tools.jet import Domain
 
 TANK = Domain(low_m=(-2.0, -2.0, 0.0), high_m=(2.0, 2.0, 2.5), rim_z_m=2.0, ground_z_m=-0.32)
@@ -15,6 +16,12 @@ PARTICLE_M3 = 0.0625**3 / 8
 class _Liquid:
     def __init__(self) -> None:
         self.added = 0
+
+    def room_particles(self) -> int:
+        return 10**9
+
+    def particle_count(self) -> int:
+        return self.added
 
     def add_particles(self, positions_m, *, velocities=None) -> None:
         self.added += len(positions_m)
@@ -149,3 +156,89 @@ def test_right_click_reaches_the_tool_in_hand() -> None:
 
     assert frame.alternate_pressed
     assert getattr(toolbox.current, "shape", None) == "barrage"
+
+
+class _SmallTank(_Liquid):
+    """A liquid with room for `room` particles."""
+
+    def __init__(self, room: int) -> None:
+        super().__init__()
+        self.room = room
+
+    def room_particles(self) -> int:
+        return self.room - self.added
+
+
+def test_water_past_the_tank_s_room_is_lost_and_the_hud_says_so() -> None:
+    """The grid holds at most its volume of water: a tool adds what fits, the rest is
+    lost, counted, and shown; nothing crashes (B1 of #74's review)."""
+    liquid = _SmallTank(room=100)
+    toolbox = _toolbox(liquid)
+    toolbox.handle(_frame(pressed=frozenset({Action.TOOL_3})))  # the flood source
+    toolbox.handle(_frame(tool_held=True, tool_pressed=True))
+
+    toolbox.apply(AIM, 1.0)
+
+    released = int(0.1 / PARTICLE_M3)  # 0.1 m³/s for 1 s
+    assert liquid.added == 100
+    assert toolbox.overflow_m3 == pytest.approx((released - 100) * PARTICLE_M3)
+    assert any("pleine" in line for line in toolbox.palette())
+
+
+class _Recorder:
+    """A tool that records what it is told."""
+
+    def __init__(self, name: str, log: list[tuple[str, str]]) -> None:
+        from entropy.game.tools.base import ToolParameter, ToolSpec
+
+        power = ToolParameter("p", "p", "1", 0.0, 1.0, 0.5, 0.1)
+        self.spec = ToolSpec(name=name, label=name, icon="r", power="p", parameters={"p": power})
+        self.values = {"p": 0.5}
+        self.log = log
+
+    def change_power(self, steps: int) -> None: ...
+
+    def on_alternate(self) -> None: ...
+
+    def on_press(self, ctx: object) -> None:
+        self.log.append((self.spec.name, "press"))
+
+    def on_hold(self, ctx: object, dt_s: float) -> None:
+        self.log.append((self.spec.name, "hold"))
+
+    def on_release(self, ctx: object) -> None:
+        self.log.append((self.spec.name, "release"))
+
+
+def _recording_toolbox() -> tuple[Toolbox, list[tuple[str, str]]]:
+    from entropy.game.tools.jet import Jet
+
+    log: list[tuple[str, str]] = []
+    tools: list[Tool] = [_Recorder("A", log), _Recorder("B", log)]
+    box = Toolbox(tools, jet=Jet((0.0, 0.0, -9.81)), domain=TANK, liquid=_Liquid(),
+                  particle_volume_m3=PARTICLE_M3)  # fmt: skip
+    return box, log
+
+
+def test_switching_tools_with_the_button_held_releases_one_and_presses_the_other() -> None:
+    """The old tool lets go, the new one starts as if clicked (#74's review)."""
+    box, log = _recording_toolbox()
+    box.handle(_frame(tool_pressed=True, tool_held=True))
+    box.apply(AIM, 1.0 / 60.0)
+    box.handle(_frame(pressed=frozenset({Action.TOOL_2}), tool_held=True))
+    box.apply(AIM, 1.0 / 60.0)
+
+    assert log == [("A", "press"), ("A", "hold"), ("A", "release"), ("B", "press"), ("B", "hold")]
+
+
+def test_a_click_while_the_world_stands_still_is_forgotten() -> None:
+    """Paused or frozen, no tool acts; a click then must not fire when the world runs
+    again, maybe with another tool in hand (#74's review)."""
+    box, log = _recording_toolbox()
+    box.handle(_frame(tool_pressed=True))
+    box.handle(_frame(tool_released=True))
+
+    box.forget_clicks()
+    box.apply(AIM, 1.0 / 60.0)
+
+    assert log == []

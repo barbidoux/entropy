@@ -3,6 +3,7 @@ name = "hose"
 label = "Tuyau"
 icon = "~"
 power = "flow_l_per_s"  # the parameter the mouse wheel sets
+order = 1  # the key that chooses it
 
 [parameters.flow_l_per_s]
 label = "débit"

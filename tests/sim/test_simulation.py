@@ -176,3 +176,14 @@ def test_a_state_found_non_finite_while_pacing_freezes_the_world() -> None:
     assert acted == []
     assert simulation.frozen_by is not None
     assert simulation.frozen_by.dump_path.name == "limit.npz"
+
+
+def test_check_reads_the_last_step_s_verdict_inside_the_guard() -> None:
+    """A state found non-finite when its solver is next asked freezes the world, without
+    a step (the game checks before restoring a checkpoint)."""
+    simulation = Simulation([_BrokenLimit()])
+
+    assert simulation.check() is False
+    assert simulation.frozen_by is not None
+    ok = Simulation([FakeSolver(name="ok")])
+    assert ok.check() is True

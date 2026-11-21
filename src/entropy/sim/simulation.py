@@ -93,6 +93,18 @@ class Simulation:
             return 0.0
         return advance_s
 
+    def check(self) -> bool:
+        """Read what the solvers last found about their state (a step's state is read at
+        the next frame), inside the NaN guard, without stepping: True while the world
+        runs. The game checks before restoring a checkpoint (ADR 0024)."""
+        if self.frozen_by is None:
+            try:
+                self.advance_for(0.0)
+            except NonFiniteStateError as error:
+                self.frozen_by = error
+                _log.error("the world froze: %s", error)
+        return self.frozen_by is None
+
     def unfreeze(self) -> None:
         """Run again, after the solvers were restored to a finite state."""
         self.frozen_by = None
