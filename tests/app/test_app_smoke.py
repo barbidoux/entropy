@@ -201,3 +201,40 @@ def test_the_hose_fills_the_tank(stages: GameStages) -> None:
     assert in_tank > 0
     assert stages.particles_drawn == in_tank + len(stages.toolbox.jet)
     assert any("Tuyau" in note for note in stages.hud_notes())
+
+
+def _press(stages: GameStages, key: int) -> None:
+    on_key = stages.callbacks[0]
+    on_key(stages.window.handle, key, 0, glfw.PRESS, 0)
+    on_key(stages.window.handle, key, 0, glfw.RELEASE, 0)
+    stages.update(1.0 / 60.0)
+
+
+def test_time_keys_pause_slow_and_step(stages: GameStages) -> None:
+    """#55, SPEC 4.5: P pauses, [ and ] cycle the scale, the period steps; the HUD says so."""
+    _press(stages, glfw.KEY_P)
+    assert stages.time_control.paused
+    assert any("EN PAUSE" in note for note in stages.hud_notes())
+    _press(stages, glfw.KEY_LEFT_BRACKET)
+    assert stages.time_control.scale == 0.5
+    _press(stages, glfw.KEY_PERIOD)
+    assert stages.time_control.step_requested
+    _press(stages, glfw.KEY_RIGHT_BRACKET)
+    assert stages.time_control.scale == 1.0
+
+
+def test_f5_saves_and_f9_restores_the_water(stages: GameStages) -> None:
+    """#55: a checkpoint of the liquid, and back to it."""
+    assert stages.liquid is not None
+    stages.liquid.add_particles(fill_box((-0.5, -0.5, 0.0), (0.5, 0.5, 0.25), 0.0625, 8, seed=2))
+    stages.step_simulation(1.0 / 60.0)
+    _press(stages, glfw.KEY_F5)
+    saved = stages.liquid.particle_positions().copy()
+    stages.liquid.add_particles(fill_box((1.0, 1.0, 1.0), (1.5, 1.5, 1.5), 0.0625, 8, seed=3))
+    for _ in range(5):
+        stages.step_simulation(1.0 / 60.0)
+
+    _press(stages, glfw.KEY_F9)
+
+    np.testing.assert_allclose(stages.liquid.particle_positions(), saved)
+    assert len(stages.toolbox.jet) == 0

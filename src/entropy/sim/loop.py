@@ -27,6 +27,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from entropy.core.profiler import FrameStats
+from entropy.sim.time_control import TimeControl
 
 
 class FrameStages(Protocol):
@@ -89,9 +90,13 @@ class FrameLoop:
         sleep: Callable[[float], None] = time.sleep,
         settings: LoopSettings | None = None,
         stats: FrameStats | None = None,
+        time_control: TimeControl | None = None,
     ) -> None:
         self.stages = stages
         self.settings = settings or LoopSettings()
+        self.time_control = time_control
+        """The player's pause, slow motion and single step; when set, it gives each
+        frame's time scale instead of `settings.time_scale`."""
         self.stats = stats or FrameStats()
         self._clock = clock
         self._sleep = sleep
@@ -112,8 +117,12 @@ class FrameLoop:
         self.stages.update(min(frame_s, settings.max_logic_dt_s))
         logic_end_s = self._clock()
 
-        scale = settings.time_scale
+        scale, single_step = settings.time_scale, False
+        if self.time_control is not None:
+            scale, single_step = self.time_control.frame()
         asked_s = min(frame_s * scale, settings.max_advance_s)
+        if single_step:  # one 60 fps frame's worth at the chosen scale, whatever the clock
+            asked_s = (settings.min_frame_s or 1.0 / 60.0) * scale
         advance_s = 0.0
         if asked_s > 0.0:
             advance_s = self.stages.step_simulation(asked_s)

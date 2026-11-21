@@ -96,6 +96,12 @@ class ControlsSettings:
     tool_7: str = "7"
     tool_8: str = "8"
     tool_9: str = "9"
+    pause: str = "P"
+    slower: str = "LEFT_BRACKET"
+    faster: str = "RIGHT_BRACKET"
+    step: str = "PERIOD"
+    save_checkpoint: str = "F5"
+    load_checkpoint: str = "F9"
 
 
 @dataclass(frozen=True)

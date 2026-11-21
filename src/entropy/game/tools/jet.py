@@ -55,6 +55,11 @@ class Jet:
     def __len__(self) -> int:
         return len(self.positions_m)
 
+    def clear(self) -> None:
+        """Drop every parcel in flight (a checkpoint restored: they belong to later)."""
+        self.positions_m = np.zeros((0, 3))
+        self.velocities_m_per_s = np.zeros((0, 3))
+
     def launch(self, positions_m: np.ndarray, velocities_m_per_s: np.ndarray) -> None:
         self.positions_m = np.concatenate([self.positions_m, np.reshape(positions_m, (-1, 3))])
         self.velocities_m_per_s = np.concatenate(

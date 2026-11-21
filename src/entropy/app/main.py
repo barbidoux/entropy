@@ -28,7 +28,7 @@ from entropy.core.config import Settings, default_settings_path, load_settings
 from entropy.core.paths import content_dir, out_dir
 from entropy.core.profiler import FrameStats, StageTimer, cuda_stage_timer, gpu_memory
 from entropy.game.god_mode import GodMode
-from entropy.game.input import bindings_from_settings
+from entropy.game.input import Action, bindings_from_settings
 from entropy.game.toolbox import Toolbox
 from entropy.game.tools.base import Aim
 from entropy.game.tools.jet import Domain
@@ -38,9 +38,11 @@ from entropy.render.gl_timer import GlQueries
 from entropy.render.interop import SharedBuffer
 from entropy.render.world_frame import WorldFrame
 from entropy.render.world_view import ground_height_m
+from entropy.sim.checkpoints import CheckpointRing
 from entropy.sim.loop import FrameLoop, LoopSettings
 from entropy.sim.setup import liquid_setup
 from entropy.sim.simulation import Simulation
+from entropy.sim.time_control import TimeControl
 from entropy.solvers.liquid.solver import LiquidSolver
 from entropy.ui.hud import PerformanceHud, hud_lines
 from entropy.world.maps import load_map
@@ -96,6 +98,8 @@ class GameStages:
             # Without a liquid no tool adds water; any positive volume will do.
             particle_volume_m3=setup.particle_volume_m3 if setup is not None else 1.0,
         )
+        self.time_control = TimeControl()
+        self.checkpoints = CheckpointRing([self.liquid] if self.liquid is not None else [])
         self.particles_drawn = 0
         # GPU time per stage for the HUD (SPEC 4.7): CUDA events around Warp work,
         # OpenGL timer queries around render passes.
@@ -165,6 +169,7 @@ class GameStages:
         notes = []
         if self.simulation.frozen_because:
             notes.append(f"MONDE ARRÊTÉ : {self.simulation.frozen_because}")
+        notes.append(self.time_control.hud_line())
         notes += self.toolbox.palette()
         notes += [CONTROLS_HINT, f"{self.world.name} : {self._particle_count():,} particules d'eau"]
         if self.particles.fallback_reason:
@@ -176,8 +181,27 @@ class GameStages:
 
     def update(self, frame_dt_s: float) -> None:
         self.mode.update(frame_dt_s)
-        if self.mode.last_frame is not None:
-            self.toolbox.handle(self.mode.last_frame)
+        frame = self.mode.last_frame
+        if frame is not None:
+            self.toolbox.handle(frame)
+            self._handle_time(frame.pressed)
+
+    def _handle_time(self, pressed: frozenset[Action]) -> None:
+        """Pause, slow motion, single step and checkpoints (SPEC 4.5, 4.6)."""
+        control = self.time_control
+        if Action.PAUSE in pressed:
+            control.toggle_pause()
+        if Action.SLOWER in pressed:
+            control.slower()
+        if Action.FASTER in pressed:
+            control.faster()
+        if Action.STEP in pressed:
+            control.step_once()
+        if Action.SAVE_CHECKPOINT in pressed:
+            self.checkpoints.save_now()
+        if Action.LOAD_CHECKPOINT in pressed and self.checkpoints.restore_latest() is not None:
+            self.toolbox.jet.clear()  # water in flight belongs to the time left behind
+            self.simulation.unfreeze()
         captured = self.mode.input.mouse_captured
         if captured != self._mouse_captured:
             self.window.set_mouse_captured(captured)
@@ -189,9 +213,11 @@ class GameStages:
         forward = pose.forward()
         aim = Aim(pose.position_m, (float(forward[0]), float(forward[1]), float(forward[2])))
         with self.cuda_timer.stage("simulation (CUDA)"):
-            return self.simulation.step(
+            advanced_s = self.simulation.step(
                 dt_s, player=lambda advance_s: self.toolbox.apply(aim, advance_s)
             )
+        self.checkpoints.advance(advanced_s)
+        return advanced_s
 
     def render(self) -> None:
         width, height = self.window.framebuffer_size_px()
@@ -225,7 +251,7 @@ class GameStages:
             self.stats.summary(),
             gpu_memory(self.device),
             interop=self.particles.mode.value,
-            time_scale=self.loop_settings.time_scale,
+            time_scale=0.0 if self.time_control.paused else self.time_control.scale,
             notes=self.hud_notes(),
         )
         with self.gl_timer.stage("HUD (OpenGL)"):
@@ -247,7 +273,9 @@ def run(settings: Settings, *, visible: bool = True, max_frames: int | None = No
     stats = FrameStats()
     with GameWindow(settings.window, visible=visible) as window:
         stages = GameStages(window, settings, stats)
-        loop = FrameLoop(stages, settings=stages.loop_settings, stats=stats)
+        loop = FrameLoop(
+            stages, settings=stages.loop_settings, stats=stats, time_control=stages.time_control
+        )
         frames = 0
 
         def should_close() -> bool:

@@ -43,6 +43,12 @@ class Action(StrEnum):
     TOOL_7 = "tool_7"
     TOOL_8 = "tool_8"
     TOOL_9 = "tool_9"
+    PAUSE = "pause"
+    SLOWER = "slower"
+    FASTER = "faster"
+    STEP = "step"
+    SAVE_CHECKPOINT = "save_checkpoint"
+    LOAD_CHECKPOINT = "load_checkpoint"
 
 
 TOOL_ACTIONS = tuple(Action(f"tool_{n}") for n in range(1, 10))
@@ -61,6 +67,12 @@ DEFAULT_BINDINGS: Mapping[int, Action] = MappingProxyType(
         glfw.KEY_F3: Action.TOGGLE_HUD,
         glfw.KEY_ESCAPE: Action.MENU,
         **{glfw.KEY_1 + n: Action(f"tool_{n + 1}") for n in range(9)},
+        glfw.KEY_P: Action.PAUSE,
+        glfw.KEY_LEFT_BRACKET: Action.SLOWER,
+        glfw.KEY_RIGHT_BRACKET: Action.FASTER,
+        glfw.KEY_PERIOD: Action.STEP,
+        glfw.KEY_F5: Action.SAVE_CHECKPOINT,
+        glfw.KEY_F9: Action.LOAD_CHECKPOINT,
     }
 )
 
