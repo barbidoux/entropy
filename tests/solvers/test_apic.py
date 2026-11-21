@@ -153,8 +153,10 @@ def test_particles_to_grid_conserves_apic_angular_momentum(seed: int) -> None:
     velocity, mass = _p2g(particles, "cpu")
 
     expected = _particle_angular_momentum(points, velocities, affine)
+    # float32 atomics on a few thousand faces: errors near 1e-7 relative. 1e-5 leaves room
+    # and still catches a wrong affine term, which is of order 1 here.
     np.testing.assert_allclose(
-        _grid_angular_momentum(velocity, mass), expected, rtol=1e-3, atol=1e-3
+        _grid_angular_momentum(velocity, mass), expected, rtol=1e-5, atol=1e-5
     )
 
 
@@ -194,11 +196,126 @@ def test_cpu_and_cuda_transfer_alike() -> None:
     rng = np.random.default_rng(10)
     points = _interior_points_m(300, 11)
     velocities = rng.standard_normal((300, 3))
+    affine = rng.standard_normal((300, 3, 3))
     results = []
     for device in ("cpu", "cuda:0"):
-        particles = LiquidParticles.from_numpy(points, velocities=velocities, device=device)
-        velocity, _ = _p2g(particles, device)
+        particles = LiquidParticles.from_numpy(
+            points, velocities=velocities, affine=affine, device=device
+        )
+        velocity, mass = _p2g(particles, device)
         grid_to_particles(velocity, particles)
-        results.append(particles.velocity_m_per_s.numpy())
+        results.append(
+            (particles.velocity_m_per_s.numpy(), particles.affine_per_s.numpy(), mass.u.numpy())
+        )
 
-    np.testing.assert_allclose(results[0], results[1], rtol=1e-4, atol=1e-5)
+    for on_cpu, on_cuda in zip(results[0], results[1], strict=True):
+        np.testing.assert_allclose(on_cpu, on_cuda, rtol=1e-4, atol=1e-4)
+
+
+def _boundary_points_m() -> np.ndarray:
+    """Points in the outermost half-cell of the grid, next to each wall and in a corner."""
+    o, dx = np.asarray(SPEC.origin_m), SPEC.dx_m
+    far = o + np.asarray(SPEC.shape) * dx
+    mid = (o + far) / 2
+    return np.array(
+        [
+            [mid[0], mid[1], o[2] + 0.05 * dx],  # resting on the floor
+            [o[0] + 0.3 * dx, mid[1], mid[2]],
+            [far[0] - 0.2 * dx, mid[1], mid[2]],
+            [mid[0], far[1] - 0.01 * dx, mid[2]],
+            [o[0] + 0.1 * dx, o[1] + 0.1 * dx, o[2] + 0.1 * dx],  # a corner
+        ],
+        dtype=np.float32,
+    )
+
+
+def test_grid_to_particles_reads_a_uniform_field_exactly_up_to_the_walls(device: str) -> None:
+    """ADR 0015: outside the grid, values clamp to the nearest samples; a uniform flow
+    stays uniform at the wall instead of reading zero there."""
+    particles = LiquidParticles.from_numpy(_boundary_points_m(), device=device)
+
+    grid_to_particles(_affine_grid(device, np.array([1.0, -2.0, 0.5]), np.zeros((3, 3))), particles)
+
+    np.testing.assert_allclose(
+        particles.velocity_m_per_s.numpy(), [[1.0, -2.0, 0.5]] * 5, atol=1e-5
+    )
+    np.testing.assert_allclose(particles.affine_per_s.numpy(), 0.0, atol=1e-3)
+
+
+def test_particles_at_the_walls_lose_no_mass_or_momentum(device: str) -> None:
+    rng = np.random.default_rng(30)
+    points = _boundary_points_m()
+    velocities = rng.standard_normal((5, 3)).astype(np.float32)
+    particles = LiquidParticles.from_numpy(points, velocities=velocities, device=device)
+
+    velocity, mass = _p2g(particles, device)
+
+    for c, (component, weight) in enumerate(
+        zip((velocity.u, velocity.v, velocity.w), (mass.u, mass.v, mass.w), strict=True)
+    ):
+        assert np.all(weight.numpy() >= 0.0)
+        assert weight.numpy().sum() == pytest.approx(5 * MASS_KG, rel=1e-5)
+        momentum = (weight.numpy() * component.numpy()).sum()
+        assert momentum == pytest.approx(MASS_KG * velocities[:, c].sum(), rel=1e-4, abs=1e-5)
+
+
+def test_a_nan_particle_reads_nan_and_spreads_nan(device: str) -> None:
+    """A NaN position is a bug upstream: it must reach the NaN guard (SPEC 5.9), alike on
+    CPU and CUDA, instead of vanishing or reading a plausible velocity."""
+    points = np.vstack([_interior_points_m(1, 31), [[np.nan, 0.0, 0.0]]]).astype(np.float32)
+    particles = LiquidParticles.from_numpy(points, velocities=np.ones((2, 3)), device=device)
+
+    velocity, _ = _p2g(particles, device)
+    grid_to_particles(_affine_grid(device, np.ones(3), np.zeros((3, 3))), particles)
+
+    assert any(np.isnan(c.numpy()).any() for c in (velocity.u, velocity.v, velocity.w))
+    assert np.isnan(particles.velocity_m_per_s.numpy()[1]).all()
+    assert np.isfinite(particles.velocity_m_per_s.numpy()[0]).all()
+
+
+def test_no_particles_leave_an_empty_grid(device: str) -> None:
+    empty = LiquidParticles.from_numpy(np.zeros((0, 3)), device=device)
+
+    velocity, mass = _p2g(empty, device)
+    grid_to_particles(velocity, empty)
+
+    assert all(np.all(a.numpy() == 0.0) for a in (velocity.u, mass.u, mass.v, mass.w))
+
+
+def test_particle_arrays_must_agree() -> None:
+    a = LiquidParticles.from_numpy(_interior_points_m(3, 32), device="cpu")
+    b = LiquidParticles.from_numpy(_interior_points_m(4, 33), device="cpu")
+    with pytest.raises(ValueError, match="one length"):
+        LiquidParticles(a.position_m, b.velocity_m_per_s, a.affine_per_s)
+    with pytest.raises(ValueError, match="affine"):
+        LiquidParticles.from_numpy(_interior_points_m(3, 34), affine=np.zeros((3, 3)), device="cpu")
+
+
+@pytest.mark.gpu
+def test_particles_and_grid_on_two_devices_are_refused() -> None:
+    particles = LiquidParticles.from_numpy(_interior_points_m(3, 35), device="cpu")
+    on_cuda = MacVelocity.zeros(SPEC, "cuda:0")
+    with pytest.raises(ValueError, match="one device"):
+        particles_to_grid(particles, MASS_KG, on_cuda, MacVelocity.zeros(SPEC, "cuda:0"))
+    with pytest.raises(ValueError, match="one device"):
+        grid_to_particles(on_cuda, particles)
+    other = LiquidParticles.from_numpy(_interior_points_m(3, 36), device="cuda:0")
+    with pytest.raises(ValueError, match="one device"):
+        LiquidParticles(particles.position_m, other.velocity_m_per_s, particles.affine_per_s)
+
+
+@settings(max_examples=10, deadline=None, derandomize=True)
+@given(seed=st.integers(0, 2**16))
+def test_a_pure_affine_motion_keeps_its_angular_momentum(seed: int) -> None:
+    """v = 0: all the angular momentum is in C, so the affine term is tested on its own."""
+    rng = np.random.default_rng(seed)
+    points = _interior_points_m(200, seed + 1).astype(np.float64)
+    affine = rng.standard_normal((200, 3, 3))
+    particles = LiquidParticles.from_numpy(points, affine=affine, device="cpu")
+
+    velocity, mass = _p2g(particles, "cpu")
+
+    expected = _particle_angular_momentum(points, np.zeros((200, 3)), affine)
+    np.testing.assert_allclose(
+        _grid_angular_momentum(velocity, mass), expected, rtol=1e-5, atol=1e-5
+    )

@@ -11,9 +11,12 @@ quadratic B-spline weights over the 3 x 3 x 3 nodes around the particle.
   quadratic B-splines Σ w (x_i - x_p)(x_i - x_p)ᵀ = Δx²/4 I, so an affine field
   and its gradient are read exactly.
 
-Nodes outside the grid are skipped, so the transfers are exact only for
-particles whose stencil lies inside: at least one cell in from every side. The
-liquid keeps a margin of cells around its particles for that reason.
+Nodes outside the grid take the nearest sample (ADR 0015), at their own
+position: particles to grid deposit there, so no mass or momentum is lost;
+grid to particles reads there, so a uniform flow stays uniform up to the walls.
+Exactness on affine fields, and angular momentum, hold for particles whose
+stencil lies inside the grid, at least one cell in from every side. A NaN
+position spreads NaN to the grid and reads NaN, so the NaN guard sees it.
 """
 
 from __future__ import annotations
