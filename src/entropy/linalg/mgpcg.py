@@ -33,7 +33,12 @@ Together these make the preconditioner symmetric, as CG requires.
 CG's scalars stay on the device in float64, so no step of an iteration waits
 for the CPU. The residual is read back once every `check_every` iterations. On
 CUDA those iterations replay as one CUDA graph (SPEC 3: solver loops launch
-from graphs). Iterations past convergence do nothing (alpha = beta = 0).
+from graphs). Iterations past convergence only lower the residual further.
+
+Named limit: every connected body of fluid must touch air, or A is singular. A
+sealed pocket does not converge (`converged` is false after `max_iterations`), and
+an isolated fluid cell gets an arbitrary pressure through the diagonal's 1e-12
+floor. The liquid labels such pockets (#49).
 """
 
 from __future__ import annotations
@@ -69,6 +74,8 @@ class PoissonSystem:
     unit_weights: bool = False
     """True when every weight is 0 or 1 as `system_from_labels` sets them: kernels then
     take 1 between fluid cells without reading the weight arrays."""
+    air_theta: float = 1.0
+    """θ of every air face, used again when the operator is refreshed from new labels."""
 
     def __post_init__(self) -> None:
         nx, ny, nz = self.labels.shape
@@ -120,20 +127,38 @@ def system_from_labels(labels: wp.array, *, dx_m: float, air_theta: float = 1.0)
         raise ValueError("labels must be a 3D int32 array")
     nx, ny, nz = labels.shape
     device = labels.device
-    faces = []
-    for offset, shape in (
-        ((1, 0, 0), (nx + 1, ny, nz)),
-        ((0, 1, 0), (nx, ny + 1, nz)),
-        ((0, 0, 1), (nx, ny, nz + 1)),
-    ):
-        w = wp.empty(shape, dtype=float, device=device)
-        wp.launch(_k.face_weights, dim=shape, inputs=[labels, *offset, w], device=device)
-        faces.append(w)
+    faces = [
+        wp.empty(shape, dtype=float, device=device)
+        for shape in ((nx + 1, ny, nz), (nx, ny + 1, nz), (nx, ny, nz + 1))
+    ]
     diag = wp.empty(labels.shape, dtype=float, device=device)
+    system = PoissonSystem(labels, diag, *faces, dx_m=dx_m, unit_weights=True, air_theta=air_theta)
+    _assemble(system)
+    return system
+
+
+def _assemble(system: PoissonSystem) -> None:
+    """Recompute, in place, the weights (when unit) and the diagonal from the labels."""
+    device = system.device
+    if system.unit_weights:
+        faces = (system.wx, system.wy, system.wz)
+        for offset, w in zip(((1, 0, 0), (0, 1, 0), (0, 0, 1)), faces, strict=True):
+            wp.launch(
+                _k.face_weights, dim=w.shape, inputs=[system.labels, *offset, w], device=device
+            )
     wp.launch(
-        _k.diagonal, dim=labels.shape, inputs=[labels, *faces, 1.0 / air_theta, diag], device=device
+        _k.diagonal,
+        dim=system.shape,
+        inputs=[
+            system.labels,
+            system.wx,
+            system.wy,
+            system.wz,
+            1.0 / system.air_theta,
+            system.diag,
+        ],
+        device=device,
     )
-    return PoissonSystem(labels, diag, *faces, dx_m=dx_m, unit_weights=True)
 
 
 def _check_field(system: PoissonSystem, name: str, array: wp.array) -> None:
@@ -156,7 +181,8 @@ def apply(system: PoissonSystem, x: wp.array, out: wp.array) -> None:
 class SolveResult:
     iterations: int
     relative_residual: float
-    """‖b - A x‖ / ‖b‖ over fluid cells, from CG's recurrence."""
+    """‖r‖ / ‖b‖ over fluid cells, with r CG's recursively updated residual: an estimate
+    of ‖b - A x‖ / ‖b‖, close to it down to float32's floor (about 1e-6)."""
     converged: bool
 
 
@@ -175,9 +201,21 @@ def _coarsen(system: PoissonSystem) -> PoissonSystem:
     return system_from_labels(labels, dx_m=2.0 * system.dx_m, air_theta=1.0)
 
 
-@dataclass
+def _recoarsen(fine: PoissonSystem, coarse: PoissonSystem) -> None:
+    """`_coarsen` into the existing coarse arrays."""
+    wp.launch(
+        _k.coarsen_labels, dim=coarse.shape, inputs=[fine.labels, coarse.labels], device=fine.device
+    )
+    _assemble(coarse)
+
+
+@dataclass(frozen=True)
 class Mgpcg:
-    """CG preconditioned by a multigrid V-cycle (or by Jacobi, for comparison)."""
+    """CG preconditioned by a multigrid V-cycle (or by Jacobi, for comparison).
+
+    Settings are fixed at construction: on CUDA the V-cycle is captured once, so a
+    later change would silently not apply there.
+    """
 
     system: PoissonSystem
     multigrid: bool = True
@@ -195,28 +233,44 @@ class Mgpcg:
         if self.smoothing_sweeps < 1 or self.coarsest_sweeps < 1 or not 0 < self.omega <= 1:
             raise ValueError("need at least one sweep and 0 < omega ≤ 1")
         device = self.system.device
-        levels = [self.system]
-        while (
-            self.multigrid and min((n + 1) // 2 for n in levels[-1].shape) >= self.min_coarse_cells
-        ):
-            levels.append(_coarsen(levels[-1]))
-        self._levels = [
-            _Level(
-                s,
-                wp.zeros(s.shape, dtype=float, device=device),
-                wp.zeros(s.shape, dtype=float, device=device),
-                wp.zeros(s.shape, dtype=float, device=device),
-            )
-            for s in levels
-        ]
-        self._vectors = {
+        vectors = {
             name: wp.zeros(self.system.shape, dtype=float, device=device)
             for name in ("r", "z", "p", "q")
         }
-        self._vectors["scalars"] = wp.zeros(5, dtype=wp.float64, device=device)
-        self._graphs = {}
+        vectors["scalars"] = wp.zeros(5, dtype=wp.float64, device=device)
         partials = min(_DOT_PARTIALS, int(np.prod(self.system.shape)))
-        self._vectors["partials"] = wp.zeros(partials, dtype=wp.float64, device=device)
+        vectors["partials"] = wp.zeros(partials, dtype=wp.float64, device=device)
+        systems = [self.system]
+        while (
+            self.multigrid and min((n + 1) // 2 for n in systems[-1].shape) >= self.min_coarse_cells
+        ):
+            systems.append(_coarsen(systems[-1]))
+        levels = []
+        for index, s in enumerate(systems):
+            scratch = wp.zeros(s.shape, dtype=float, device=device)
+            if index == 0:  # the top level works in the caller's arrays (`precondition`)
+                levels.append(_Level(s, vectors["z"], vectors["r"], scratch))
+                continue
+            x = wp.zeros(s.shape, dtype=float, device=device)
+            b = wp.zeros(s.shape, dtype=float, device=device)
+            levels.append(_Level(s, x, b, scratch))
+        # Frozen: internal state is set once here; only the arrays' contents change later.
+        object.__setattr__(self, "_levels", levels)
+        object.__setattr__(self, "_vectors", vectors)
+        object.__setattr__(self, "_graphs", {})
+
+    def refresh(self) -> None:
+        """Recompute the operator from the labels' current contents, in place.
+
+        The liquid relabels cells every substep: it writes the new labels into
+        `system.labels` and calls this. Every array stays the same object, so the
+        CUDA graphs captured on them stay valid (ADR 0016). With stored weights
+        (`unit_weights` False) the caller updates them first; this then redoes the
+        diagonal and the coarse levels.
+        """
+        _assemble(self.system)
+        for fine, coarse in zip(self._levels, self._levels[1:], strict=False):
+            _recoarsen(fine.system, coarse.system)
 
     @property
     def levels(self) -> int:
@@ -334,7 +388,7 @@ class Mgpcg:
     def _run(self, name: str, key: tuple, enqueue: Callable[[], None]) -> None:
         """Run `enqueue` directly on the CPU; on CUDA capture it once per `key` as a graph
         and replay it (SPEC 3: solver loops launch from graphs). `key` holds the arrays
-        the work writes to, so a graph is never replayed on other arrays."""
+        the work reads or writes, so a graph is never replayed on other arrays."""
         device = self.system.device
         if device is None or not device.is_cuda:
             enqueue()
@@ -384,11 +438,16 @@ class Mgpcg:
     ) -> SolveResult:
         """Solve A x = b on fluid cells, starting from `x`; x is 0 on other cells after.
 
-        Stops when ‖b - A x‖ / ‖b‖ ≤ `tolerance`, checked every `check_every`
-        iterations (one read-back each), or after `max_iterations`.
+        Stops when the relative residual (see `SolveResult`) is at most
+        `tolerance`, checked every `check_every` iterations (one read-back each), or
+        after `max_iterations`. `tolerance` must be at least 1e-6, float32's floor.
+        On CUDA, pass the same `b` and `x` arrays at every call: graphs are captured
+        per array, and new arrays mean a new capture (several ms).
         """
         _check_field(self.system, "b", b)
         _check_field(self.system, "x", x)
+        if not (math.isfinite(tolerance) and tolerance >= 1e-6):
+            raise ValueError(f"tolerance must be at least 1e-6 (float32), got {tolerance}")
         if check_every < 1 or max_iterations < 0:
             raise ValueError("check_every must be ≥ 1 and max_iterations ≥ 0")
         scalars = self._vectors["scalars"]

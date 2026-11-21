@@ -224,3 +224,82 @@ def test_cpu_and_cuda_solve_alike() -> None:
         solutions.append(x.numpy())
 
     np.testing.assert_allclose(solutions[0], solutions[1], rtol=1e-4, atol=1e-5)
+
+
+def test_refresh_relabels_in_place_and_solves_the_new_problem(device: str) -> None:
+    """The liquid relabels cells every substep: the solver must follow without new arrays,
+    so CUDA graphs captured on those arrays stay valid (ADR 0016)."""
+    shape = (16, 14, 12)
+    labels = _labels(_random_labels(shape, 20), device)
+    solver = Mgpcg(system_from_labels(labels, dx_m=0.1, air_theta=0.5))
+    rng = np.random.default_rng(21)
+    x = wp.zeros(shape, dtype=float, device=device)
+    solver.solve(_field(rng.standard_normal(shape), device), x)
+    diag_before = solver.system.diag
+
+    new_labels = _random_labels(shape, 22)
+    wp.copy(labels, _labels(new_labels, device))
+    solver.refresh()
+    b = np.where(new_labels == CELL_FLUID, rng.standard_normal(shape), 0.0)
+    x.zero_()
+    result = solver.solve(_field(b, device), x)
+
+    fresh = Mgpcg(system_from_labels(_labels(new_labels, device), dx_m=0.1, air_theta=0.5))
+    expected = wp.zeros(shape, dtype=float, device=device)
+    fresh.solve(_field(b, device), expected)
+    assert result.converged and solver.system.diag is diag_before
+    np.testing.assert_allclose(x.numpy(), expected.numpy(), rtol=1e-4, atol=1e-5)
+
+
+def test_multigrid_iterations_barely_grow_with_the_grid(device: str) -> None:
+    """A random right-hand side has every frequency: one level alone would need ever more
+    iterations as the grid grows; the V-cycle keeps the count about constant."""
+    counts = []
+    for n in (16, 32):
+        labels = np.full((n, n, n), CELL_FLUID)
+        labels[:, :, -1] = CELL_AIR
+        solver = Mgpcg(system_from_labels(_labels(labels, device), dx_m=1.0 / n, air_theta=0.5))
+        b = np.where(
+            labels == CELL_FLUID, np.random.default_rng(n).standard_normal(labels.shape), 0.0
+        )
+        result = solver.solve(
+            _field(b, device), wp.zeros(labels.shape, dtype=float, device=device), check_every=1
+        )
+        assert result.converged and solver.levels >= 3
+        counts.append(result.iterations)
+
+    assert counts[1] <= counts[0] + 2, counts
+
+
+@pytest.mark.parametrize("sweeps", [1, 2, 3])
+def test_the_preconditioner_is_symmetric_for_any_sweep_count(device: str, sweeps: int) -> None:
+    shape = (12, 10, 9)
+    system = system_from_labels(_labels(_random_labels(shape, 4), device), dx_m=0.1)
+    solver = Mgpcg(system, smoothing_sweeps=sweeps, coarsest_sweeps=2 * sweeps + 1)
+    rng = np.random.default_rng(5)
+    labels = solver.system.labels.numpy()
+    x, y = (np.where(labels == CELL_FLUID, rng.standard_normal(shape), 0.0) for _ in range(2))
+    mx = wp.zeros(shape, dtype=float, device=device)
+    my = wp.zeros(shape, dtype=float, device=device)
+
+    solver.precondition(_field(x, device), mx)
+    solver.precondition(_field(y, device), my)
+
+    assert np.dot(y.ravel(), mx.numpy().ravel()) == pytest.approx(
+        np.dot(x.ravel(), my.numpy().ravel()), rel=1e-4
+    )
+
+
+@pytest.mark.parametrize("tolerance", [1e-8, 0.0, -1e-3, float("nan")])
+def test_a_tolerance_below_float32_reach_is_refused(tolerance: float) -> None:
+    solver = Mgpcg(system_from_labels(_labels(_random_labels((8, 8, 8), 23), "cpu"), dx_m=0.1))
+    zeros = wp.zeros((8, 8, 8), dtype=float, device="cpu")
+    with pytest.raises(ValueError, match="tolerance"):
+        solver.solve(zeros, wp.zeros((8, 8, 8), dtype=float, device="cpu"), tolerance=tolerance)
+
+
+def test_settings_cannot_change_after_construction() -> None:
+    """On CUDA the V-cycle is captured once: a later change would be ignored there."""
+    solver = Mgpcg(system_from_labels(_labels(_random_labels((8, 8, 8), 24), "cpu"), dx_m=0.1))
+    with pytest.raises(AttributeError):
+        solver.omega = 0.5  # type: ignore[misc]

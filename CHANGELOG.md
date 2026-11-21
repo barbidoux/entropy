@@ -15,8 +15,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
     iterations replayed as CUDA graphs.
 
   V-LIQ-05 passes: the error falls 4× per refinement, with Dirichlet and with Neumann
-  walls. Benchmark `-m perf`: 3.4 ms on the Test Tank grid, 12.9 ms on the full house
-  grid (SPEC 3 updated: at risk). ADR 0016.
+  walls. `refresh()` relabels in place so graphs stay valid. Benchmark `-m perf`
+  (relabel and solve from zero, per substep): 4.0 ms on the Test Tank grid, 13.8 ms on
+  the full house grid. SPEC 3 is updated: both are at risk. ADR 0016.
 - One shared advance per frame (#34, ADR 0013):
   - `entropy.sim.simulation.Simulation` shrinks the frame's advance to the tightest
     solver limit (`max_advance_s()`, from the previous frame's speeds) before any solver
