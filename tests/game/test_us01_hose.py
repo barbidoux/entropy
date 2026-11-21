@@ -31,7 +31,8 @@ def _pour(world: World, flow_l_per_s: float, time_scale: float, device: str) -> 
     assert setup is not None
     liquid = LiquidSolver.create(setup, device)
     spec = setup.spec
-    high = tuple(o + n * spec.dx_m for o, n in zip(spec.origin_m, spec.shape, strict=True))
+    (ox, oy, oz), (nx, ny, nz) = spec.origin_m, spec.shape
+    high = (ox + nx * spec.dx_m, oy + ny * spec.dx_m, oz + nz * spec.dx_m)
     tank = next(shape for shape, _ in world.solids if isinstance(shape, OpenBox))
     domain = Domain(spec.origin_m, high, tank.inner_max_m[2], ground_z_m=-1.0)
     volume_m3 = spec.dx_m**3 / setup.particles_per_cell
