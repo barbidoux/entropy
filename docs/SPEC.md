@@ -399,7 +399,7 @@ The real-time renderer uses OpenGL 4.6 and reads simulation data straight from G
 | Volumes | Ray marching of smoke, fire, dust and steam at half resolution with temporal reprojection; single scattering with shadows; blackbody emission; soot extinction | 2.5 |
 | Post and UI | Bloom for fire glow, exposure, ACES tone mapping, Dear ImGui overlay | 0.5 |
 
-Simplification until the solids pass: a forward placeholder draws the static solids (`entropy.render.world_view`). Boxes are lit by Lambert's law under uncalibrated light, and glass panels reflect the sky by Fresnel's law with no refraction or absorption. Until the liquid pass (#52), the liquid's particles show as points.
+Simplification until the solids pass: a forward placeholder draws the static solids (`entropy.render.world_view`). Boxes are lit by Lambert's law under uncalibrated light, and glass panels reflect the sky by Fresnel's law with no refraction or absorption. Passes draw linear light into a half-float target, tone-mapped last (`entropy.render.frame`). The liquid pass's own simplifications are named in `entropy.render.liquid`: spheres drawn as sprites, one refraction at the surface, only the sky reflected, one wavelength per sRGB primary for absorption.
 
 Fire also lights the scene: a few dynamic point lights follow the hottest cells, so rooms flicker orange.
 

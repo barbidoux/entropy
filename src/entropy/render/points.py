@@ -1,4 +1,5 @@
-"""Points from a `SharedBuffer`: the liquid's particles, until the liquid pass (#52).
+"""Points from a `SharedBuffer`, for checks and debugging (the game draws water with
+the liquid pass, `entropy.render.liquid`).
 
 `PointsRenderer` draws the first `count` `vec3` positions of a buffer as small
 points of one colour.

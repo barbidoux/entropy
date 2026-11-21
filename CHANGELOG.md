@@ -7,6 +7,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Water on screen (#52, SPEC 7.2):
+  - the frame is drawn in linear light into a half-float target and tone-mapped last
+    (`entropy.render.frame`); the glass now blends in linear light;
+  - the liquid pass (`entropy.render.liquid`): particles as spheres, their depth
+    smoothed by a narrow-range filter (Truong & Yuksel 2018), normals, thickness;
+    Fresnel reflection of the sky, refraction by Snell's law over the thickness, and
+    Beer-Lambert absorption with pure water's coefficients (Pope & Fry 1997, in
+    `water.toml` with its refractive index);
+  - `entropy.render.world_frame` draws solids, water, glass and tone mapping in
+    order, each pass timed in the HUD; the floor shows a metre grid;
+  - measured on the laptop: 1.56 ms for the liquid pass at 1 million particles,
+    1600 x 900 (budget 2.5 ms); a still pool matches its reference image
+    (SSIM >= 0.98).
 - The game starts in the Test Tank (#51):
   - `entropy.sim.setup.liquid_setup` builds the liquid from the world. Its grid spans
     the tank's cavity plus 0.5 m of air above, in 6.25 cm cells; other solids inside

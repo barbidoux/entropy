@@ -27,7 +27,9 @@ from entropy.world.materials import Material
 from entropy.world.world import World
 
 PARTICLE_RADIUS_SPACINGS = 0.75
-"""Radius of a drawn particle, in particle spacings: the level set's radius (ADR 0018)."""
+"""Radius of a drawn particle, in particle spacings: large enough for neighbouring
+spheres to overlap into a closed surface, small enough to keep its detail (a look
+choice; the thickness is rescaled so that it stays the length of water crossed)."""
 
 
 class WorldFrame:
