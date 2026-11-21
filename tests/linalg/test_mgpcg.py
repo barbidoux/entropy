@@ -415,3 +415,191 @@ def test_face_thetas_must_be_on_the_labels_device() -> None:
     thetas = _face_thetas((4, 4, 4), "cpu", value=0.5)
     with pytest.raises(ValueError, match="face_theta x is on cpu"):
         system_from_labels(labels, dx_m=0.1, face_theta=thetas)
+
+
+DRIFTED_PA_PER_M = (9792.342, 9789.096)
+"""Body forces per metre (Pa/m) near still water's, at which the solver before ADR 0021's
+fix drifted on CPU (16 to 200 iterations, pressure off by 3e4 to 4e6 Pa). The drift is
+chaotic, set by float32 rounding: 9792.44 Pa/m, water's own, happened not to drift on
+this grid."""
+
+
+def _sealed_column(shape: tuple[int, int, int], weight_pa_per_m: float, seed: int, device: str):
+    """A closed box full of fluid under a uniform body force (no air, ADR 0021), as the
+    liquid's projection gives it for still water: one substep of the force diverges only on
+    the bottom and top layers, plus small noise; the warm start is the previous substep's
+    answer, the hydrostatic column with zero mean. Returns the solver, b, the exact answer
+    and the column's pressure range (Pa)."""
+    dx_m = 1.0 / 16.0
+    rng = np.random.default_rng(seed)
+    b = rng.normal(0.0, 3.0, shape)
+    b[:, :, 0] += weight_pa_per_m / dx_m
+    b[:, :, -1] -= weight_pa_per_m / dx_m
+    b -= b.mean()  # consistent in float64; rounding to float32 leaves a trace
+    height_m = (np.arange(shape[2]) + 0.5) * dx_m
+    exact = np.broadcast_to(weight_pa_per_m * (shape[2] * dx_m - height_m), shape)
+    exact = exact - exact.mean()
+    labels = np.full(shape, CELL_FLUID)
+    solver = Mgpcg(system_from_labels(_labels(labels, device), dx_m=dx_m))
+    return solver, b, exact, weight_pa_per_m * shape[2] * dx_m
+
+
+@pytest.mark.parametrize("weight_pa_per_m", DRIFTED_PA_PER_M)
+@pytest.mark.parametrize("seed", [0, 1])
+@pytest.mark.parametrize("warm", [True, False], ids=["warm", "cold"])
+def test_water_sealed_from_air_converges_without_drifting(
+    device: str, weight_pa_per_m: float, seed: int, warm: bool
+) -> None:
+    """#69, ADR 0021: with no air, A is singular and its null space is the constant. A
+    float32 right-hand side is never exactly consistent, and the V-cycle's sweeps and
+    singular coarsest grid put constants into z: the pressure drifted along the constant
+    and the solve slowed or failed. Now it stays at the answer, from the last substep's
+    pressure (warm) or from rest, as at the first substep (cold)."""
+    solver, b, exact, column_pa = _sealed_column((32, 32, 40), weight_pa_per_m, seed, device)
+    x = _field(exact, device) if warm else wp.zeros(exact.shape, dtype=float, device=device)
+
+    result = solver.solve(_field(b, device), x)
+
+    assert result.converged and result.iterations <= 8
+    assert np.abs(x.numpy() - exact).max() < 1e-3 * column_pa
+
+
+def test_with_no_air_the_pressure_level_is_set_to_a_zero_mean(device: str) -> None:
+    """The level of a sealed pressure is free; the solve sets it so the mean over the fluid
+    cells is 0, whatever it started from (the warm start may carry any level)."""
+    solver, b, exact, column_pa = _sealed_column((16, 16, 24), 9792.44, 4, device)
+    x = _field(exact + 1e4, device)
+
+    result = solver.solve(_field(b, device), x)
+
+    assert result.converged
+    assert abs(float(x.numpy().astype(np.float64).mean())) < 1e-4 * column_pa
+    assert np.abs(x.numpy() - exact).max() < 1e-3 * column_pa
+
+
+def test_with_no_air_a_right_hand_side_off_the_range_is_solved_in_least_squares(
+    device: str,
+) -> None:
+    """With no air, A x = b has a solution only if b sums to 0 over the fluid. The part of b
+    along the constant cannot be reached, so the solve drops it: the answer is that of
+    b minus its mean, and the solve still converges."""
+    solver, b, exact, column_pa = _sealed_column((16, 16, 24), 9792.44, 5, device)
+    x = wp.zeros(b.shape, dtype=float, device=device)
+
+    result = solver.solve(_field(b + 0.05 * np.abs(b).max(), device), x)
+
+    assert result.converged
+    assert np.abs(x.numpy() - exact).max() < 1e-3 * column_pa
+
+
+def test_with_no_air_a_large_mean_is_dropped(device: str) -> None:
+    """A right-hand side whose mean is 2000 times the rest (a uniform target divergence, say):
+    the mean is dropped and the rest is solved as if alone."""
+    shape = (16, 16, 24)
+    solver = Mgpcg(system_from_labels(_labels(np.full(shape, CELL_FLUID), device), dx_m=0.1))
+    rest = np.random.default_rng(11).standard_normal(shape)
+    rest -= rest.mean()
+    reference = wp.zeros(shape, dtype=float, device=device)
+    shifted = wp.zeros(shape, dtype=float, device=device)
+
+    first = solver.solve(_field(rest, device), reference)
+    second = solver.solve(_field(rest + 2000.0, device), shifted)
+
+    assert first.converged and second.converged
+    scale = np.abs(reference.numpy()).max()
+    np.testing.assert_allclose(shifted.numpy(), reference.numpy(), atol=1e-3 * scale)
+
+
+def test_with_air_the_level_is_left_to_the_boundary(device: str) -> None:
+    """Air fixes the level: then nothing is centred, and a warm start far off still ends
+    at the one answer, whose mean is not 0."""
+    shape = (12, 12, 12)
+    labels = np.full(shape, CELL_FLUID)
+    labels[:, :, -1] = CELL_AIR
+    solver = Mgpcg(system_from_labels(_labels(labels, device), dx_m=0.1))
+    fluid = labels == CELL_FLUID
+    b = np.where(fluid, np.random.default_rng(9).standard_normal(shape), 0.0)
+    cold = wp.zeros(shape, dtype=float, device=device)
+    warm = _field(np.where(fluid, 0.05, 0.0), device)  # about twice the answer
+
+    first = solver.solve(_field(b, device), cold, tolerance=1e-6)
+    second = solver.solve(_field(b, device), warm, tolerance=1e-6)
+
+    assert first.converged and second.converged
+    scale = np.abs(cold.numpy()).max()
+    np.testing.assert_allclose(warm.numpy(), cold.numpy(), atol=1e-4 * scale)
+    assert abs(cold.numpy()[fluid].mean()) > 1e-2 * scale
+
+
+def test_a_solver_that_saw_air_takes_the_sealed_path_once_the_air_is_gone(device: str) -> None:
+    """A tank filling to the lid has air for many substeps first: once relabelled with no
+    air, the same solver must treat the grid as sealed, every solve."""
+    weight_pa_per_m = DRIFTED_PA_PER_M[0]
+    solver, b, exact, column_pa = _sealed_column((32, 32, 40), weight_pa_per_m, 0, device)
+    labels = solver.system.labels
+    with_air = np.full(b.shape, CELL_FLUID)
+    with_air[:, :, -1] = CELL_AIR
+    labels.assign(with_air.astype(np.int32))
+    solver.refresh()
+    assert solver.solve(_field(b, device), wp.zeros(b.shape, dtype=float, device=device)).converged
+
+    labels.assign(np.full(b.shape, CELL_FLUID, dtype=np.int32))
+    solver.refresh()
+    for _ in range(4):
+        x = wp.zeros(b.shape, dtype=float, device=device)
+        result = solver.solve(_field(b, device), x)
+        assert result.converged and result.iterations <= 8
+        assert np.abs(x.numpy() - exact).max() < 1e-3 * column_pa
+
+
+def test_with_no_air_the_level_is_zero_from_rest_too(device: str) -> None:
+    """From rest, as at the first substep, the answer's mean is 0 as well."""
+    shape = (32, 32, 40)
+    solver = Mgpcg(system_from_labels(_labels(np.full(shape, CELL_FLUID), device), dx_m=0.0625))
+    b = np.random.default_rng(12).standard_normal(shape) * 1e4
+    b -= b.mean()
+    x = wp.zeros(shape, dtype=float, device=device)
+
+    result = solver.solve(_field(b, device), x)
+
+    answer = x.numpy().astype(np.float64)
+    assert result.converged
+    assert abs(answer.mean()) < 1e-6 * (answer.max() - answer.min())
+
+
+def test_with_no_air_the_tolerance_applies_to_the_part_a_solve_can_reach(device: str) -> None:
+    """The relative residual is measured against b minus its mean: a small variation over
+    a large uniform part (a uniform target divergence, say) is still solved, not taken
+    as converged at once."""
+    shape = (16, 16, 24)
+    solver = Mgpcg(system_from_labels(_labels(np.full(shape, CELL_FLUID), device), dx_m=0.1))
+    rest = np.random.default_rng(13).standard_normal(shape)
+    rest -= rest.mean()
+    reference = wp.zeros(shape, dtype=float, device=device)
+    x = wp.zeros(shape, dtype=float, device=device)
+
+    solver.solve(_field(rest, device), reference)
+    result = solver.solve(_field(1.0 + 1e-3 * rest, device), x)
+
+    # Measured against all of b, the solve stopped at 0.15 % of the variation's answer.
+    assert result.converged
+    expected = 1e-3 * reference.numpy()
+    np.testing.assert_allclose(x.numpy(), expected, atol=3e-4 * np.abs(expected).max())
+
+
+def test_with_no_air_cells_that_are_not_fluid_stay_zero(device: str) -> None:
+    """A solid block inside a grid with no air (one body around it): the solve leaves 0 on
+    the solid cells, even from a warm start that held values there."""
+    shape = (16, 16, 16)
+    labels = np.full(shape, CELL_FLUID)
+    labels[6:10, 6:10, 6:10] = CELL_SOLID
+    solver = Mgpcg(system_from_labels(_labels(labels, device), dx_m=0.1))
+    fluid = labels == CELL_FLUID
+    b = np.where(fluid, np.random.default_rng(14).standard_normal(shape), 0.0)
+    b[fluid] -= b[fluid].mean()
+    x = _field(np.full(shape, 5.0), device)
+
+    result = solver.solve(_field(b, device), x)
+
+    assert result.converged
+    assert np.all(x.numpy()[~fluid] == 0.0)

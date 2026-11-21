@@ -8,6 +8,7 @@ import pytest
 import warp as wp
 
 from entropy.fields.mac import GridSpec
+from entropy.linalg.mgpcg import Mgpcg, SolveResult
 from entropy.sim.simulation import PacedSolver
 from entropy.solvers.interface import Solver
 from entropy.solvers.liquid.solver import (
@@ -519,4 +520,51 @@ def test_jittered_still_water_stays_still_for_ten_seconds(device: str) -> None:
     for _ in range(600):
         liquid.step(1.0 / 60.0)
 
+    assert np.abs(liquid.particle_velocities()).max() < 5e-3
+
+
+@pytest.mark.parametrize("jitter", [0.0, 0.8])
+def test_a_grid_full_of_water_stays_still(device: str, jitter: float) -> None:
+    """#69: water up to the grid's lid, no air anywhere: still, finite, converged."""
+    liquid = LiquidSolver.create(_setup((12, 10, 16)), device)
+    liquid.add_particles(
+        fill_box((0.0, 0.0, 0.0), (0.75, 0.625, 1.0), DX_M, 8, seed=25, jitter=jitter)
+    )
+
+    for _ in range(60):
+        liquid.step(1.0 / 60.0)
+
+    assert np.isfinite(liquid.particle_velocities()).all()
+    assert np.abs(liquid.particle_velocities()).max() < 5e-3
+    assert liquid.diagnostics()["pressure_iterations"] < 200
+
+
+@pytest.mark.gpu
+@pytest.mark.parametrize("jitter", [0.0, 0.8])
+def test_the_test_tank_s_grid_full_of_water_never_caps_a_solve(
+    jitter: float, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#69 at the Test Tank's grid size (72 x 72 x 40), water to the lid: every substep's
+    pressure solve converges well under its cap, for 600 frames (measured: at most 8
+    iterations). Before ADR 0021's fix in MGPCG, 1 to 4 solves hit the 200-iteration cap
+    here (60 ms each, a visible hitch)."""
+    liquid = LiquidSolver.create(_setup((72, 72, 40)), "cuda:0")
+    liquid.add_particles(
+        fill_box((0.0, 0.0, 0.0), (4.5, 4.5, 2.5), DX_M, 8, seed=25, jitter=jitter)
+    )
+    solve = Mgpcg.solve
+    iterations: list[int] = []
+
+    def counted(self: Mgpcg, *args, **kwargs) -> SolveResult:
+        """Every substep's solve, not only the last one's (`diagnostics`)."""
+        result = solve(self, *args, **kwargs)
+        iterations.append(result.iterations if result.converged else 10_000)
+        return result
+
+    monkeypatch.setattr(Mgpcg, "solve", counted)
+    for _ in range(600):
+        liquid.step(1.0 / 60.0)
+
+    assert len(iterations) >= 600
+    assert max(iterations) <= 16
     assert np.abs(liquid.particle_velocities()).max() < 5e-3

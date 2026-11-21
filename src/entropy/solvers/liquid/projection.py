@@ -12,6 +12,11 @@ divergence-free in the water:
    liquid's volume correction asks crowded cells to expand (ADR 0018).
 4. u = u* - dt/rho grad(p). A missing air pressure is the ghost value that puts p = 0 at θ.
 
+Water sealed from air (#69, ADR 0021): when no cell is air, as when water fills the
+whole grid, the pressure is fixed only up to a constant. MGPCG then drops the
+right-hand side's part along the constant and sets the pressure's mean to 0; the
+velocity update uses only differences, so it is unaffected.
+
 Each substep the caller writes `labels` (fluid, air, solid; `entropy.linalg.mgpcg`
 codes) and `phi_m` into this object's own arrays. The arrays stay the same objects,
 so the solver's CUDA graphs stay valid (ADR 0016). Faces between two air cells are
