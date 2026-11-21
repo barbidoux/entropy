@@ -123,3 +123,15 @@ def test_wheel_steps_add_up_within_a_frame() -> None:
 
     assert state.take_frame().wheel_steps == 2
     assert state.take_frame().wheel_steps == 0
+
+
+def test_the_palette_lists_the_m1_tools_and_says_when_the_bucket_misses() -> None:
+    toolbox = _toolbox(_Liquid())
+    toolbox.handle(_frame(pressed=frozenset({Action.TOOL_2})))
+    toolbox.handle(_frame(tool_pressed=True, tool_held=True))
+    toolbox.apply(Aim(origin_m=(0.0, -6.0, 1.0), direction=(0.0, -1.0, 0.0)), 1.0 / 60.0)
+
+    text = " | ".join(toolbox.palette())
+
+    assert "1 Tuyau" in text and "2 Seau" in text and "3 Crue" in text
+    assert "visez la cuve" in text

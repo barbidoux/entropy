@@ -107,6 +107,8 @@ class ToolContext:
     jet: Any
     """The `Jet` that carries water outside the liquid's grid."""
     particle_volume_m3: float
+    domain: Any = None
+    """The `Domain` where the liquid can hold water, or None without a liquid."""
 
 
 class Tool(Protocol):

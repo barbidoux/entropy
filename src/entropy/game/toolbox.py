@@ -13,6 +13,8 @@ from typing import Any
 
 from entropy.game.input import TOOL_ACTIONS, FrameInput
 from entropy.game.tools.base import Aim, Tool, ToolContext, load_tool_spec
+from entropy.game.tools.bucket import Bucket
+from entropy.game.tools.flood import Flood
 from entropy.game.tools.hose import Hose
 from entropy.game.tools.jet import Domain, Jet
 
@@ -50,7 +52,11 @@ class Toolbox:
     ) -> Toolbox:
         """The tools of M1, in the order of keys 1, 2, ..."""
         return cls(
-            [Hose(load_tool_spec("hose"))],
+            [
+                Hose(load_tool_spec("hose")),
+                Bucket(load_tool_spec("bucket")),
+                Flood(load_tool_spec("flood")),
+            ],
             jet=Jet(gravity_m_per_s2),
             domain=domain,
             liquid=liquid,
@@ -77,7 +83,11 @@ class Toolbox:
         """Step 1 of the frame: use the tool for `dt_s` of simulated time, then land
         the water in flight."""
         ctx = ToolContext(
-            aim=aim, liquid=self.liquid, jet=self.jet, particle_volume_m3=self.particle_volume_m3
+            aim=aim,
+            liquid=self.liquid,
+            jet=self.jet,
+            particle_volume_m3=self.particle_volume_m3,
+            domain=self.domain,
         )
         tool = self.current
         if self._pressed:
@@ -98,7 +108,11 @@ class Toolbox:
         )
         keys = "  ".join(f"{n + 1} {t.spec.label}" for n, t in enumerate(self.tools))
         power = tool.spec.parameters[tool.spec.power].label
-        return [
+        lines = [
             f"Outil : {tool.spec.label} ({settings})",
             f"{keys}   clic gauche : utiliser   molette : {power}",
         ]
+        status = getattr(tool, "status", "")
+        if status:
+            lines.append(f"{tool.spec.label} : {status}")
+        return lines
