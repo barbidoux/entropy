@@ -99,7 +99,8 @@ def particles_to_grid(
     vel = velocities[t]
     cm = affine[t]
     g = (positions_m[t] - origin_m) / dx_m  # cell units
-    # A NaN position gives NaN weights: they land on the first nodes, so NaN reaches the grid.
+    # A NaN position: the clamped g keeps the weights finite, and NaN reaches the
+    # momentum through the node-particle offset, so the face velocities become NaN.
     _splat(momentum_u, mass_u, wp.vec3(g[0], g[1] - 0.5, g[2] - 0.5), dx_m, mass_kg, vel[0], cm[0])
     _splat(momentum_v, mass_v, wp.vec3(g[0] - 0.5, g[1], g[2] - 0.5), dx_m, mass_kg, vel[1], cm[1])
     _splat(momentum_w, mass_w, wp.vec3(g[0] - 0.5, g[1] - 0.5, g[2]), dx_m, mass_kg, vel[2], cm[2])
@@ -107,12 +108,12 @@ def particles_to_grid(
 
 @wp.kernel
 def momentum_to_velocity(momentum: wp.array3d(dtype=float), mass: wp.array3d(dtype=float)):
-    """Velocity = momentum / mass in place; 0 where a face got no mass, NaN stays NaN.
+    """Velocity = momentum / mass in place; 0 where a face got no mass.
 
     Dividing by a tiny mass is safe: momentum and mass carry the same weights."""
     i, j, k = wp.tid()
     m = mass[i, j, k]
-    if m > 0.0 or wp.isnan(m):
+    if m > 0.0:
         momentum[i, j, k] = momentum[i, j, k] / m
     else:
         momentum[i, j, k] = 0.0

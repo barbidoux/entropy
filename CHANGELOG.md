@@ -16,8 +16,6 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   walls, and a uniform flow stays uniform up to them. For particles at least one cell
   inside the grid, the transfers keep affine fields exactly and conserve mass, momentum
   and APIC angular momentum. NaN positions reach the grid as NaN.
-  The transfers keep affine fields exactly and conserve mass, momentum and APIC angular
-  momentum.
 - MGPCG pressure solver (#46, `entropy.linalg.mgpcg`):
   - cell labels (fluid, air, solid), face weights and a ghost-fluid θ, for the
     second-order free surface;

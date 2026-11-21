@@ -224,6 +224,7 @@ def _boundary_points_m() -> np.ndarray:
             [far[0] - 0.2 * dx, mid[1], mid[2]],
             [mid[0], far[1] - 0.01 * dx, mid[2]],
             [o[0] + 0.1 * dx, o[1] + 0.1 * dx, o[2] + 0.1 * dx],  # a corner
+            [mid[0], mid[1], far[2] - 0.1 * dx],  # under the top of the grid
         ],
         dtype=np.float32,
     )
@@ -237,7 +238,7 @@ def test_grid_to_particles_reads_a_uniform_field_exactly_up_to_the_walls(device:
     grid_to_particles(_affine_grid(device, np.array([1.0, -2.0, 0.5]), np.zeros((3, 3))), particles)
 
     np.testing.assert_allclose(
-        particles.velocity_m_per_s.numpy(), [[1.0, -2.0, 0.5]] * 5, atol=1e-5
+        particles.velocity_m_per_s.numpy(), [[1.0, -2.0, 0.5]] * 6, atol=1e-5
     )
     np.testing.assert_allclose(particles.affine_per_s.numpy(), 0.0, atol=1e-3)
 
@@ -245,7 +246,7 @@ def test_grid_to_particles_reads_a_uniform_field_exactly_up_to_the_walls(device:
 def test_particles_at_the_walls_lose_no_mass_or_momentum(device: str) -> None:
     rng = np.random.default_rng(30)
     points = _boundary_points_m()
-    velocities = rng.standard_normal((5, 3)).astype(np.float32)
+    velocities = rng.standard_normal((6, 3)).astype(np.float32)
     particles = LiquidParticles.from_numpy(points, velocities=velocities, device=device)
 
     velocity, mass = _p2g(particles, device)
@@ -254,7 +255,7 @@ def test_particles_at_the_walls_lose_no_mass_or_momentum(device: str) -> None:
         zip((velocity.u, velocity.v, velocity.w), (mass.u, mass.v, mass.w), strict=True)
     ):
         assert np.all(weight.numpy() >= 0.0)
-        assert weight.numpy().sum() == pytest.approx(5 * MASS_KG, rel=1e-5)
+        assert weight.numpy().sum() == pytest.approx(6 * MASS_KG, rel=1e-5)
         momentum = (weight.numpy() * component.numpy()).sum()
         assert momentum == pytest.approx(MASS_KG * velocities[:, c].sum(), rel=1e-4, abs=1e-5)
 
