@@ -41,7 +41,7 @@ from entropy.render.world_view import ground_height_m
 from entropy.sim.checkpoints import CheckpointRing
 from entropy.sim.loop import FrameLoop, LoopSettings
 from entropy.sim.setup import liquid_setup
-from entropy.sim.simulation import Simulation
+from entropy.sim.simulation import Simulation, StepContext
 from entropy.sim.time_control import TimeControl
 from entropy.solvers.liquid.solver import LiquidSolver
 from entropy.ui.hud import PerformanceHud, hud_lines
@@ -85,7 +85,11 @@ class GameStages:
         self.world = build_world(load_map(content_dir() / "maps" / START_MAP))
         setup = liquid_setup(self.world)
         self.liquid = LiquidSolver.create(setup, self.device) if setup is not None else None
-        self.simulation = Simulation([self.liquid] if self.liquid is not None else [])
+        self.cuda_timer = cuda_stage_timer(self.device)
+        self.simulation = Simulation(
+            [self.liquid] if self.liquid is not None else [],
+            context=StepContext(timer=self.cuda_timer),
+        )
         domain = None
         if setup is not None:
             spec = setup.spec
@@ -103,7 +107,6 @@ class GameStages:
         self.particles_drawn = 0
         # GPU time per stage for the HUD (SPEC 4.7): CUDA events around Warp work,
         # OpenGL timer queries around render passes.
-        self.cuda_timer = cuda_stage_timer(self.device)
         self.gl_timer = StageTimer(GlQueries(window.ctx))
 
         ctx = window.ctx
@@ -163,6 +166,18 @@ class GameStages:
     def _particle_count(self) -> int:
         return int(self.liquid.diagnostics()["particles"]) if self.liquid is not None else 0
 
+    def _water_line(self) -> str:
+        """The liquid's counts for the HUD (#56), from its last frame's status."""
+        if self.liquid is None:
+            return f"{self.world.name} : pas d'eau possible"
+        d = self.liquid.diagnostics()
+        return (
+            f"{self.world.name} : {int(d['particles']):,} particules, "
+            f"{d['water_volume_m3'] * 1e3:,.0f} L, {int(d['water_cells']):,} cellules d'eau, "
+            f"{int(d['substeps'])} sous-pas, {int(d['pressure_iterations'])} itérations de "
+            f"pression, {int(d['overruns'])} dépassements"
+        )
+
     def hud_notes(self) -> list[str]:
         """Extra HUD lines: an alert if the world froze, the controls, the map and its
         water, and why interop copies, if it does."""
@@ -171,7 +186,7 @@ class GameStages:
             notes.append(f"MONDE ARRÊTÉ : {self.simulation.frozen_because}")
         notes.append(self.time_control.hud_line())
         notes += self.toolbox.palette()
-        notes += [CONTROLS_HINT, f"{self.world.name} : {self._particle_count():,} particules d'eau"]
+        notes += [CONTROLS_HINT, self._water_line()]
         if self.particles.fallback_reason:
             notes.append(f"host copy because: {self.particles.fallback_reason}")
         return notes

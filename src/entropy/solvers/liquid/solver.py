@@ -50,6 +50,7 @@ from __future__ import annotations
 
 import math
 import time
+from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
@@ -252,10 +253,11 @@ class LiquidSolver:
         self._solid_distance = wp.zeros(capacity, dtype=float, device=device)
         self._shifted = wp.zeros(3 * capacity, dtype=wp.vec3, device=device)
         self._shifted_distance = wp.zeros(3 * capacity, dtype=float, device=device)
-        self._status = wp.zeros(4, dtype=float, device=device)
+        self._status = wp.zeros(5, dtype=float, device=device)
         cuda = wp.get_device(device).is_cuda
-        self._status_host = wp.zeros(4, dtype=float, device="cpu", pinned=cuda)
-        self._water = (0.0, 0.0)  # (volume in cells, particles in the water), a frame late
+        self._status_host = wp.zeros(5, dtype=float, device="cpu", pinned=cuda)
+        self._water = (0.0, 0.0, 0.0)  # (volume in cells, particles in it, fluid cells)
+        self._timer: Any = None
         self._status_event = wp.Event(device) if cuda else None
         self._status_pending = False
         self._frozen: NonFiniteStateError | None = None
@@ -266,14 +268,19 @@ class LiquidSolver:
         self._rest_mass = self._mass_at_rest()
         self._volume_slots = wp.zeros(int(_k.SLOTS), dtype=wp.float64, device=device)
         self._inside_slots = wp.zeros(int(_k.SLOTS), dtype=wp.float64, device=device)
-        self._totals = wp.zeros(2, dtype=wp.float64, device=device)
+        self._cell_slots = wp.zeros(int(_k.SLOTS), dtype=wp.float64, device=device)
+        self._totals = wp.zeros(3, dtype=wp.float64, device=device)
         self._volume_error = wp.zeros(2, dtype=wp.float64, device=device)
         self._before_volume_error = wp.zeros(2, dtype=wp.float64, device=device)
         """[relative volume error, its integral over time (s)]: the volume control's state."""
         self._phi_at = wp.zeros(capacity, dtype=float, device=device)
 
     def step(self, dt_s: float, ctx: Any = None) -> None:
-        """Advance the liquid by `dt_s` seconds, in at most `MAX_SUBSTEPS` substeps."""
+        """Advance the liquid by `dt_s` seconds, in at most `MAX_SUBSTEPS` substeps.
+
+        When `ctx` has a `timer` (a stage timer, `entropy.core.profiler`), the phases are
+        timed as "liquid transfers", "liquid pressure" and "liquid motion" (SPEC 4.7)."""
+        self._timer = getattr(ctx, "timer", None)
         self._read_status()
         if not (math.isfinite(dt_s) and dt_s > 0):
             raise ValueError(f"dt_s must be a positive time step, got {dt_s}")
@@ -356,7 +363,7 @@ class LiquidSolver:
         _head(self._particles.affine_per_s, self._count).assign(state["affine_per_s"])
         self._projection.pressure_pa.assign(state["pressure_pa"])
         self._volume_error.assign(state.get("volume_error", np.zeros(2)))
-        self._water = (0.0, 0.0)
+        self._water = (0.0, 0.0, 0.0)
         velocities = np.asarray(state["velocities_m_per_s"], dtype=float).reshape(-1, 3)
         speeds = np.linalg.norm(velocities, axis=1) if len(velocities) else np.zeros(1)
         finite = speeds[np.isfinite(speeds)]
@@ -370,11 +377,12 @@ class LiquidSolver:
         """Counts for the HUD. The water's volume (from the level set, m³) and the
         particles inside it come from the last frame's status, so reading them never
         waits for the GPU."""
-        volume_cells, inside = self._water
+        volume_cells, inside, fluid_cells = self._water
         return {
             "particles": self._count,
             "water_volume_m3": volume_cells * self._spec().dx_m ** 3,
             "particles_in_water": inside,
+            "water_cells": fluid_cells,
             **self._diagnostics,
         }
 
@@ -552,8 +560,10 @@ class LiquidSolver:
         if self._status_event is not None:
             wp.synchronize_event(self._status_event)
         self._status_pending = False
-        speed, nonfinite, volume_cells, inside = (float(v) for v in self._status_host.numpy())
-        self._water = (volume_cells, inside)
+        speed, nonfinite, volume_cells, inside, cells = (
+            float(v) for v in self._status_host.numpy()
+        )
+        self._water = (volume_cells, inside, cells)
         if nonfinite > 0.0:
             self._frozen = NonFiniteStateError(self._dump())
             raise self._frozen
@@ -594,12 +604,17 @@ class LiquidSolver:
         )
         return path
 
+    def _stage(self, name: str):
+        """A timed stage of the step, when a timer was given; else nothing."""
+        return self._timer.stage(name) if self._timer is not None else nullcontext()
+
     def _substep(self, dt_s: float) -> None:
         setup = self._require_setup()
         spec, device = setup.spec, self._device
         active = self._active()
         n = self._count
-        particles_to_grid(active, self._particle_mass_kg(), self._velocity, self._mass)
+        with self._stage("liquid transfers (CUDA)"):
+            particles_to_grid(active, self._particle_mass_kg(), self._velocity, self._mass)
         for g, component in zip(
             setup.gravity_m_per_s2,
             (self._velocity.u, self._velocity.v, self._velocity.w),
@@ -637,10 +652,17 @@ class LiquidSolver:
             device=device,
         )
         self._volume_slots.zero_()
+        self._cell_slots.zero_()
         wp.launch(
             _k.fluid_volume,
             dim=spec.shape,
-            inputs=[projection.phi_m, projection.labels, spec.dx_m, self._volume_slots],
+            inputs=[
+                projection.phi_m,
+                projection.labels,
+                spec.dx_m,
+                self._volume_slots,
+                self._cell_slots,
+            ],
             device=device,
         )
         self._inside_slots.zero_()
@@ -654,6 +676,7 @@ class LiquidSolver:
             inputs=[
                 self._volume_slots,
                 self._inside_slots,
+                self._cell_slots,
                 float(setup.particles_per_cell),
                 VOLUME_CONTROL_DEAD_BAND,
                 VOLUME_CONTROL_INTEGRAL_LIMIT_S,
@@ -677,14 +700,17 @@ class LiquidSolver:
             ],
             device=device,
         )
-        result = projection.project(self._velocity, dt_s)
+        with self._stage("liquid pressure (CUDA)"):
+            result = projection.project(self._velocity, dt_s)
         self._diagnostics["pressure_iterations"] = result.iterations
         self._extrapolate()
         projection.zero_solid_faces(self._velocity)
         if not n:
             return
-        grid_to_particles(self._velocity, active)
-        self._advect(active, dt_s)
+        with self._stage("liquid transfers (CUDA)"):
+            grid_to_particles(self._velocity, active)
+        with self._stage("liquid motion (CUDA)"):
+            self._advect(active, dt_s)
 
     def _extrapolate(self) -> None:
         """Two layers of velocity into the air, so grid-to-particles reads sound values

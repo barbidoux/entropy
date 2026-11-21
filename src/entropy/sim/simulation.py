@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 import math
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
 from entropy.solvers.interface import NonFiniteStateError
@@ -34,6 +35,14 @@ class PacedSolver(Protocol):
         ...
 
     def step(self, dt_s: float, ctx: Any) -> None: ...
+
+
+@dataclass(frozen=True)
+class StepContext:
+    """What every solver's `step` receives. M1 passes the GPU stage timer, so solvers
+    can time their phases for the HUD (SPEC 4.7); coupling joins it in M2."""
+
+    timer: Any = None
 
 
 class Simulation:

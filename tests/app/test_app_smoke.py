@@ -238,3 +238,16 @@ def test_f5_saves_and_f9_restores_the_water(stages: GameStages) -> None:
 
     np.testing.assert_allclose(stages.liquid.particle_positions(), saved)
     assert len(stages.toolbox.jet) == 0
+
+
+def test_the_hud_counts_the_water(stages: GameStages) -> None:
+    """#56: particles, litres, cells of water, substeps and pressure iterations."""
+    assert stages.liquid is not None
+    stages.liquid.add_particles(fill_box((-0.5, -0.5, 0.0), (0.5, 0.5, 0.5), 0.0625, 8, seed=4))
+    stages.step_simulation(1.0 / 60.0)
+    stages.step_simulation(1.0 / 60.0)
+
+    text = "\n".join(stages.hud_notes())
+
+    assert "particules" in text and " L" in text and "cellules" in text
+    assert "sous-pas" in text and "itérations" in text

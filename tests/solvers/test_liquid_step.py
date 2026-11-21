@@ -566,6 +566,47 @@ def test_an_asynchronous_checkpoint_holds_the_state_of_its_moment(device: str) -
     liquid.restore(pending)
 
     np.testing.assert_allclose(liquid.particle_positions(), expected)
+
+
+def test_diagnostics_count_the_cells_of_water(device: str) -> None:
+    """#56: the HUD's active cells are the fluid cells of the last substep."""
+    liquid = LiquidSolver.create(_setup((8, 8, 8)), device)
+    liquid.add_particles(fill_box((0.0, 0.0, 0.0), (0.5, 0.5, 0.25), DX_M, 8, seed=23, jitter=0.0))
+    liquid.step(1e-5)
+    liquid.max_advance_s()
+
+    assert liquid.diagnostics()["water_cells"] == 8 * 8 * 4
+
+
+class _Timer:
+    """Records the names of the stages a solver times."""
+
+    def __init__(self) -> None:
+        self.names: list[str] = []
+
+    def stage(self, name: str):
+        from contextlib import nullcontext
+
+        self.names.append(name)
+        return nullcontext()
+
+
+class _Context:
+    def __init__(self) -> None:
+        self.timer = _Timer()
+
+
+def test_the_step_times_its_phases_when_given_a_timer(device: str) -> None:
+    """#56: GPU time per liquid phase, through the context's stage timer."""
+    liquid = LiquidSolver.create(_setup((8, 8, 8)), device)
+    liquid.add_particles(fill_box((0.0, 0.0, 0.0), (0.5, 0.5, 0.25), DX_M, 8, seed=24))
+    ctx = _Context()
+
+    liquid.step(1.0 / 60.0, ctx)
+
+    assert {"liquid transfers (CUDA)", "liquid pressure (CUDA)", "liquid motion (CUDA)"} <= set(
+        ctx.timer.names
+    )
 @pytest.mark.parametrize("jitter", [0.0, 0.8])
 def test_a_grid_full_of_water_stays_still(device: str, jitter: float) -> None:
     """#69: water up to the grid's lid, no air anywhere: still, finite, converged."""
