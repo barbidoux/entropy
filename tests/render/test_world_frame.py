@@ -136,3 +136,45 @@ def test_the_frame_draws_the_glass(window: GameWindow, monkeypatch: pytest.Monke
     with_glass, without = (image.astype(np.int32) for image in images)
     changed = np.abs(with_glass - without).reshape(-1, 3).max(axis=1) > 0
     assert changed.mean() > 0.10  # the panes in view: about 15 % of the pixels
+
+
+def test_the_frame_draws_the_rigid_bodies_with_the_solids(window: GameWindow) -> None:
+    """A crate in the tank shows in the final image, under the water and the glass like
+    any solid (#91)."""
+    from entropy.solvers.rigid import Body, RigidSetup, RigidSolver, Shape
+
+    world = build_world(load_map(content_dir() / "maps" / "test_tank"))
+    eye = (5.0, -1.0, 1.5)
+    forward = np.subtract((0.0, 0.0, 0.6), eye)
+    forward = forward / np.linalg.norm(forward)
+    x, y, z = (float(c) for c in forward)
+    view = CameraView(eye, (x, y, z), fov_y_rad=np.radians(60.0), near_m=0.05, far_m=500.0)
+    solver = RigidSolver.create(RigidSetup(gravity_m_per_s2=(0.0, 0.0, -9.81), max_bodies=4), "cpu")
+    solver.add_bodies([Body(Shape.BOX, (0.4, 0.4, 0.4), 600.0, position_m=(0.0, 0.0, 0.6))])
+    colours = wp.array(np.full((4, 3), 0.5, np.float32), dtype=wp.vec3, device="cpu")
+    screen = window.ctx.simple_framebuffer(SIZE)
+    images = []
+    with SharedBuffer(window.ctx, 1, wp.vec3, device="cpu") as shared:
+        frame = WorldFrame(
+            window.ctx,
+            world,
+            shared,
+            particle_volume_m3=DX_M**3 / 8,
+            water=load_material("water"),
+            body_capacity=4,
+        )
+        try:
+            assert frame.bodies is not None
+            for count in (0, 1):
+                frame.bodies.update(solver.fields(), count, colours)
+                frame.render(screen, view, SIZE, count=0)
+                images.append(np.frombuffer(screen.read(components=3), dtype=np.uint8))
+        finally:
+            frame.release()
+            screen.release()
+
+    without, with_crate = (image.astype(np.int32) for image in images)
+    changed = np.abs(with_crate - without).reshape(-1, 3).max(axis=1) > 2
+    # A 0.8 m cube 5.3 m away under a 60° field of view: about 1.3 % of the image for its
+    # front face, more with its top and side (measured 1.8 %).
+    assert changed.mean() > 0.01

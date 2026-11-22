@@ -1,6 +1,7 @@
 """One frame of the world, pass by pass in SPEC 7.2's order (#51, #52).
 
-1. Solids (`scene`): sky, ground and opaque boxes, in linear light, into an HDR target.
+1. Solids (`scene`, then `bodies`): sky, ground, opaque boxes and the rigid bodies, in
+   linear light, into an HDR target.
 2. Liquid (`liquid`): the water over them, into a second HDR target with its depth.
 3. Glass (`world_view`): transparent panels, hidden behind nearer water and solids.
 4. Post (`frame`): tone mapping onto the display framebuffer.
@@ -17,6 +18,7 @@ from contextlib import ExitStack, nullcontext
 import moderngl
 
 from entropy.core.profiler import StageTimer
+from entropy.render.bodies import BodyRenderer
 from entropy.render.camera import CameraView
 from entropy.render.frame import HdrTarget, ToneMapper
 from entropy.render.interop import SharedBuffer
@@ -46,8 +48,12 @@ class WorldFrame:
         *,
         particle_volume_m3: float,
         water: Material,
+        body_capacity: int = 0,
     ) -> None:
+        """`body_capacity` rigid bodies can be drawn (`bodies`, updated by the caller each
+        frame from the rigid solver); none when 0."""
         self.ctx = ctx
+        self.bodies: BodyRenderer | None = None
         self._targets: tuple[HdrTarget, HdrTarget] | None = None
         spacing_m = particle_volume_m3 ** (1.0 / 3.0)
         # If a renderer fails to build, those made before it are released at once.
@@ -64,6 +70,9 @@ class WorldFrame:
                 water=water,
             )
             made.callback(self.liquid.release)
+            if body_capacity > 0:
+                self.bodies = BodyRenderer(ctx, body_capacity, str(particles.device))
+                made.callback(self.bodies.release)
             self.tone_map = ToneMapper(ctx)
             made.pop_all()
 
@@ -93,6 +102,8 @@ class WorldFrame:
         solids, water = self._hdr(size_px)
         with stage("scene (OpenGL)"):
             self.scene.render(solids.framebuffer, view, size_px)
+            if self.bodies is not None:
+                self.bodies.render(solids.framebuffer, view, size_px)
         with stage("liquid (OpenGL)"):
             self.liquid.render(water, solids, view, count=count)
         with stage("glass (OpenGL)"):
@@ -110,3 +121,5 @@ class WorldFrame:
         self._release_targets()
         for renderer in (self.tone_map, self.liquid, self.glass, self.scene):
             renderer.release()
+        if self.bodies is not None:
+            self.bodies.release()
