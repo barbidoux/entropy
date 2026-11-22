@@ -7,13 +7,6 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-- The liquid pass draws its spheres at half resolution (#57, ADR 0027): depth,
-  thickness and smoothing in half-size targets, the composite at full resolution; a
-  sphere smaller than a pixel adds its own volume (its chords weighted by d²), so far
-  water no longer reads too thick. At 1 M particles and 1600 x 900 (unofficial): 0.57,
-  1.12 and 1.56 ms from the start camera, above the rim and up close, against 1.46,
-  3.58 and 4.64 ms before (budget 2.5 ms). The liquid pass benchmark covers the three
-  views; the still pool's reference image is re-recorded.
 - The bucket, the flood source and the eraser (#54):
   - the bucket drops exactly its volume (0.01–2 m³) where the aim meets the rim over
     the tank; right click turns it into a dam, Martin & Moyce's column 2a high across
@@ -262,6 +255,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- The liquid pass draws its spheres at half resolution (#57, ADR 0027): depth,
+  thickness and smoothing in half-size targets; the composite at full resolution, its
+  depth and normals interpolated between the four nearest half-size pixels on one
+  surface, and water behind each output pixel's solid left out. At 1 M particles and
+  1600 x 900 (unofficial): 0.57, 1.13 and 1.6 ms from the start camera, above the rim
+  and up close, against 1.46, 3.58 and 4.64 ms before (budget 2.5 ms). The liquid pass
+  benchmark covers the three views; the still pool's reference image is re-recorded.
 - The HUD drops a GPU stage that has not been timed for a whole window of frames, such
   as a solver switched off (#43).
 - CI runs actions/checkout 7.0.1 and astral-sh/setup-uv 10.3.3, both on node24, pinned
@@ -297,6 +297,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- A sphere smaller than a pixel adds its own volume to the water's thickness (its
+  chords weighted by d², ADR 0027): far water no longer reads too thick (+48 % to
+  +484 % before, once spheres fell below a pixel).
 - Water sealed from air (#69, ADR 0021): when no cell is air, the pressure solve
   (MGPCG) drops the right-hand side's part along the constant, removes the constant from
   its preconditioned residual every iteration, and sets the pressure's mean to 0. A grid

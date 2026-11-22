@@ -2,8 +2,9 @@
 
 The Test Tank filled 2 m deep at 8 particles per 6.25 cm cell holds 1,048,576
 particles. The whole frame is drawn as the game draws it (`WorldFrame`), at the
-game's 1600 x 900, from the game's start camera; OpenGL timer queries time each
-pass on the GPU. Ten frames warm up first; the next 60 are measured.
+game's 1600 x 900, from three views (`VIEWS`: the game's start camera, above the rim,
+leaning over the water); OpenGL timer queries time each pass on the GPU. Ten frames
+warm up first; the next 60 are measured.
 """
 
 import math

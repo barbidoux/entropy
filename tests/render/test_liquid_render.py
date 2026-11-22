@@ -59,11 +59,12 @@ def _draw(
     *,
     background: tuple[float, float, float] = (1.0, 1.0, 1.0),
     boxes: tuple[SceneBox, ...] = (),
+    size: tuple[int, int] = SIZE,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Scene (a uniform background, or boxes over sky) then water: both read back."""
     ctx = window.ctx
-    scene = HdrTarget(ctx, SIZE)
-    out = HdrTarget(ctx, SIZE)
+    scene = HdrTarget(ctx, size)
+    out = HdrTarget(ctx, size)
     count = max(len(points), 1)
     with SharedBuffer(ctx, count, wp.vec3, device="cpu") as shared:
         if len(points):
@@ -79,7 +80,7 @@ def _draw(
         painter = SceneRenderer(ctx, boxes, ground_z_m=-50.0) if boxes else None
         try:
             if painter is not None:
-                painter.render(scene.framebuffer, view, SIZE)
+                painter.render(scene.framebuffer, view, size)
             else:
                 scene.framebuffer.clear(*background, 1.0, depth=1.0)
             renderer.render(out, scene, view, count=len(points))
@@ -254,3 +255,132 @@ def test_the_spheres_are_drawn_at_half_the_output_s_resolution(
             renderer.release()
             scene.release()
             out.release()
+
+
+def _eye_depths(view: CameraView, window_depth: np.ndarray, size: tuple[int, int]) -> np.ndarray:
+    """Distance along the view axis (m) of window depths in [0, 1]."""
+    projection = view.projection(size[0] / size[1]).astype(np.float64)
+    return projection[2, 3] / ((2.0 * window_depth - 1.0) + projection[2, 2])
+
+
+@pytest.mark.parametrize("offset_m", [0.003, 0.007, 0.010])
+def test_a_box_edge_off_the_pixel_blocks_is_never_drawn_over(
+    window: GameWindow, offset_m: float
+) -> None:
+    """A box in front of the water, its edges anywhere on the screen: every box pixel shows
+    the box and its depth, and every water pixel beside it is water, absorbed. Spheres
+    are drawn in 2 x 2 blocks of output pixels (#78's review, S1)."""
+    size = (321, 241)
+    slab = fill_box((0.0, -0.5, -0.5), (2.0, 0.5, 0.5), DX_M, 8, seed=1, jitter=0.0)
+    view = _view((6.0, 0.0, 0.0), (0.0, 0.0, 0.0))
+    box = SceneBox((3.5, offset_m, offset_m * 0.6), (0.1, 0.12, 0.12), (0.6, 0.1, 0.1))
+
+    scene, scene_depth, out, out_depth = _draw(window, slab, view, boxes=(box,), size=size)
+
+    on_box = _eye_depths(view, scene_depth, size) < 3.0
+    assert on_box.sum() > 100
+    np.testing.assert_allclose(out[on_box], scene[on_box], atol=1e-3)
+    np.testing.assert_allclose(out_depth[on_box], scene_depth[on_box], atol=1e-6)
+    grown = on_box.copy()
+    grown[1:, :] |= on_box[:-1, :]
+    grown[:-1, :] |= on_box[1:, :]
+    grown[:, 1:] |= on_box[:, :-1]
+    grown[:, :-1] |= on_box[:, 1:]
+    ring = grown & ~on_box
+    absorbed = np.abs(out[ring] - scene[ring]).max(axis=1)
+    assert (absorbed > 0.02).all(), f"{(absorbed <= 0.02).sum()} ring pixels show no water"
+
+
+def test_the_targets_keep_their_own_viewports(window: GameWindow) -> None:
+    """The pass draws in its own half-size targets: the scene's and the output's
+    framebuffers keep their full-size viewports (#78's review, S2)."""
+    slab = fill_box((0.0, -0.5, -0.5), (2.0, 0.5, 0.5), DX_M, 8, seed=1, jitter=0.0)
+    ctx = window.ctx
+    scene, out = HdrTarget(ctx, SIZE), HdrTarget(ctx, SIZE)
+    with SharedBuffer(ctx, len(slab), wp.vec3, device="cpu") as shared:
+        with shared.writable() as array:
+            wp.copy(array, wp.array(slab.astype(np.float32), dtype=wp.vec3, device="cpu"))
+        renderer = LiquidRenderer(
+            ctx, shared, radius_m=0.75 * SPACING_M, particle_volume_m3=SPACING_M**3, water=WATER
+        )
+        try:
+            scene.framebuffer.use()
+            scene.framebuffer.clear(1.0, 1.0, 1.0, 1.0, depth=1.0)
+            for _ in range(2):
+                renderer.render(
+                    out, scene, _view((6.0, 0.0, 0.0), (0.0, 0.0, 0.0)), count=len(slab)
+                )
+            assert scene.framebuffer.viewport == (0, 0, *SIZE)
+            assert out.framebuffer.viewport == (0, 0, *SIZE)
+        finally:
+            renderer.release()
+            scene.release()
+            out.release()
+
+
+@pytest.mark.parametrize("size", [(120, 90), (121, 91)])
+def test_the_water_s_silhouette_is_where_the_water_is(
+    window: GameWindow, size: tuple[int, int]
+) -> None:
+    """A slab centred on the view axis is drawn centred, at even and odd output sizes
+    (#78's review, N1)."""
+    slab = fill_box((0.0, -0.5, -0.5), (2.0, 0.5, 0.5), DX_M, 8, seed=1, jitter=0.0)
+    view = _view((6.0, 0.0, 0.0), (0.0, 0.0, 0.0))
+
+    scene, _, out, _ = _draw(window, slab, view, size=size)
+
+    water = np.abs(out - scene).max(axis=2) > 0.02
+    rows, cols = np.nonzero(water)
+    assert abs(cols.mean() - (size[0] - 1) / 2) < 0.3
+    assert abs(rows.mean() - (size[1] - 1) / 2) < 0.3
+
+
+@pytest.mark.parametrize("size", [(120, 90), (480, 360), (960, 720)])
+def test_the_thickness_does_not_depend_on_how_big_the_spheres_look(
+    window: GameWindow, size: tuple[int, int]
+) -> None:
+    """The same 2 m slab at three output sizes: its spheres span about 0.4, 1.4 and 2.9
+    pixels of the half-size targets, and Beer-Lambert holds at all three (#78's review)."""
+    slab = fill_box((0.0, -0.5, -0.5), (2.0, 0.5, 0.5), DX_M, 8, seed=1)
+    view = _view((6.0, 0.0, 0.0), (0.0, 0.0, 0.0))
+
+    _, _, out, _ = _draw(window, slab, view, size=size)
+
+    absorption = np.asarray(WATER.absorption_per_m_rgb)
+    f0 = fresnel_f0(WATER.refractive_index or 0.0)
+    expected = f0 * np.asarray(HORIZON) + (1.0 - f0) * np.exp(-absorption * 2.0)
+    y, x = size[1] // 2, size[0] // 2
+    half = size[0] // 15
+    measured = out[y - half : y + half + 1, x - half : x + half + 1].mean(axis=(0, 1))
+    np.testing.assert_allclose(measured, expected, rtol=0.03)
+
+
+@pytest.mark.parametrize("background", [(0.0, 0.0, 0.0), (1.0, 1.0, 1.0)], ids=["black", "white"])
+def test_the_water_varies_within_each_block_of_pixels(
+    window: GameWindow, background: tuple[float, float, float]
+) -> None:
+    """A ball of water: over black only its reflection shows, which follows its normal;
+    over white mostly what it lets through, which follows its thickness. Both are
+    interpolated between the half-size targets' pixels, so neighbouring output pixels in
+    one 2 x 2 block differ as much as those across blocks; read from the nearest pixel, a
+    block would share one value (#78's review, B1)."""
+    size = (240, 180)
+    cube = fill_box((-0.6, -0.6, -0.6), (0.6, 0.6, 0.6), DX_M, 8, seed=4, jitter=0.0)
+    ball = cube[np.linalg.norm(cube, axis=1) <= 0.6]
+    view = _view((6.0, 0.0, 0.0), (0.0, 0.0, 0.0))
+
+    scene, _, out, _ = _draw(window, ball, view, background=background, size=size)
+
+    lit = out.sum(axis=2)
+    water = np.abs(out - scene).max(axis=2) > 1e-3
+    inner = water.copy()
+    for shift in (1, 2, 3):
+        inner[shift:, :] &= water[:-shift, :]
+        inner[:-shift, :] &= water[shift:, :]
+        inner[:, shift:] &= water[:, :-shift]
+        inner[:, :-shift] &= water[:, shift:]
+    step = np.abs(np.diff(lit, axis=1))
+    both = inner[:, 1:] & inner[:, :-1]
+    within = step[:, 0::2][both[:, 0::2]].mean()  # columns 2k and 2k + 1: one block
+    across = step[:, 1::2][both[:, 1::2]].mean()  # columns 2k + 1 and 2k + 2: two blocks
+    assert within > 0.5 * across, f"within {within:.5f}, across {across:.5f}"
