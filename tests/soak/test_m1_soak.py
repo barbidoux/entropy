@@ -13,14 +13,16 @@ The amount of water is steered towards 480,000 to 600,000 particles: the eraser 
 used, in short strokes, when there is more, the other tools when there is less. An
 action can still leave it outside the band for a while. Checkpoints' host buffers grow
 by a quarter over what they hold (ADR 0024), so near that band they stop growing. The
-baseline is taken after the settling minute, once the checkpoint ring is full and every
-kind of action has run once (its kernels loaded). Growth after it means a leak. It is
-measured on the process, ENTROPY's Warp pool and the whole GPU, with the same 64 MiB
-limit and the same sampling as M0's soak. The checkpoint ring's pinned host buffers are
-counted at both samples and taken out of the process's growth: F9 drops the
-checkpoints after the one it restores, and the ring refills at the counts of the
-moment (#80's review). The process figure still starts with a 30.8 MiB offset whose
-source is not known (#84).
+baseline is taken in the last second of the first quiet window (below) after the
+settling minute, once the checkpoint ring is full and every kind of action has run
+once (its kernels loaded); the final sample in the last second of the last quiet
+window. Both come at least 4 s after the last action: F9's restore holds about 32 MiB
+of host memory for about 3 s, which a sample right after it would count (#80's review,
+#84). Growth between them means a leak. It is measured on the process, ENTROPY's Warp
+pool and the whole GPU, with the same 64 MiB limit and the same sampling as M0's soak.
+The checkpoint ring's pinned host buffers are counted at both samples and taken out of
+the process's growth: F9 drops the checkpoints after the one it restores, and the ring
+refills at the counts of the moment.
 
 V-LIQ-02 over 10 minutes (SPEC 9.4, ADR 0019, ADR 0028): the last `QUIET_S` of every
 `QUIET_EVERY_S` start no action, and the world is resumed and set back to 1x, one key
@@ -104,8 +106,9 @@ def test_the_water_tank_runs_for_minutes_without_nan_or_leak() -> None:
         loop.reset_clock()
         start = time.perf_counter()
         next_action_s, release_at_s = 1.0, -1.0
-        baseline = None
-        ring_baseline = 0
+        baseline = final = None
+        ring_baseline = ring_change = 0
+        sampled_window = -1.0
         frames = 0
         quiet: list[float] = []  # volume over particles' volume, this quiet window
         settled_volumes: list[float] = []
@@ -182,11 +185,16 @@ def test_the_water_tank_runs_for_minutes_without_nan_or_leak() -> None:
                     and len(ring.entries) == ring.entries.maxlen
                     and set(actions) >= KINDS
                 )
-                if baseline is None and settled:
-                    baseline = _sample(loop, stages.device)
-                    ring_baseline = _ring_bytes(stages)
-            final = _sample(loop, stages.device)
-            ring_change = _ring_bytes(stages) - ring_baseline
+                # Memory samples: once per quiet window, in its last second, at least
+                # 4 s after the last action (F9 holds memory for about 3 s).
+                if into_quiet_s >= QUIET_S - 1.0 and sampled_window != now_s // QUIET_EVERY_S:
+                    sampled_window = now_s // QUIET_EVERY_S
+                    if baseline is None and settled:
+                        baseline = _sample(loop, stages.device)
+                        ring_baseline = _ring_bytes(stages)
+                    elif baseline is not None:
+                        final = _sample(loop, stages.device)
+                        ring_change = _ring_bytes(stages) - ring_baseline
             elapsed_s = time.perf_counter() - start
             particles = liquid.particle_count()
             finite = bool(np.isfinite(liquid.particle_positions()).all())
@@ -194,7 +202,7 @@ def test_the_water_tank_runs_for_minutes_without_nan_or_leak() -> None:
         finally:
             stages.release()
 
-    assert baseline is not None
+    assert baseline is not None and final is not None, "no quiet window to sample memory in"
     host, warp, device = (after - before for after, before in zip(final, baseline, strict=True))
     host_without_ring = host - ring_change
     summary = stats.summary()
@@ -212,7 +220,7 @@ def test_the_water_tank_runs_for_minutes_without_nan_or_leak() -> None:
     assert first_freeze is None, f"the NaN guard froze the world {first_freeze}"
     assert not new_dumps, f"NaN dumps written: {sorted(new_dumps)}"
     assert finite
-    assert abs(host_without_ring) < LEAK_LIMIT_BYTES
+    assert host_without_ring < LEAK_LIMIT_BYTES
     assert warp < LEAK_LIMIT_BYTES
     assert device < LEAK_LIMIT_BYTES
     assert len(settled_volumes) >= int(duration_s // QUIET_EVERY_S) - 1

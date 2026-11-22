@@ -12,11 +12,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
     the frame rate held in 90 % of the frames, the world's speed and every stage's GPU
     time; it fails on a frozen world or a hose that does not pour. Official on the
     laptop: dam break p10 58.7 fps, hose p10 35.0 fps (unofficially 35.4–36.1 with the
-    final test); the hose's 4-substep frame is above the simulation budget, and #81
-    brings it down before M3;
+    final test, whose official run is owed, #85); the hose's 4-substep frame is above
+    the simulation budget, and #81 brings it down before M3;
   - `-m soak` M1 soak: 10 minutes of random tool use, time controls and checkpoints in
-    the Test Tank, the NaN guard checked every frame, no leak or crash, and V-LIQ-02's
-    volume criteria on the settled water every 30 s, at 1x (ADR 0028);
+    the Test Tank, the NaN guard checked every frame, no leak or crash (memory sampled
+    in quiet windows, clear of F9's 3 s hold), and V-LIQ-02's volume criteria on the
+    settled water every 30 s, at 1x (ADR 0028);
   - official benchmark session and reports (`docs/benchmarks/2026-11-22-m1-laptop.md`,
     `2026-11-22-m1-gate.md`); SPEC 3's liquid row measured (closes #65) and the gas
     row's 128³ solve updated.

@@ -41,8 +41,8 @@ Named limits:
 - **The 10th percentile over 540 frames** lets 54 frames per part fall under 30 fps.
   Isolated long frames do not fail it; a sustained slowdown does.
 - **30 fps is not real time.** Under the hose the liquid runs at its substep cap and the
-  world advances slower than real time (0.93× and 0.95× in unofficial runs of this
-  test): the frame rate holds, the world's speed is recorded beside it.
+  world advances slower than real time (0.93× in an unofficial run of this test, 0.95×
+  with the version before the camera pin): the frame rate holds, the world's speed is recorded beside it.
 - **The liquid alone.** M1 has no other solver; later gates share the GPU.
 - **The margin is about 5 fps.** The hose part's p10 read 35.0 fps in the official
   run and 35.4 and 36.1 fps in unofficial runs of this test, its frames GPU-bound at
