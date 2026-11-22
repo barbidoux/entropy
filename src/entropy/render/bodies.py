@@ -158,8 +158,9 @@ class BodyRenderer:
     """Draws up to `capacity` rigid bodies into a target that already holds the scene."""
 
     def __init__(self, ctx: moderngl.Context, capacity: int, device: str) -> None:
-        if set(MESH_SHAPES) != set(Shape):
-            raise RuntimeError("every rigid shape needs a mesh")  # a new Shape, unseen
+        if [int(shape) for shape in MESH_SHAPES] != list(range(len(Shape))):
+            # The kernel uses a body's shape value as its draw command and range.
+            raise RuntimeError("MESH_SHAPES must list every Shape, in the order of its values")
         self.ctx = ctx
         self.capacity = capacity
         self.count = 0
@@ -219,6 +220,9 @@ class BodyRenderer:
             if array.shape[0] < count:
                 raise ValueError(f"{name} holds {array.shape[0]} values, fewer than {count}")
         self.count = count
+        # Only the rows of counted instances are written; the draws read no others, so the
+        # rest of the mapped buffer may hold anything (zero copy keeps nothing between
+        # frames). The host-copy path uploads the whole buffer.
         with self.commands.writable() as commands, self.instances.writable() as out:
             wp.launch(
                 reset_commands,

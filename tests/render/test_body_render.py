@@ -8,7 +8,8 @@ import pytest
 import warp as wp
 
 from entropy.core.config import WindowSettings
-from entropy.render.bodies import BodyRenderer
+from entropy.render._body_kernels import COMMAND_INTS
+from entropy.render.bodies import MESH_SHAPES, BodyRenderer
 from entropy.render.camera import CameraView
 from entropy.render.context import GameWindow
 from entropy.render.frame import HdrTarget
@@ -258,7 +259,8 @@ def test_no_bodies_draw_nothing(window: GameWindow) -> None:
 
 
 def test_the_bodies_are_drawn_where_the_solver_moved_them(window: GameWindow) -> None:
-    """The renderer reads the solver's arrays as they are, not a copy made at the start."""
+    """The renderer reads the solver's arrays as they are, not a copy made at the start,
+    and each update starts its counts afresh: the body drawn at its start is gone."""
     ctx = window.ctx
     target = HdrTarget(ctx, SIZE)
     solver = RigidSolver.create(RigidSetup(gravity_m_per_s2=(0.0, 0.0, -9.81), max_bodies=2), "cpu")
@@ -267,6 +269,7 @@ def test_the_bodies_are_drawn_where_the_solver_moved_them(window: GameWindow) ->
     renderer = BodyRenderer(ctx, capacity=2, device="cpu")
     colours = wp.array(np.array([RED, RED], np.float32), dtype=wp.vec3, device="cpu")
     try:
+        renderer.update(solver.fields(), solver.body_count(), colours)  # at its start
         for _ in range(30):
             solver.step(1.0 / 60.0)  # falls 1.23 m in 0.5 s
         scene.render(target.framebuffer, SIDE, SIZE)
@@ -311,3 +314,48 @@ def test_on_cuda_the_bodies_go_to_opengl_without_a_copy(window: GameWindow) -> N
         window, OBLIQUE, [Body(Shape.BOX, (0.4, 0.3, 0.2), 500.0, position_m=(0.1, 0.2, 0.3))]
     )
     np.testing.assert_allclose(image, expected, atol=2e-3)
+
+
+@pytest.mark.gpu
+def test_on_cuda_every_body_of_every_shape_is_counted(window: GameWindow) -> None:
+    """2,000 bodies of shapes at random: on CUDA the slots are taken in parallel, and
+    each mesh's draw counts exactly its shape's bodies (#100's review)."""
+    shapes = np.random.default_rng(1).integers(0, 3, 2000)
+    sizes = {0: (0.05, 0.05, 0.05), 1: (0.05, 0.0, 0.0), 2: (0.03, 0.03, 0.0)}
+    solver = RigidSolver.create(
+        RigidSetup(gravity_m_per_s2=(0.0, 0.0, 0.0), max_bodies=2000), "cuda:0"
+    )
+    solver.add_bodies([Body(Shape(int(s)), sizes[int(s)], 500.0) for s in shapes])
+    renderer = BodyRenderer(window.ctx, capacity=2000, device="cuda:0")
+    try:
+        renderer.update(solver.fields(), 2000, wp.zeros(2000, dtype=wp.vec3, device="cuda:0"))
+        commands = np.frombuffer(renderer.commands.buffer.read(), np.int32).reshape(
+            -1, COMMAND_INTS
+        )
+    finally:
+        renderer.release()
+    assert list(commands[:, 1]) == [int((shapes == int(s)).sum()) for s in MESH_SHAPES]
+
+
+def test_the_renderer_draws_over_the_whole_size_it_is_given(window: GameWindow) -> None:
+    """It sets its own viewport: a target left with a smaller one draws the same."""
+    sphere = Body(Shape.SPHERE, (0.5, 0.0, 0.0), 500.0)
+    expected = _draw(window, SIDE, [sphere])
+    ctx = window.ctx
+    target = HdrTarget(ctx, SIZE)
+    solver = RigidSolver.create(RigidSetup(gravity_m_per_s2=(0.0, 0.0, -9.81), max_bodies=1), "cpu")
+    solver.add_bodies([sphere])
+    scene = SceneRenderer(ctx, (), ground_z_m=-50.0)
+    renderer = BodyRenderer(ctx, capacity=1, device="cpu")
+    colours = wp.array(np.array([RED], np.float32), dtype=wp.vec3, device="cpu")
+    try:
+        scene.render(target.framebuffer, SIDE, SIZE)
+        renderer.update(solver.fields(), 1, colours)
+        target.framebuffer.viewport = (0, 0, 40, 30)
+        renderer.render(target.framebuffer, SIDE, SIZE)
+        image = _read(target)
+    finally:
+        renderer.release()
+        scene.release()
+        target.release()
+    np.testing.assert_array_equal(image, expected)
