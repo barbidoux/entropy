@@ -110,3 +110,68 @@ def test_v_rb_04_collisions_without_gravity_conserve_momentum(device: str) -> No
     assert np.linalg.norm(turning_after - turning_before) <= 1e-3 * turning_size
     assert contacts > 0
     assert np.abs(after - before).max() > 0.5  # they did collide
+
+
+@pytest.mark.parametrize("restitution", [0.5, 0.8])
+def test_v_rb_02_a_bounce_rises_e_squared_of_the_drop(device: str, restitution: float) -> None:
+    """V-RB-02: a sphere dropped from 1 m onto the floor, both of restitution e, rises to
+    e² of the height it fell, within 3 %."""
+    from entropy.world.sdf import HalfSpace, Solids
+
+    floor = Solids((HalfSpace((0.0, 0.0, 0.0), (0.0, 0.0, 1.0)),)).to_device(device)
+    solver = RigidSolver.create(
+        RigidSetup(gravity_m_per_s2=GRAVITY, max_bodies=2, solids=floor, restitution=restitution),
+        device,
+    )
+    radius = 0.1
+    drop = Body(Shape.SPHERE, (radius, 0.0, 0.0), 600.0, position_m=(0.0, 0.0, 1.0 + radius),
+                restitution=restitution)  # fmt: skip
+    solver.add_bodies([drop])
+
+    peak, rising = 0.0, False
+    for _ in range(round(1.6 * 60)):
+        solver.step(1.0 / 60.0)
+        z, vz = solver.body_positions()[0, 2], solver.body_velocities()[0, 2]
+        rising = rising or vz > 0.0
+        if rising:
+            peak = max(peak, z - radius)
+            if vz < 0.0:
+                break
+
+    assert peak == pytest.approx(restitution**2 * 1.0, rel=0.03)
+
+
+@pytest.mark.parametrize("margin_deg", [-1.0, 1.0])
+def test_v_rb_03_a_block_holds_below_the_friction_angle_and_slides_above(
+    device: str, margin_deg: float
+) -> None:
+    """V-RB-03: a block on an incline with μ = 0.5 (atan μ = 26.57°): 1° below it holds
+    (moves under 1 mm in 1 s), 1° above it slides (over 5 cm)."""
+    from entropy.world.sdf import HalfSpace, Solids
+
+    mu = 0.5
+    theta = math.atan(mu) + math.radians(margin_deg)
+    normal = (0.0, -math.sin(theta), math.cos(theta))
+    incline = Solids((HalfSpace((0.0, 0.0, 0.0), normal),)).to_device(device)
+    solver = RigidSolver.create(
+        RigidSetup(gravity_m_per_s2=GRAVITY, max_bodies=2, solids=incline,
+                   static_friction=mu, dynamic_friction=mu),
+        device,
+    )  # fmt: skip
+    half = (0.2, 0.2, 0.05)
+    tilt = (math.sin(theta / 2.0), 0.0, 0.0, math.cos(theta / 2.0))  # lies on the slope
+    start = tuple(0.05 * np.asarray(normal))
+    solver.add_bodies([Body(Shape.BOX, half, 600.0, position_m=start, orientation=tilt,
+                            static_friction=mu, dynamic_friction=mu)])  # fmt: skip
+    for _ in range(6):
+        solver.step(1.0 / 60.0)  # settles onto the slope
+    settled = solver.body_positions()[0].copy()
+
+    for _ in range(60):
+        solver.step(1.0 / 60.0)
+
+    moved = float(np.linalg.norm(solver.body_positions()[0] - settled))
+    if margin_deg < 0:
+        assert moved < 1e-3
+    else:
+        assert moved > 0.05

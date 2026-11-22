@@ -126,7 +126,7 @@ PAIRS = [("sphere", "sphere"), ("sphere", "box"), ("capsule", "box"), ("box", "b
 @pytest.mark.parametrize(("a", "b"), PAIRS)
 def test_bodies_thrown_at_each_other_do_not_pass_through(device: str, a: str, b: str) -> None:
     """No gravity, no solids: two bodies meet head-on at 4 m/s each. They stay stuck
-    together (no restitution yet, #88): each on its own side, overlapping by under 1 mm,
+    together (restitution 0 by default): each on its own side, overlapping by under 1 mm,
     moving apart at under 5 cm/s."""
     solver = _solver(device, solids=None, gravity=(0.0, 0.0, 0.0))
     first, second = SHAPES[a], SHAPES[b]

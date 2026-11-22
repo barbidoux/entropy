@@ -7,6 +7,21 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Rigid friction and restitution (#88, ADR 0032).
+  - Bodies and the static solids have static and dynamic friction and a restitution
+    (one set for all the static solids, in `RigidSetup`). A pair takes the geometric
+    mean of the frictions and the larger restitution.
+  - Friction and restitution act once per contact patch, at its centre of pressure.
+    Static friction is a position correction; dynamic friction, friction against
+    turning and restitution run in the velocity pass. On a wide patch of the static
+    solids, friction moves the body without turning it.
+  - V-RB-02: bounces rise e² of their fall, 1.3 to 1.7 % low (3 % allowed).
+  - V-RB-03: a block 1° below the friction angle does not move, and 1° above it
+    accelerates at the expected rate.
+  - A sliding box stops within 0.6 % of v²/2μg, and a ball rolls down a slope at
+    (5/7) g sin θ.
+  - Coefficients are checked; checkpoints and dumps carry them. The material files
+    supply them with the spawner (#93).
 - Rigid contacts (#87, ADR 0031): bodies against the static solids and against each
   other.
   - A hash grid finds the pairs. Each body's sample spheres (a box's corners, edge

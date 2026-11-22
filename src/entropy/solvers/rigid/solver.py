@@ -2,11 +2,11 @@
 
 Each advance is split into ⌈advance / (1/480 s)⌉ equal substeps (`MAX_SUBSTEP_S`):
 16 for a 1/30 s frame, 8 for 1/60 s. A substep predicts every body's motion under
-gravity and the gyroscopic torque, solves the contacts' depths once (between bodies in
-parallel, then each body against the static solids by its own thread), recovers the
-velocities from the motion, then runs the velocity pass at the contact patches (Müller
-et al. 2020, "Detailed rigid body simulation with extended position based dynamics";
-ADR 0031). The substeps follow the advance, so the solver never limits it (ADR 0013).
+gravity and the gyroscopic torque, solves the contacts' depths once and their static
+friction (between bodies in parallel, then each body against the static solids by its
+own thread), recovers the velocities from the motion, then runs the velocity pass at
+the contact patches: restitution and dynamic friction (Müller et al. 2020, "Detailed
+rigid body simulation with extended position based dynamics"; ADR 0031, 0032). The substeps follow the advance, so the solver never limits it (ADR 0013).
 
 State on the device, one entry per body (ADR 0030): position (m), orientation (unit
 quaternion x, y, z, w, body to world), velocity (m/s), angular velocity (rad/s, world
@@ -27,7 +27,11 @@ Simplifications, named (CLAUDE.md rule 7):
   heavier body on a stack sinks and jitters; angular momentum is kept within 8e-4 in
   V-RB-04's scene, the linear within 1e-4; a contact overflow loses support; a sphere or
   capsule at 20 m/s or more can pass through a body 2 cm thick or thinner;
-- no friction, restitution or sleeping yet (#88, #89).
+- friction and restitution (ADR 0032, which gives the numbers): one surface material
+  for all the static solids; friction against turning about the normal is about 1.4
+  times too strong on box faces, and dynamic only; between bodies friction always turns
+  them (no wide-patch rule); bounces come out 1.3 to 1.7 % low;
+- no sleeping yet (#89).
 
 NaN guard (SPEC 5.9): after each step a kernel counts non-finite bodies into a small
 status array, copied to the host without waiting; the next call reads it. A non-finite
@@ -53,7 +57,7 @@ from entropy.core.paths import out_dir
 from entropy.fields.solids import DeviceSolids
 from entropy.solvers.interface import NonFiniteStateError
 from entropy.solvers.rigid import _kernels as _k
-from entropy.solvers.rigid.bodies import Body, Shape, mass_properties
+from entropy.solvers.rigid.bodies import Body, Shape, check_surface, mass_properties
 
 MAX_SUBSTEP_S = 1.0 / 480.0
 """The longest rigid substep (SPEC 5.4, ADR 0013)."""
@@ -70,6 +74,9 @@ _PROPERTIES = (
     ("shapes", wp.int32),
     ("sizes_m", wp.vec3),
     ("bounds_m", float),
+    ("static_friction", float),
+    ("dynamic_friction", float),
+    ("restitution", float),
 )
 CONTACTS_PER_BODY = 32
 """Room for contacts per body by default: a box has 26 samples."""
@@ -101,12 +108,18 @@ class RigidSetup:
     max_contacts: int | None = None
     """Room for contacts each substep; `CONTACTS_PER_BODY` per body when None. Contacts
     past it are dropped and counted (`diagnostics()["contact_overflows"]`)."""
+    static_friction: float = 0.0
+    dynamic_friction: float = 0.0
+    restitution: float = 0.0
+    """The static solids' surface coefficients, one set for all of them (a named
+    simplification, ADR 0032); 0, none, when not given."""
 
     def __post_init__(self) -> None:
         if self.max_bodies <= 0:
             raise ValueError(f"max_bodies must be positive, got {self.max_bodies}")
         if self.max_contacts is not None and self.max_contacts <= 0:
             raise ValueError(f"max_contacts must be positive, got {self.max_contacts}")
+        check_surface(self.static_friction, self.dynamic_friction, self.restitution)
         if len(self.gravity_m_per_s2) != 3 or not all(
             math.isfinite(g) for g in self.gravity_m_per_s2
         ):
@@ -192,6 +205,8 @@ class RigidSolver:
         patches.impulse = wp.zeros(capacity, dtype=float, device=device)
         patches.moment = wp.zeros(capacity, dtype=wp.vec3, device=device)
         patches.normal = wp.zeros(capacity, dtype=wp.vec3, device=device)
+        patches.anchor = wp.zeros(capacity, dtype=wp.vec3, device=device)
+        patches.second = wp.zeros(capacity, dtype=wp.mat33, device=device)
         patches.per_body = wp.zeros(n, dtype=wp.int32, device=device)  # pyright: ignore[reportArgumentType]
         self._patches = patches
         """At most one patch per contact: a patch is made by its first contact."""
@@ -200,7 +215,9 @@ class RigidSolver:
             wp.zeros(static, dtype=float, device=device),
             wp.zeros(static, dtype=wp.vec3, device=device),
             wp.zeros(static, dtype=wp.vec3, device=device),
+            wp.zeros(static, dtype=wp.mat33, device=device),
         ]
+        self._static_touch = wp.zeros(static, dtype=wp.vec4, device=device)
         self._static_contacts = wp.zeros(1, dtype=wp.int32, device=device)  # pyright: ignore[reportArgumentType]
         self._rotated = wp.zeros(n, dtype=wp.vec3, device=device)
         self._velocity_before = wp.zeros(n, dtype=wp.vec3, device=device)
@@ -316,6 +333,9 @@ class RigidSolver:
             rows["shapes"].append(int(Shape(body.shape)))
             rows["sizes_m"].append(body.size_m)
             rows["bounds_m"].append(_bound(body))
+            rows["static_friction"].append(body.static_friction)
+            rows["dynamic_friction"].append(body.dynamic_friction)
+            rows["restitution"].append(body.restitution)
         start, count = self._count, len(bodies)
         for name, array in (*self._state.items(), *self._properties.items()):
             values = np.asarray(rows[name], dtype=np.int32 if name == "shapes" else np.float32)
@@ -367,10 +387,13 @@ class RigidSolver:
         return self._timer.stage(name) if self._timer is not None else nullcontext()
 
     def _substep(self, h: float, gravity: wp.vec3) -> None:
-        """Predict; solve the contacts between bodies once, in parallel, then each body's
-        contacts with the static solids by its own thread (ADR 0031); recover the
-        velocities; then the velocity pass, the static patches first."""
+        """Predict; solve the contacts between bodies once, in parallel, and their static
+        friction; then each body's contacts with the static solids and their static
+        friction by its own thread (ADR 0031, 0032); recover the velocities; then the
+        velocity pass (restitution, dynamic friction), the static patches first."""
         count, device = self._count, self._device
+        setup = self._require_setup()
+        slow = 2.0 * math.sqrt(sum(g * g for g in setup.gravity_m_per_s2)) * h
         state = [self._state[name] for name, _ in _STATE]
         positions, orientations = state[0], state[1]
         velocities = state[2:]
@@ -408,26 +431,34 @@ class RigidSolver:
                     *corrections],
             device=device,
         )  # fmt: skip
-        wp.launch(_k.apply_corrections, dim=count,
-                  inputs=[*corrections, positions, orientations, *increments],
+        apply = [*corrections, positions, orientations, *increments]
+        wp.launch(_k.apply_corrections, dim=count, inputs=apply, device=device)
+        wp.launch(_k.solve_friction, dim=patches.a.shape[0],
+                  inputs=[patches, *bodies, self._displacement, self._turn,
+                          properties["static_friction"], *corrections],
                   device=device)  # fmt: skip
+        wp.launch(_k.apply_corrections, dim=count, inputs=apply, device=device)
         wp.launch(
             _k.solve_static,
             dim=count,
             inputs=[positions, orientations, *increments, properties["shapes"],
                     properties["sizes_m"], masses, inertia, self._signs, *self._solids.arrays(),
-                    self._static_contacts, *self._static_patches],
+                    self._static_contacts, *self._static_patches, self._static_touch,
+                    properties["static_friction"], setup.static_friction],
             device=device,
         )  # fmt: skip
         wp.launch(_k.recover, dim=count, inputs=[self._displacement, self._rotated, h, *velocities],
                   device=device)  # fmt: skip
         wp.launch(_k.solve_static_velocities, dim=count,
                   inputs=[positions, orientations, *velocities, *before, masses, inertia,
-                          *self._static_patches],
+                          *self._static_patches, properties["dynamic_friction"],
+                          properties["restitution"], setup.dynamic_friction, setup.restitution,
+                          slow, h],
                   device=device)  # fmt: skip
         kicks = [self._kick, self._twist]
         wp.launch(_k.solve_velocities, dim=patches.a.shape[0],
                   inputs=[patches, positions, orientations, *velocities, *before, masses, inertia,
+                          properties["dynamic_friction"], properties["restitution"], slow, h,
                           *kicks],
                   device=device)  # fmt: skip
         wp.launch(_k.apply_velocity_corrections, dim=count, inputs=[*kicks, *velocities],

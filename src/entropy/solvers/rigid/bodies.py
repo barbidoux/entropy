@@ -42,6 +42,10 @@ class Body:
     velocity_m_per_s: Vec3 = (0.0, 0.0, 0.0)
     angular_velocity_rad_per_s: Vec3 = (0.0, 0.0, 0.0)
     """In the world's frame."""
+    static_friction: float = 0.0
+    dynamic_friction: float = 0.0
+    restitution: float = 0.0
+    """Surface coefficients from the body's material (ADR 0032); 0, none, when not given."""
 
     def __post_init__(self) -> None:
         shape = Shape(self.shape)
@@ -56,10 +60,23 @@ class Body:
         q = np.asarray(self.orientation, dtype=float)
         if q.shape != (4,) or not np.isfinite(q).all() or np.linalg.norm(q) < 1e-9:
             raise ValueError(f"orientation must be a non-zero quaternion, got {self.orientation}")
+        check_surface(self.static_friction, self.dynamic_friction, self.restitution)
         for name in ("position_m", "velocity_m_per_s", "angular_velocity_rad_per_s"):
             value = np.asarray(getattr(self, name), dtype=float)
             if value.shape != (3,) or not np.isfinite(value).all():
                 raise ValueError(f"{name} must be three finite numbers, got {getattr(self, name)}")
+
+
+def check_surface(static_friction: float, dynamic_friction: float, restitution: float) -> None:
+    """Friction coefficients are finite and non-negative; a restitution lies in [0, 1]."""
+    for name, value in (
+        ("static_friction", static_friction),
+        ("dynamic_friction", dynamic_friction),
+    ):
+        if not (math.isfinite(value) and value >= 0.0):
+            raise ValueError(f"{name} must be finite and non-negative, got {value}")
+    if not (math.isfinite(restitution) and 0.0 <= restitution <= 1.0):
+        raise ValueError(f"restitution must lie in [0, 1], got {restitution}")
 
 
 def mass_properties(

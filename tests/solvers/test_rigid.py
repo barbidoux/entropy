@@ -340,7 +340,17 @@ def test_a_dump_replays_its_frame(tmp_path) -> None:
         key[len("before_") :]: value for key, value in dump.items() if key.startswith("before_")
     }
     properties = {
-        key: dump[key] for key in ("masses_kg", "inertia_kg_m2", "shapes", "sizes_m", "bounds_m")
+        key: dump[key]
+        for key in (
+            "masses_kg",
+            "inertia_kg_m2",
+            "shapes",
+            "sizes_m",
+            "bounds_m",
+            "static_friction",
+            "dynamic_friction",
+            "restitution",
+        )
     }
     replay.restore({"count": int(dump["count"]), **start, **properties})
     replay.step(float(dump["dt_s"]))
