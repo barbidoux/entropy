@@ -21,7 +21,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   either shape; a tool held into a pause still gets its release, even after a switch;
   only a tool that was pressed is held and released, and a switch starts the new tool
   only if one was in use and the button is still held (no phantom click when the key
-  and the release come in one frame); a tool's key (`order`) must be 1 to 9; tests for
+  and the release come in one frame); a release left from a pause no longer stops the
+  tool a switch starts, and a button let go and pressed again within one frame keeps
+  the tool going; a tool's key (`order`) must be 1 to 9; tests for
   hosing from inside the tank and for the eraser through the toolbox on CPU; the flood
   gameplay test checks the water is not squeezed (#76 has the solver's lag).
 - The bucket, the flood source and the eraser (#54):

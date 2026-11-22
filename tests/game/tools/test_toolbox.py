@@ -378,3 +378,59 @@ def test_the_dam_says_how_much_it_could_drop_into_a_full_tank() -> None:
     assert liquid.added == 100
     assert "barrage" in status and "pleine" in status
     assert re.search(r"sur [0-9.e+-]+ m³", status), status
+
+
+def test_a_release_left_from_a_pause_does_not_stop_the_tool_a_switch_starts() -> None:
+    """Held into a pause, let go and pressed again there (that click is dropped), key 2
+    while held, then the world runs with the button down: the old tool's release is not
+    the new one's (#77's re-review, R1)."""
+    box, log = _recording_toolbox()
+    box.handle(_frame(tool_pressed=True, tool_held=True))
+    box.apply(AIM, 1.0 / 60.0)
+    for paused in (
+        _frame(tool_released=True),
+        _frame(tool_pressed=True, tool_held=True),
+        _frame(pressed=frozenset({Action.TOOL_2}), tool_held=True),
+    ):
+        box.handle(paused)
+        box.forget_clicks()
+
+    for _ in range(2):
+        box.handle(_frame(tool_held=True))
+        box.apply(AIM, 1.0 / 60.0)
+
+    assert log[2:] == [("A", "release"), ("B", "press"), ("B", "hold"), ("B", "hold")]
+
+
+def test_a_button_let_go_and_pressed_again_within_a_frame_keeps_the_tool_going() -> None:
+    """The release came first, since the button is down at the end of the frame: the tool
+    lets go and starts again (#77's re-review, R2)."""
+    box, log = _recording_toolbox()
+    box.handle(_frame(tool_pressed=True, tool_held=True))
+    box.apply(AIM, 1.0 / 60.0)
+
+    box.handle(_frame(tool_released=True, tool_pressed=True, tool_held=True))
+    box.apply(AIM, 1.0 / 60.0)
+    box.handle(_frame(tool_held=True))
+    box.apply(AIM, 1.0 / 60.0)
+
+    assert log[2:] == [("A", "release"), ("A", "press"), ("A", "hold"), ("A", "hold")]
+
+
+def test_a_switch_while_held_in_a_pause_then_let_go_there_starts_nothing() -> None:
+    """The new tool starts only if the button is still held when the world runs; let go
+    in the pause, it would be a phantom click (a bucket dropped) (#77's re-review, R3)."""
+    box, log = _recording_toolbox()
+    box.handle(_frame(tool_pressed=True, tool_held=True))
+    box.apply(AIM, 1.0 / 60.0)
+    for paused in (
+        _frame(pressed=frozenset({Action.TOOL_2}), tool_held=True),
+        _frame(tool_released=True),
+    ):
+        box.handle(paused)
+        box.forget_clicks()
+
+    box.handle(_frame())
+    box.apply(AIM, 1.0 / 60.0)
+
+    assert log == [("A", "press"), ("A", "hold"), ("A", "release")]

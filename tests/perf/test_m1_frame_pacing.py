@@ -58,28 +58,44 @@ def _busy(seconds: float) -> None:
 
 
 class _GpuWork:
-    """A full-screen pass whose fragment loop is sized to take a given time."""
+    """A full-screen pass whose fragment loop is sized to take given times, each measured
+    near that time with a GL timer query (#77's re-review: sized from a 0.04 ms pass, a
+    17.5 ms pass took 16.7 ms and a 40 ms one 32 to 39 ms)."""
 
-    def __init__(self, ctx: moderngl.Context) -> None:
+    def __init__(self, ctx: moderngl.Context, *times_ms: float) -> None:
         self.ctx = ctx
         self.program = ctx.program(vertex_shader=_VERTEX, fragment_shader=_BURN)
         self.vao = ctx.vertex_array(self.program, [])
-        self.per_iteration_ms = self._calibrate()
+        self.iterations: dict[float, int] = {}
+        self.measured_ms: dict[float, float] = {}
+        for ms in times_ms:
+            self._size(ms)
 
     def _time(self, iterations: int) -> float:
+        """Median GPU time of three passes (ms)."""
         self.program["iterations"].value = iterations  # type: ignore[union-attr]
-        query = self.ctx.query(time=True)
-        with query:
-            self.vao.render(moderngl.TRIANGLES, vertices=3)
-        self.ctx.finish()
-        return query.elapsed / 1e6
+        times = []
+        for _ in range(3):
+            query = self.ctx.query(time=True)
+            with query:
+                self.vao.render(moderngl.TRIANGLES, vertices=3)
+            self.ctx.finish()
+            times.append(query.elapsed / 1e6)
+        return float(np.median(times))
 
-    def _calibrate(self) -> float:
-        self._time(100)
-        return float(np.median([self._time(400) for _ in range(5)])) / 400
+    def _size(self, ms: float) -> None:
+        n = 400
+        took = self._time(n)
+        while took < 2.0:
+            n *= 2
+            took = self._time(n)
+        for _ in range(2):
+            n = max(1, round(n * ms / took))
+            took = self._time(n)
+        self.iterations[ms], self.measured_ms[ms] = n, took
 
     def run(self, ms: float) -> None:
-        self.program["iterations"].value = max(1, round(ms / self.per_iteration_ms))  # type: ignore[union-attr]
+        self.program["iterations"].value = self.iterations[ms]  # type: ignore[union-attr]
         self.vao.render(moderngl.TRIANGLES, vertices=3)
 
     def release(self) -> None:
@@ -138,7 +154,10 @@ def test_one_hitch_does_not_leave_the_game_at_30_fps(
             "primary_mode": f"{mode.size.width}x{mode.size.height} at {mode.refresh_rate} Hz",
             "gl_renderer": window.ctx.info["GL_RENDERER"],
         }
-        gpu = _GpuWork(window.ctx) if where == "gpu" else None
+        gpu = _GpuWork(window.ctx, work_ms, hitch_ms) if where == "gpu" else None
+        if gpu is not None:
+            display["gpu_work_measured_ms"] = round(gpu.measured_ms[work_ms], 2)
+            display["gpu_hitch_measured_ms"] = round(gpu.measured_ms[hitch_ms], 2)
         try:
             loop = FrameLoop(_Stages(window, work_ms, hitch_ms, gpu), settings=LoopSettings())
             loop.reset_clock()

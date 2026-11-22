@@ -76,12 +76,14 @@ class Toolbox:
         - only a tool that was pressed ("engaged") is held and released;
         - choosing another tool releases the engaged one; the new one starts, as if
           clicked, if the button is still held and a tool was in use;
-        - a release in the frame of a switch belongs to the old tool (the new one is not
-          engaged, so it gets none)."""
+        - a release in the frame of a switch, or left from a pause, belongs to the old
+          tool, unless the new one was pressed and the button is up again;
+        - a release with the button down again at the end of the frame came before a new
+          press: the tool lets go and starts again (#77's re-review)."""
         for number, action in enumerate(TOOL_ACTIONS):
             if action in frame.pressed and number < len(self.tools) and number != self.index:
-                in_use = self._engaged is not None or self._let_go is not None
-                if self._engaged is not None:
+                in_use = self._engaged is not None
+                if in_use:
                     self._let_go = self._let_go or self._engaged
                 self._switch_press = frame.tool_held and in_use
                 self._pressed = False  # a click meant for the old tool
@@ -111,7 +113,13 @@ class Toolbox:
             if self._engaged is self._let_go:
                 self._engaged = None
             self._let_go = None
+            if self._held or not self._pressed:
+                self._released = False  # it was the old tool's
         tool = self.current
+        if self._released and self._held and self._engaged is tool:
+            tool.on_release(ctx)  # let go, then pressed again
+            self._engaged = None
+            self._released = False
         pressed = self._pressed or self._switch_press
         if pressed and self._engaged is not tool:
             tool.on_press(ctx)
