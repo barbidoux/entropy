@@ -1,0 +1,195 @@
+{
+  "name": "transfers_1m",
+  "timestamp": "2026-11-22T12:22:25",
+  "metrics": {
+    "particles": 1048576,
+    "grid": [
+      72,
+      72,
+      40
+    ],
+    "summaries": {
+      "p2g_random": {
+        "median_ms": 3.7273600101470947,
+        "p10_ms": 3.695513606071472,
+        "p90_ms": 3.7582848072052006,
+        "min_ms": 3.6372480392456055,
+        "max_ms": 4.537343978881836,
+        "n": 50
+      },
+      "g2p_random": {
+        "median_ms": 0.9472000002861023,
+        "p10_ms": 0.9376767933368684,
+        "p90_ms": 0.9576448142528534,
+        "min_ms": 0.9226239919662476,
+        "max_ms": 0.9615359902381897,
+        "n": 50
+      },
+      "p2g_bucket": {
+        "median_ms": 3.597823977470398,
+        "p10_ms": 3.551129698753357,
+        "p90_ms": 3.630079984664917,
+        "min_ms": 3.5123200416564946,
+        "max_ms": 4.486144065856934,
+        "n": 50
+      },
+      "g2p_bucket": {
+        "median_ms": 0.16793599724769592,
+        "p10_ms": 0.16476160287857056,
+        "p90_ms": 0.16998399794101715,
+        "min_ms": 0.16281600296497345,
+        "max_ms": 0.17203199863433838,
+        "n": 50
+      },
+      "p2g_lattice": {
+        "median_ms": 1.035264015197754,
+        "p10_ms": 1.022976040840149,
+        "p90_ms": 1.1612160086631778,
+        "min_ms": 1.0106879472732544,
+        "max_ms": 1.5308799743652346,
+        "n": 50
+      },
+      "g2p_lattice": {
+        "median_ms": 0.13209599256515503,
+        "p10_ms": 0.12902399897575378,
+        "p90_ms": 0.13322239965200425,
+        "min_ms": 0.12800000607967377,
+        "max_ms": 0.13516800105571747,
+        "n": 50
+      },
+      "p2g_sorted": {
+        "median_ms": 1.0342400074005127,
+        "p10_ms": 1.022976040840149,
+        "p90_ms": 1.1052032470703126,
+        "min_ms": 1.0086400508880615,
+        "max_ms": 1.2830719947814941,
+        "n": 50
+      },
+      "g2p_sorted": {
+        "median_ms": 0.12902399897575378,
+        "p10_ms": 0.12595200538635257,
+        "p90_ms": 0.130150406062603,
+        "min_ms": 0.12492799758911133,
+        "max_ms": 0.13209599256515503,
+        "n": 50
+      },
+      "sort_shuffled": {
+        "median_ms": 0.8606719970703125,
+        "p10_ms": 0.7976959943771362,
+        "p90_ms": 1.0212352275848389,
+        "min_ms": 0.7956479787826538,
+        "max_ms": 1.2544000148773193,
+        "n": 50
+      },
+      "sort_sorted": {
+        "median_ms": 0.4720640033483505,
+        "p10_ms": 0.43212801218032837,
+        "p90_ms": 0.6720511913299562,
+        "min_ms": 0.43007999658584595,
+        "max_ms": 0.8611840009689331,
+        "n": 50
+      },
+      "copy_replaced": {
+        "median_ms": 0.22681599855422976,
+        "p10_ms": 0.2242559939622879,
+        "p90_ms": 0.2601984113454819,
+        "min_ms": 0.2242559939622879,
+        "max_ms": 0.2959359884262085,
+        "n": 50
+      }
+    },
+    "transfers_per_substep_random_ms": 4.674560010433197,
+    "transfers_per_substep_bucket_ms": 3.765759974718094,
+    "transfers_per_substep_lattice_ms": 1.167360007762909,
+    "transfers_per_substep_sorted_ms": 1.1632640063762665,
+    "sort_shuffled_ms": 0.8606719970703125,
+    "sort_net_per_frame_ms": 0.24524800479412076,
+    "liquid_budget_ms": 9.0
+  },
+  "conditions": {
+    "on_ac": true,
+    "power_mode": "best_performance",
+    "energy_saver": false,
+    "warmup_s": 300.01622489999863,
+    "official": true,
+    "reasons_not_official": []
+  },
+  "telemetry": {
+    "before": {
+      "gpu": "NVIDIA GeForce RTX 4090 Laptop GPU",
+      "driver": "596.71",
+      "sm_clock_mhz": 1995.0,
+      "memory_clock_mhz": 9001.0,
+      "temperature_c": 81.0,
+      "power_w": 42.5,
+      "power_limit_w": 114.13,
+      "pstate": "P0",
+      "clock_event_reasons": "0x0000000000000001"
+    },
+    "during": {
+      "samples": 6,
+      "clock_event_reasons": {
+        "0x0000000000000001": 2,
+        "0x0000000000000004": 4
+      },
+      "driver": {
+        "596.71": 6
+      },
+      "gpu": {
+        "NVIDIA GeForce RTX 4090 Laptop GPU": 6
+      },
+      "memory_clock_mhz": {
+        "min": 8001.0,
+        "median": 8001.0,
+        "max": 9001.0,
+        "count": 6
+      },
+      "power_limit_w": {
+        "min": 114.13,
+        "median": 114.95,
+        "max": 114.95,
+        "count": 6
+      },
+      "power_w": {
+        "min": 42.5,
+        "median": 110.43,
+        "max": 110.43,
+        "count": 6
+      },
+      "pstate": {
+        "P0": 2,
+        "P2": 4
+      },
+      "sm_clock_mhz": {
+        "min": 1995.0,
+        "median": 2040.0,
+        "max": 2040.0,
+        "count": 6
+      },
+      "temperature_c": {
+        "min": 81.0,
+        "median": 84.0,
+        "max": 84.0,
+        "count": 6
+      }
+    },
+    "after": {
+      "gpu": "NVIDIA GeForce RTX 4090 Laptop GPU",
+      "driver": "596.71",
+      "sm_clock_mhz": 2040.0,
+      "memory_clock_mhz": 8001.0,
+      "temperature_c": 84.0,
+      "power_w": 110.43,
+      "power_limit_w": 114.95,
+      "pstate": "P2",
+      "clock_event_reasons": "0x0000000000000004"
+    }
+  },
+  "environment": {
+    "python": "3.12.12",
+    "warp": "1.19.0",
+    "numpy": "2.5.5",
+    "platform": "Windows-11-10.0.26200-SP0",
+    "git": "ca086f6"
+  }
+}
