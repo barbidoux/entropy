@@ -47,10 +47,35 @@ def test_v_rb_01_a_body_falls_as_z0_minus_half_g_t_squared(device: str, frame_s:
     np.testing.assert_allclose(solver.body_velocities()[:, 2], -g, rtol=1e-5)
 
 
+def _angular_momentum(solver: RigidSolver) -> tuple[np.ndarray, float]:
+    """The bodies' total angular momentum about the origin (kg·m²/s), and the sum of its
+    terms' sizes."""
+    state = solver.checkpoint()
+    total, size = np.zeros(3), 0.0
+    for i in range(state["count"]):
+        x, y, z, w = state["orientations"][i].astype(np.float64)
+        rotation = np.array(
+            [
+                [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+                [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+                [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)],
+            ]
+        )
+        inertia = rotation @ np.diag(state["inertia_kg_m2"][i].astype(np.float64)) @ rotation.T
+        mass = float(state["masses_kg"][i])
+        orbit = np.cross(state["positions_m"][i], mass * state["velocities_m_per_s"][i])
+        spin = inertia @ state["angular_velocities_rad_per_s"][i]
+        total += orbit + spin
+        size += float(np.linalg.norm(orbit) + np.linalg.norm(spin))
+    return total, size
+
+
 def test_v_rb_04_collisions_without_gravity_conserve_momentum(device: str) -> None:
     """V-RB-04: twelve bodies of every shape thrown at each other with no gravity and no
     solids; after 2 s of collisions the total momentum is unchanged within 1e-4 of the sum
-    of |momentum|."""
+    of |momentum|. The angular momentum is kept within 1e-3 of the sum of its terms
+    (8e-4 measured): the depth corrections turn the bodies about where they are in the
+    substep, not where they started it, an error of order h (ADR 0031)."""
     rng = np.random.default_rng(4)
     shapes = [Shape.BOX, Shape.SPHERE, Shape.CAPSULE] * 4
     sizes = {
@@ -69,6 +94,7 @@ def test_v_rb_04_collisions_without_gravity_conserve_momentum(device: str) -> No
     solver.add_bodies(bodies)
     masses = solver.checkpoint()["masses_kg"][:, None].astype(np.float64)
     before = solver.body_velocities().astype(np.float64)
+    turning_before, turning_size = _angular_momentum(solver)
 
     contacts = 0
     for _ in range(120):
@@ -80,5 +106,7 @@ def test_v_rb_04_collisions_without_gravity_conserve_momentum(device: str) -> No
     np.testing.assert_allclose(
         (masses * after).sum(axis=0), (masses * before).sum(axis=0), atol=1e-4 * scale
     )
+    turning_after, _ = _angular_momentum(solver)
+    assert np.linalg.norm(turning_after - turning_before) <= 1e-3 * turning_size
     assert contacts > 0
     assert np.abs(after - before).max() > 0.5  # they did collide

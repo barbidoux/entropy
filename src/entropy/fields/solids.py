@@ -15,6 +15,7 @@ from dataclasses import dataclass
 import warp as wp
 
 from entropy.fields import _solid_kernels as _k
+from entropy.fields._solid_kernels import nearest as nearest  # for solvers' kernels
 
 Vec3 = tuple[float, float, float]
 

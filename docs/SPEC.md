@@ -295,7 +295,7 @@ Air is an incompressible gas on a grid that follows the active region, carrying 
 Rigid bodies use extended position-based dynamics (XPBD) with substepping: the advance is split into ⌈advance / (1/480 s)⌉ equal substeps (16 per 1/30 s frame), one constraint iteration each. A substep is at most 1/480 s, and at least 1/960 s when the advance is longer than 1/480 s, so stiffness and joint forces vary within a factor of 2 with the frame rate, not 20 (ADR 0013). This scheme stays stable with large stacks and many contacts, which matters when a house comes down.
 
 - **Shapes:** box, sphere, capsule and convex hull (fragments). Static map geometry is an SDF.
-- **Contacts:** a GPU broad phase (hash grid or BVH), then convex narrow phase. Decided in ADR 0031: a hash grid of the bodies' centres, then sample spheres of each body (a box's corners, edge midpoints and face centres; a sphere's centre; points along a capsule's axis) against the exact signed distance of the other body and of the static solids, solved in parallel with a scaling that keeps momentum. Named simplification: edge-on-edge contacts are found at the samples only.
+- **Contacts:** a GPU broad phase (hash grid or BVH), then convex narrow phase. Decided in ADR 0031: a hash grid of the bodies' centres, then sample spheres of each body (a box's corners, edge midpoints and face centres; a sphere's centre; points along a capsule's axis at most a radius apart) against the exact signed distance of the other body and of the static solids. Two boxes share their axis of least overlap as the normal. Each body's contacts with the static solids are solved by its own thread, one after the other, from the surface nearest to where it started the substep; contacts between bodies are solved in parallel with a scaling that keeps momentum. A velocity pass at each contact patch's centre of pressure keeps the depth corrections from turning into speed. Named simplifications (ADR 0031, with numbers): edge-on-edge contacts are found at the samples only; a capsule's envelope sags by up to 0.13 r between samples; stacks sink under load (7.7 mm for 10 boxes of 20 cm), much more under a far heavier body; angular momentum is kept within 8e-4 in V-RB-04's scene; a contact overflow loses support; a sphere or capsule at 20 m/s or more can pass through a body 2 cm thick or thinner.
 - **Friction:** Coulomb, static and dynamic, plus restitution, all from the material files.
 - **Sleeping:** bodies at rest sleep in islands and wake on contact, to save time.
 - **Player:** in Walk mode, the player is a capsule rigid body with a character controller on top.
@@ -550,7 +550,7 @@ Each row is a test, written before the code it validates.
 | V-RB-01 | Free fall z = z₀ − ½gt² | 1 s fall | Error ≤ 0.5 % | M2 |
 | V-RB-02 | Restitution | Bounce height ratio equals e² | Error ≤ 3 % | M2 |
 | V-RB-03 | Coulomb friction | Block on an incline: holds if tan θ < μ, slides if tan θ > μ | Threshold within ±1° | M2 |
-| V-RB-04 | Momentum conservation | Collisions without gravity | Relative error ≤ 10⁻⁴ | M2 |
+| V-RB-04 | Momentum conservation | Collisions without gravity | Relative error ≤ 10⁻⁴ (linear momentum; angular within 10⁻³, ADR 0031) | M2 |
 | V-RB-05 | Stacking stability | Stack of 10 boxes for 60 s | Drift ≤ 1 mm | M2 |
 | V-RB-06 | Archimedes | Wooden cube, 600 kg/m³, in water | 60 % ± 5 % submerged | M2 |
 | V-GAS-01 | Advection accuracy | Zalesak disk, one full rotation | Corrected scheme beats plain semi-Lagrangian; mass loss ≤ 5 % | M3 |
@@ -618,7 +618,7 @@ The code lives in the private GitHub repository [barbidoux/entropy](https://gith
 entropy/
   src/entropy/
     core/        units, config, math helpers, logging, profiler
-    fields/      grids, interpolation, advection
+    fields/      grids, interpolation, advection, the static solids' signed distance
     linalg/      Poisson solvers (Jacobi, PCG, MGPCG)
     solvers/     interface (the solver interface), liquid, gas, rigid, fracture, granular, blast, swe
     coupling/    exchanges between solvers
