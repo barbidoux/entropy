@@ -140,3 +140,70 @@ def test_a_negative_or_infinite_friction_is_refused(value: float) -> None:
         Body(Shape.SPHERE, (0.1, 0.0, 0.0), 600.0, dynamic_friction=value)
     with pytest.raises(ValueError, match="friction"):
         RigidSetup(gravity_m_per_s2=GRAVITY, static_friction=value)
+
+
+MU = {"static_friction": 0.5, "dynamic_friction": 0.5}
+
+
+def _box(position_m, half=(0.1, 0.1, 0.1), density=600.0, **kw) -> Body:
+    return Body(Shape.BOX, half, density, position_m=position_m, **{**MU, **kw})
+
+
+def _drift(solver: RigidSolver, seconds: float) -> float:
+    """How far the bodies moved at most over `seconds` (m), after 1 s to settle."""
+    for _ in range(60):
+        solver.step(1.0 / 60.0)
+    settled = solver.body_positions().copy()
+    for _ in range(round(seconds * 60)):
+        solver.step(1.0 / 60.0)
+    return float(np.linalg.norm(solver.body_positions() - settled, axis=1).max())
+
+
+@pytest.mark.parametrize("offset_m", [0.01, 0.04, 0.08])
+def test_with_friction_a_box_off_centre_on_another_stays(device: str, offset_m: float) -> None:
+    """A box resting on an equal one, offset by 1, 4 or 8 cm, μ = 0.5: it stays for 10 s
+    (moves under 1 mm), where without friction it slides off (ADR 0031)."""
+    solver = _solver(device, static_friction=0.5, dynamic_friction=0.5)
+    solver.add_bodies([_box((0.0, 0.0, 0.1)), _box((offset_m, 0.0, 0.3))])
+
+    assert _drift(solver, 10.0) < 1e-3
+
+
+def test_with_friction_a_pyramid_stands(device: str) -> None:
+    """A 4-3-2-1 pyramid of boxes, each row resting on the joints of the one below, μ =
+    0.5: it stands for 10 s, every box moving under 1 mm (without friction it collapses,
+    ADR 0031)."""
+    solver = _solver(device, static_friction=0.5, dynamic_friction=0.5)
+    boxes = []
+    for row, count in enumerate((4, 3, 2, 1)):
+        for k in range(count):
+            boxes.append(_box((0.2 * (k - (count - 1) / 2.0), 0.0, 0.1 + 0.2 * row)))
+    solver.add_bodies(boxes)
+
+    assert _drift(solver, 10.0) < 1e-3
+
+
+def test_with_friction_a_crate_under_a_heavy_slab_stays(device: str) -> None:
+    """A 20 cm crate under a concrete-heavy slab 64 times its mass, μ = 0.5: it is not
+    squeezed out in 10 s (without friction it is, within 2 s, ADR 0031)."""
+    solver = _solver(device, static_friction=0.5, dynamic_friction=0.5)
+    solver.add_bodies(
+        [_box((0.0, 0.0, 0.1)), _box((0.0, 0.0, 0.3), half=(0.4, 0.4, 0.1), density=2400.0)]
+    )
+
+    assert _drift(solver, 10.0) < 1e-3
+
+
+def test_with_friction_a_box_on_a_box_holds_on_a_slope(device: str) -> None:
+    """Two boxes stacked on an incline 3° below the friction angle (μ = 0.5): neither moves
+    by more than 1 mm in 5 s. The upper one rests on a wide patch: friction moves it
+    without turning it, and the lower one takes the torque."""
+    theta = math.atan(0.5) - math.radians(3.0)
+    normal = np.array([0.0, -math.sin(theta), math.cos(theta)])
+    slope = Solids((HalfSpace((0.0, 0.0, 0.0), tuple(normal)),))
+    solver = _solver(device, solids=slope, static_friction=0.5, dynamic_friction=0.5)
+    tilt = (math.sin(theta / 2.0), 0.0, 0.0, math.cos(theta / 2.0))
+    solver.add_bodies([_box(tuple(0.1 * normal), orientation=tilt),
+                       _box(tuple(0.3 * normal), orientation=tilt)])  # fmt: skip
+
+    assert _drift(solver, 5.0) < 1e-3

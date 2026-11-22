@@ -57,7 +57,7 @@ from entropy.core.paths import out_dir
 from entropy.fields.solids import DeviceSolids
 from entropy.solvers.interface import NonFiniteStateError
 from entropy.solvers.rigid import _kernels as _k
-from entropy.solvers.rigid.bodies import Body, Shape, mass_properties
+from entropy.solvers.rigid.bodies import Body, Shape, check_surface, mass_properties
 
 MAX_SUBSTEP_S = 1.0 / 480.0
 """The longest rigid substep (SPEC 5.4, ADR 0013)."""
@@ -74,6 +74,9 @@ _PROPERTIES = (
     ("shapes", wp.int32),
     ("sizes_m", wp.vec3),
     ("bounds_m", float),
+    ("static_friction", float),
+    ("dynamic_friction", float),
+    ("restitution", float),
 )
 PAIRS_PER_BODY = 16
 """Room for pairs of bodies in contact, per body by default: a box in a pile touches up
@@ -107,12 +110,18 @@ class RigidSetup:
     """Room for pairs of bodies in contact each substep; `PAIRS_PER_BODY` per body when
     None. Pairs past it are dropped and counted (`diagnostics()["pair_overflows"]`); the
     contacts with the static solids need no room."""
+    static_friction: float = 0.0
+    dynamic_friction: float = 0.0
+    restitution: float = 0.0
+    """The static solids' surface coefficients, one set for all of them (a named
+    simplification, ADR 0032); 0, none, when not given."""
 
     def __post_init__(self) -> None:
         if self.max_bodies <= 0:
             raise ValueError(f"max_bodies must be positive, got {self.max_bodies}")
         if self.max_pairs is not None and self.max_pairs <= 0:
             raise ValueError(f"max_pairs must be positive, got {self.max_pairs}")
+        check_surface(self.static_friction, self.dynamic_friction, self.restitution)
         if len(self.gravity_m_per_s2) != 3 or not all(
             math.isfinite(g) for g in self.gravity_m_per_s2
         ):
@@ -227,6 +236,8 @@ class RigidSolver:
         patches.impulse = wp.zeros(capacity, dtype=float, device=device)
         patches.moment = wp.zeros(capacity, dtype=wp.vec3, device=device)
         patches.normal = wp.zeros(capacity, dtype=wp.vec3, device=device)
+        patches.spread = wp.zeros(capacity, dtype=wp.mat33, device=device)
+        patches.upper = wp.zeros(capacity, dtype=wp.int32, device=device)  # pyright: ignore[reportArgumentType]
         patches.per_body = wp.zeros(n, dtype=wp.int32, device=device)  # pyright: ignore[reportArgumentType]
         self._patches = patches
         static = _k.STATIC_PATCHES * n
@@ -234,7 +245,9 @@ class RigidSolver:
             wp.zeros(static, dtype=float, device=device),
             wp.zeros(static, dtype=wp.vec3, device=device),
             wp.zeros(static, dtype=wp.vec3, device=device),
+            wp.zeros(static, dtype=wp.mat33, device=device),
         ]
+        self._static_touch = wp.zeros(static, dtype=wp.vec4, device=device)
         self._static_contacts = wp.zeros(1, dtype=wp.int32, device=device)  # pyright: ignore[reportArgumentType]
         self._rotated = wp.zeros(n, dtype=wp.vec3, device=device)
         self._velocity_before = wp.zeros(n, dtype=wp.vec3, device=device)
@@ -350,6 +363,9 @@ class RigidSolver:
             rows["shapes"].append(int(Shape(body.shape)))
             rows["sizes_m"].append(body.size_m)
             rows["bounds_m"].append(_bound(body))
+            rows["static_friction"].append(body.static_friction)
+            rows["dynamic_friction"].append(body.dynamic_friction)
+            rows["restitution"].append(body.restitution)
         start, count = self._count, len(bodies)
         for name, array in (*self._state.items(), *self._properties.items()):
             values = np.asarray(rows[name], dtype=np.int32 if name == "shapes" else np.float32)
@@ -405,6 +421,9 @@ class RigidSolver:
         each body's contacts with the static solids by its own thread (ADR 0031); recover
         the velocities; then the velocity pass, the static patches first."""
         count, device = self._count, self._device
+        setup = self._require_setup()
+        g = math.sqrt(sum(c * c for c in setup.gravity_m_per_s2))
+        slow = 2.0 * g * h
         state = [self._state[name] for name, _ in _STATE]
         positions, orientations = state[0], state[1]
         velocities = state[2:]
@@ -435,6 +454,7 @@ class RigidSolver:
             _k.solve_pairs,
             dim=patches.a.shape[0],
             inputs=[patches, positions, orientations, shapes, sizes, masses, inertia, self._signs,
+                    self._displacement, self._turn, properties["static_friction"], gravity,
                     self._contact_count, *corrections],
             device=device,
         )  # fmt: skip
@@ -443,17 +463,21 @@ class RigidSolver:
                   device=device)  # fmt: skip
         static = [positions, orientations, *increments, properties["shapes"], properties["sizes_m"],
                   properties["bounds_m"], masses, inertia, self._signs, *self._solids.arrays(),
-                  self._static_contacts, *self._static_patches]  # fmt: skip
+                  self._static_contacts, *self._static_patches, self._static_touch,
+                  properties["static_friction"], setup.static_friction]  # fmt: skip
         wp.launch(_k.solve_static, dim=count, inputs=static, device=device)
         wp.launch(_k.recover, dim=count, inputs=[self._displacement, self._rotated, h, *velocities],
                   device=device)  # fmt: skip
         wp.launch(_k.solve_static_velocities, dim=count,
                   inputs=[positions, orientations, *velocities, *before, masses, inertia,
-                          *self._static_patches],
+                          *self._static_patches, properties["dynamic_friction"],
+                          properties["restitution"], setup.dynamic_friction, setup.restitution,
+                          slow, h],
                   device=device)  # fmt: skip
         kicks = [self._kick, self._twist]
         wp.launch(_k.solve_velocities, dim=patches.a.shape[0],
                   inputs=[patches, positions, orientations, *velocities, *before, masses, inertia,
+                          properties["dynamic_friction"], properties["restitution"], slow, h,
                           *kicks],
                   device=device)  # fmt: skip
         wp.launch(_k.apply_velocity_corrections, dim=count, inputs=[*kicks, *velocities],
