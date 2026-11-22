@@ -65,6 +65,7 @@ from entropy.solvers.interface import NonFiniteStateError
 from entropy.solvers.liquid import _solver_kernels as _k
 from entropy.solvers.liquid.particles import LiquidParticles
 from entropy.solvers.liquid.projection import Projection
+from entropy.solvers.liquid.sorting import CellSort
 from entropy.solvers.liquid.transfer import grid_to_particles, particles_to_grid
 
 __all__ = ["LiquidSetup", "LiquidSolver", "NonFiniteStateError", "fill_box", "load_dump"]
@@ -237,7 +238,8 @@ class LiquidSolver:
             wp.zeros(capacity, dtype=wp.vec3, device=device),
             wp.zeros(capacity, dtype=wp.mat33, device=device),
         )
-        # The state each frame starts from, for the NaN guard's dump.
+        # The state each frame starts from, for the NaN guard's dump; each frame the two
+        # buffers swap, as the particles are sorted from one into the other (#65).
         self._before = LiquidParticles(
             wp.zeros(capacity, dtype=wp.vec3, device=device),
             wp.zeros(capacity, dtype=wp.vec3, device=device),
@@ -245,6 +247,7 @@ class LiquidSolver:
         )
         self._before_pressure = wp.zeros(spec.shape, dtype=float, device=device)
         self._before_count = 0
+        self._sort = CellSort(spec, capacity=capacity, device=device)
         self._velocity = MacVelocity.zeros(spec, device)
         self._mass = MacVelocity.zeros(spec, device)
         self._projection = Projection(spec, setup.density_kg_per_m3, device)
@@ -507,9 +510,12 @@ class LiquidSolver:
         return max(self._water_capacity - self._count, 0)
 
     def particle_positions(self) -> np.ndarray:
+        """The particles' positions (m), copied from the GPU. On the CPU this is a view,
+        valid until the next step only: the sort swaps the particle buffers (ADR 0025)."""
         return self._active().position_m.numpy()
 
     def particle_velocities(self) -> np.ndarray:
+        """The particles' velocities (m/s); on the CPU a view, as `particle_positions`."""
         return self._active().velocity_m_per_s.numpy()
 
     # Internals --------------------------------------------------------------------------
@@ -539,11 +545,14 @@ class LiquidSolver:
         return max(1, math.ceil(dt_s * self._cfl_speed(speed_m_per_s) / self._spec().dx_m))
 
     def _keep_before(self) -> None:
-        """Copy the state this frame starts from (the dump's `before_*`)."""
+        """Keep the state this frame starts from (the dump's `before_*`), and sort the
+        particles by cell for the frame (#65). The sort gathers them, in cell order, into
+        the other buffer, which then becomes the live one: the buffer left behind holds
+        the starting state as it was, for the dump, at the cost of the copy it replaces."""
         n = self._count
         if n:
-            for source, target in zip(_arrays(self._particles), _arrays(self._before), strict=True):
-                wp.copy(target, source, count=n)
+            self._sort.sort(self._active(), self._before)
+            self._particles, self._before = self._before, self._particles
         wp.copy(self._before_pressure, self._projection.pressure_pa)
         wp.copy(self._before_volume_error, self._volume_error)
         self._before_count = n

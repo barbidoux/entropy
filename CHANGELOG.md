@@ -7,6 +7,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- The liquid sorts its particles by half-cell at the start of every frame (#65, ADR
+  0025): a stable radix sort gathered into the second particle buffer, which then
+  becomes the live one, so the NaN guard's dump keeps the frame's starting state at no
+  extra copy. Measured at 1 M particles by the independent review (unofficial): particles
+  to grid 3.55 to 0.98 ms per substep, grid to particles 0.90 to 0.16 ms, for about
+  0.2 ms of sorting per frame net of the copy it replaces. Sorting by whole cell piled
+  the atomics on the same nodes (2.38 ms). A `-m perf` benchmark times the transfers in
+  random, bucket, lattice and half-cell order, and the sort. Particles to grid in
+  shared memory (Gao et al. 2018) was tried and not adopted (2.06 ms, three times the
+  code).
 - Frame pacing, the slowest time scale and solver loops on the GPU (#36, ADR 0026):
   - 0.1x is the slowest time scale (`MIN_TIME_SCALE`): float32 positions still move
     water at 1 cm/s within 256 m of the origin at 60 fps; the loop refuses a slower
