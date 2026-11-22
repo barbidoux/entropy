@@ -3,10 +3,12 @@
 # a waxed-paper diaphragm freed by an electric heater strip. Dimensionless: front
 # position Z = z/a (z from the wall behind the column), time T = t·sqrt(2g/a).
 #
-# The time origin is a convention of the paper, not the moment the water was released:
-# each record was rescaled so that T = 1.19 when Z = 1.44, which is about the time since
-# the heater current was applied (p. 314 and Table 2's footnote). The first motion came
-# up to T = 0.23 after the current (Table 6). See ADR 0019.
+# Table 2's time origin is a normalisation of the paper, not the moment the water was
+# released: each record was rescaled so that T = 1.19 when Z = 1.44, a time the paper
+# calls "of the order of magnitude" of the time since the heater current was applied
+# (p. 314 and Table 2's footnote). Table 6 is on the heater clock itself: the first
+# motion came at or before T = 0.23 (tau = 0.16) after the current. See ADR 0019 and
+# ADR 0028.
 name = "Martin & Moyce (1952), surge front, n² = 2: means of the records in Table 2"
 height_over_width = 2.0
 clock_point = [1.44, 1.19]  # (Z, T) where the paper fixed every record's clock
@@ -21,6 +23,16 @@ width_m = 0.028575
 front_dimensionless = [1.22, 1.44, 1.89, 2.33, 2.78, 3.22, 3.67, 4.11, 4.56, 5.00, 5.44, 5.89, 6.33, 6.76]
 time_dimensionless = [0.82, 1.19, 1.58, 1.91, 2.23, 2.58, 2.91, 3.26, 3.60, 3.92, 4.26, 4.61, 4.95, 5.32]
 
+# Table 6 (p. 320): the top of the column at the wall behind it, H = height / (n² a),
+# against tau = t·sqrt(g/a) = T/n from the heater current (tau = 0 when it was applied).
+# Means of the records, n² = 2, a = 2¼ in, as printed. Where a row has one record the
+# printed mean differs from it (H = 0.83: 0.93 against 0.96; 0.72: 1.28 against 1.33;
+# 0.17: 4.20 against 4.09); as for Table 2 (Z = 2.56 and 3.00 print 2.20 and 2.51, the
+# arithmetic means of the records being 2.18 and 2.53), the printed means are used.
+[column_top_2_25_in]
+height_dimensionless = [1.00, 0.94, 0.89, 0.83, 0.78, 0.72, 0.67, 0.61, 0.56, 0.50, 0.44, 0.39, 0.33, 0.28, 0.22, 0.17, 0.11, 0.06]
+time_heater_dimensionless = [0.0, 0.56, 0.77, 0.93, 1.08, 1.28, 1.46, 1.66, 1.84, 2.00, 2.21, 2.45, 2.70, 3.06, 3.44, 4.20, 5.25, 7.40]
+
 [source]
-experiment = "J. C. Martin and W. J. Moyce (1952). Part IV. An experimental study of the collapse of liquid columns on a rigid horizontal plane. Philosophical Transactions of the Royal Society A 244 (882), 312-324: release and clock pp. 313-314, Table 2 (surge front, n² = 2), Table 6 (onset of motion)."
-data = "Means of the records in Table 2, read from a scan of the paper (math.ntu.edu.tw/~shyue/orch08/benchmarks/lowmach/broken-dam/91519.pdf) by ENTROPY's physics auditor, 2026-11-21. PySPH's digitisation of Figure 3 (pysph/examples/db_exp_data.py, mm_data_1 and mm_data_2) agrees within about 0.04 in T but reads about 2 % low in Z at T = 2.0-2.55, so the table is used instead."
+experiment = "J. C. Martin and W. J. Moyce (1952). Part IV. An experimental study of the collapse of liquid columns on a rigid horizontal plane. Philosophical Transactions of the Royal Society A 244 (882), 312-324: release and clock pp. 313-314, Table 2 (surge front, n² = 2), Table 6 (top of the column on the heater clock, onset of motion)."
+data = "Means of the records in Table 2, read from a scan of the paper (math.ntu.edu.tw/~shyue/orch08/benchmarks/lowmach/broken-dam/91519.pdf) by ENTROPY's physics auditor, 2026-11-21. PySPH's digitisation of Figure 3 (pysph/examples/db_exp_data.py, mm_data_1 and mm_data_2) agrees within about 0.04 in T but reads about 2 % low in Z at T = 2.0-2.55, so the table is used instead. Table 6's means read from the same scan by the auditor and checked against it by the maintainer, 2026-11-22."

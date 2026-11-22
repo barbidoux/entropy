@@ -223,7 +223,7 @@ Each story is accepted only when its criteria pass as automated tests and Matt h
 | --- | --- | --- | --- |
 | US-01 | First splash | In Test Tank, 10 s of hose at 20 L/s puts 200 L ± 2 % of water in the tank, at ≥ 30 fps | M1 |
 | US-02 | Dam break | A released water column advances like Martin & Moyce's experiment (test V-LIQ-03) | M1 |
-| US-03 | Slow motion | At 0.1× the camera moves freely, and a scenario run at 0.1× matches the same scenario at 1× in simulated time: a dam break run at both speeds meets V-LIQ-03 and V-LIQ-02 (ADR 0008, ADR 0013) | M1 |
+| US-03 | Slow motion | At 0.1× the camera moves freely, and a scenario run at 0.1× matches the same scenario at 1× in simulated time: a dam break run at both speeds meets V-LIQ-03, keeps its volume within V-LIQ-02's 1 %, and the two fronts agree within 4 % at the same simulated instants (ADR 0008, ADR 0013, ADR 0028) | M1 |
 | US-04 | It floats | A wooden crate (600 kg/m³) settles 60 % ± 5 % submerged; a concrete block sinks | M2 |
 | US-05 | Wading | In Walk mode, water 0.5 m deep flowing at 1 m/s pushes the player | M2 |
 | US-06 | Light it up | An ignited wooden table burns; smoke fills the ceiling layer first, then descends | M3 |
@@ -538,11 +538,11 @@ Each row is a test, written before the code it validates.
 
 | ID | Law or experiment | Scenario | Pass criterion | Milestone |
 | --- | --- | --- | --- | --- |
-| V-LIQ-01 | Hydrostatic pressure p = ρgd | Still water 1 m deep | Error ≤ 2 % at every depth | M1 |
+| V-LIQ-01 | Hydrostatic pressure p = ρgd | Still water 1 m and 0.71 m deep (the surface on a face, then between centres), projected with the surface given (ADR 0017); and still water 1 m deep through the full step for 1 s, its surface made by the particles (ADR 0028) | Error ≤ 2 % at every depth; through the full step, in the top layer, ≤ ρg × 1.5 mm when that is larger (the particles' surface noise) | M1 |
 | V-LIQ-02 | Volume conservation | Sloshing tank released with a tilted surface, 33 s of simulated time (2,000 frames at 1×); particle count unchanged; volume = share of 8³ points per cell where the level set is negative, the first frame within 1 % of the particles' volume (ADR 0019) | One-second mean volume within 1 % of the first second's throughout; the M1 soak repeats it over 10 min | M1 |
-| V-LIQ-03 | Dam break (Martin & Moyce, 1952) | Column a = 1 m wide and 2a high, 16 cells across a (the game's cells), released at once; front Z = z/a against T = t·√(2g/a), compared with the mean of the a = 2¼ in records in the paper's Table 2. The paper's clock was set from the heater current, before the water moved, so the simulated clock is delayed by a fixed ΔT = 0.25, never fitted per run (ADR 0019) | Every tabulated mean with 1.19 ≤ T ≤ 3 within 7 % | M1 |
-| V-LIQ-04 | Incompressibility | Any state after projection | Relative residual ≤ 10⁻⁵ | M1 |
-| V-LIQ-05 | Pressure solver order | Manufactured Poisson solution | Error falls about 4× per grid refinement (second order) | M1 |
+| V-LIQ-03 | Dam break (Martin & Moyce, 1952) | Column a = 1 m wide and 2a high, 16 cells across a (the game's cells), released at once; front Z = z/a against T = t·√(2g/a), compared with the mean of the a = 2¼ in records in the paper's Table 2. Table 2's clock is a normalisation (T = 1.19 at Z = 1.44); solvers that release the column at once lead Table 2 by about 0.25 (Landet et al. 2018: 0.21–0.27), for reasons not known, so the simulated clock is delayed by a fixed ΔT = 0.25, never fitted per run (ADR 0019, ADR 0028). In the same run, the column's top at the wall, H = h/2a, against the means of the paper's Table 6 on its heater clock, τ = t·√(g/a), with no delay | Every tabulated mean with 1.19 ≤ T ≤ 3 within 7 %; every Table 6 mean with 0.56 ≤ τ ≤ 2.21 within 6 % | M1 |
+| V-LIQ-04 | Incompressibility | Random states after projection with no target divergence (the volume correction's target has its own test, ADR 0018); an unconverged solve in play is counted and shown on the HUD (ADR 0028) | Relative residual ≤ 10⁻⁵ | M1 |
+| V-LIQ-05 | Pressure solver order | Manufactured Poisson solutions: a cube and a walled box with the boundary on faces, and a sphere cutting the grid anywhere, its surface placed by θ per face (ADR 0028) | Error falls about 4× per grid refinement (second order) | M1 |
 | V-RB-01 | Free fall z = z₀ − ½gt² | 1 s fall | Error ≤ 0.5 % | M2 |
 | V-RB-02 | Restitution | Bounce height ratio equals e² | Error ≤ 3 % | M2 |
 | V-RB-03 | Coulomb friction | Block on an incline: holds if tan θ < μ, slides if tan θ > μ | Threshold within ±1° | M2 |

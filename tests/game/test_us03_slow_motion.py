@@ -1,6 +1,7 @@
 """US-03, slow motion (SPEC 2, ADR 0008, ADR 0013): a dam break run at 0.1x matches the
-same at 1x in simulated time. Both meet V-LIQ-03 (the front against Martin & Moyce,
-ADR 0019) and keep their water's volume within V-LIQ-02's 1 %.
+same at 1x in simulated time: their fronts agree at the same simulated instants. Both
+meet V-LIQ-03 (the front against Martin & Moyce, ADR 0019) and keep their water's volume
+within V-LIQ-02's 1 %.
 
 Gameplay test: frames as the game runs them, each advancing frame time x scale."""
 
@@ -49,13 +50,20 @@ def _dam_break(time_scale: float, device: str) -> tuple[np.ndarray, np.ndarray, 
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize("time_scale", [1.0, 0.1])
-def test_us_03_a_dam_break_in_slow_motion_meets_the_same_tests(time_scale: float) -> None:
-    times, fronts, volumes = _dam_break(time_scale, "cpu")
+def test_us_03_a_dam_break_in_slow_motion_matches_the_same_at_full_speed() -> None:
+    """Every 10th frame at 0.1x is the same simulated instant as a frame at 1x: the two
+    fronts agree there within 4 % (the M1 physics audit measured 2.6 % at most). Without
+    this, two runs 14 % apart could both pass V-LIQ-03."""
     t_ref, z_ref = _martin_moyce()
     window = (t_ref >= 1.19) & (t_ref <= 3.0)
+    runs = {scale: _dam_break(scale, "cpu") for scale in (1.0, 0.1)}
 
-    simulated = np.interp(t_ref[window] - CLOCK_DELAY, times, fronts)
-
-    np.testing.assert_allclose(simulated, z_ref[window], rtol=0.07)
-    assert np.abs(np.asarray(volumes) / volumes[0] - 1.0).max() <= 0.01
+    for times, fronts, volumes in runs.values():
+        simulated = np.interp(t_ref[window] - CLOCK_DELAY, times, fronts)
+        np.testing.assert_allclose(simulated, z_ref[window], rtol=0.07)
+        assert np.abs(np.asarray(volumes) / volumes[0] - 1.0).max() <= 0.01
+    full_times, full_fronts, _ = runs[1.0]
+    slow_times, slow_fronts, _ = runs[0.1]
+    shared = min(len(full_fronts), len(slow_fronts[::10]))
+    np.testing.assert_allclose(slow_times[::10][:shared], full_times[:shared], rtol=1e-6)
+    np.testing.assert_allclose(slow_fronts[::10][:shared], full_fronts[:shared], rtol=0.04)

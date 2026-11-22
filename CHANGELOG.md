@@ -7,6 +7,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- The M1 physics audit of the liquid's validation (#58, ADR 0028):
+  - V-LIQ-01 at a surface between cell centres (0.71 m), and through the full step:
+    still water 1 m deep for 1 s, seeded as the game seeds it;
+  - V-LIQ-03 adds the column's top at the wall against Martin & Moyce's Table 6 on
+    their heater clock, with no delay (within 6 %; measured -4.1 to +0.2 %): it catches
+    gravity off by 10 %, which the front alone does not at 32 cells;
+  - V-LIQ-05 adds a sphere cutting the grid anywhere, its surface placed by θ per face
+    (order 1.95; one θ = 1/2 would give 0.55);
+  - US-03 compares the fronts at 0.1x and 1x at the same simulated instants (within
+    4 %; measured 2.6 %);
+  - the liquid counts pressure solves that did not converge
+    (`diagnostics()["unconverged_solves"]`), and the HUD shows them when there are some;
+    overruns and unconverged solves are logged at the 1st, 10th, 100th... (#34).
 - The liquid sorts its particles by half-cell at the start of every frame (#65, ADR
   0025): a stable radix sort gathered into the second particle buffer, which then
   becomes the live one, so the NaN guard's dump keeps the frame's starting state at no
@@ -284,6 +297,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- V-LIQ-03's delay of 0.25 against Table 2 has an accurate rationale in the spec, the
+  test and the data file: Table 2's clock is a normalisation, not the heater current
+  (which is Table 6's clock), and solvers that release the column at once lead it by
+  about 0.25, for reasons not known (ADR 0028, superseding ADR 0019 on this point).
 - The liquid pass draws its spheres at half resolution (#57, ADR 0027): depth,
   thickness and smoothing in half-size targets; the composite at full resolution, its
   depth and normals interpolated between the four nearest half-size pixels on one

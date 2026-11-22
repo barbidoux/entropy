@@ -72,18 +72,21 @@ def _hydrostatic(
     return projection.pressure_pa.numpy()[fluid], expected
 
 
-def test_v_liq_01_still_water_has_hydrostatic_pressure(device: str) -> None:
-    """V-LIQ-01: still water 1 m deep, p = rho g d within 2 % at every depth."""
+@pytest.mark.parametrize("depth_m", [1.0, 0.71], ids=["on-a-face", "between-centres"])
+def test_v_liq_01_still_water_has_hydrostatic_pressure(device: str, depth_m: float) -> None:
+    """V-LIQ-01: still water 1 m deep, p = rho g d within 2 % at every depth. At 1 m the
+    surface lies on a face (θ = 1/2); at 0.71 m it cuts a cell, so a fixed θ = 1/2 fails
+    by 42 % (the M1 physics audit)."""
     spec = GridSpec(shape=(8, 8, 24), dx_m=1.0 / 16.0)
-    projection, velocity = _still_water(spec, 1.0, device)
+    projection, velocity = _still_water(spec, depth_m, device)
 
     result = projection.project(velocity, DT_S)
 
     assert result.converged
-    measured, expected = _hydrostatic(projection, _height(spec, 2, True), 1.0)
+    measured, expected = _hydrostatic(projection, _height(spec, 2, True), depth_m)
     np.testing.assert_allclose(measured, expected, rtol=0.02)  # V-LIQ-01, every column
     np.testing.assert_allclose(measured, expected, rtol=1e-4)  # a flat surface is exact
-    depth_cells = int((_centres_z(spec) < 1.0).sum())
+    depth_cells = int((_centres_z(spec) < depth_m).sum())
     # The water stays still, up to and including the surface face, where the ghost
     # pressure acts.
     assert np.abs(velocity.w.numpy()[:, :, : depth_cells + 1]).max() < 1e-4
@@ -276,3 +279,45 @@ def test_water_sealed_from_air_is_projected_up_to_its_pressure_level(device: str
     gradient = np.diff(pressure[4, 4, :]) / spec.dx_m
     np.testing.assert_allclose(gradient, -WATER.density_kg_per_m3 * GRAVITY_M_PER_S2, rtol=1e-3)
     assert np.abs(velocity.w.numpy()).max() < 1e-4
+
+
+SPHERE_CENTRE_M = (0.513, 0.479, 0.507)
+SPHERE_RADIUS_M = 0.37
+
+
+def _sphere_error(n: int, device: str) -> float:
+    """Max error of the projection's pressure for -∇²p = f inside a sphere that cuts the
+    grid anywhere, p = 0 on it: p = (R² - r²) exp(x'), f = exp(x') (6 + 4x' - R² + r²),
+    x' measured from the centre. The level set is the exact distance, so the projection's
+    own θ per face places the surface. With rho = dt = 1 and u* = 0, the target divergence
+    is the right-hand side."""
+    spec = GridSpec(shape=(n, n, n), dx_m=1.0 / n)
+    centres = (np.arange(n) + 0.5) / n
+    grid = np.meshgrid(centres, centres, centres, indexing="ij")
+    x, y, z = (axis - c for axis, c in zip(grid, SPHERE_CENTRE_M, strict=True))
+    r2 = x**2 + y**2 + z**2
+    phi = np.sqrt(r2) - SPHERE_RADIUS_M
+    fluid = phi < 0.0
+    exact = (SPHERE_RADIUS_M**2 - r2) * np.exp(x)
+    f = np.exp(x) * (6.0 + 4.0 * x - SPHERE_RADIUS_M**2 + r2)
+    projection = Projection(spec, 1.0, device)
+    for target, values, dtype in (
+        (projection.labels, np.where(fluid, CELL_FLUID, CELL_AIR).astype(np.int32), wp.int32),
+        (projection.phi_m, phi.astype(np.float32), float),
+        (projection.target_divergence_per_s, np.where(fluid, f, 0.0).astype(np.float32), float),
+    ):
+        wp.copy(target, wp.array(values, dtype=dtype, device=device))
+
+    result = projection.project(MacVelocity.zeros(spec, device), 1.0)
+
+    assert result.converged
+    return float(np.abs(projection.pressure_pa.numpy()[fluid] - exact[fluid]).max())
+
+
+def test_v_liq_05_a_surface_anywhere_between_centres_is_second_order(device: str) -> None:
+    """V-LIQ-05 for the free surface itself (the M1 physics audit): the error falls about
+    4x per refinement. One θ = 1/2 for every air face would give order 0.55."""
+    errors = [_sphere_error(n, device) for n in (16, 32, 64)]
+
+    ratios = [errors[i] / errors[i + 1] for i in range(2)]
+    assert all(3.4 < ratio < 4.6 for ratio in ratios), (errors, ratios)
