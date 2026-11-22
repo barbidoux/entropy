@@ -58,8 +58,8 @@ class Body:
             raise ValueError(f"orientation must be a non-zero quaternion, got {self.orientation}")
         for name in ("position_m", "velocity_m_per_s", "angular_velocity_rad_per_s"):
             value = np.asarray(getattr(self, name), dtype=float)
-            if value.shape != (3,):
-                raise ValueError(f"{name} must have three components, got {getattr(self, name)}")
+            if value.shape != (3,) or not np.isfinite(value).all():
+                raise ValueError(f"{name} must be three finite numbers, got {getattr(self, name)}")
 
 
 def mass_properties(

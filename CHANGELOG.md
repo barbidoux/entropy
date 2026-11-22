@@ -9,10 +9,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Rigid bodies, first step (#86, ADR 0030): `entropy.solvers.rigid` with boxes, spheres
   and capsules, their mass and inertia from shape and density, XPBD substeps of at most
-  1/480 s under gravity with the gyroscopic torque, the NaN guard (dump with the frame's
-  starting state and time step) and checkpoints. V-RB-01: a 1 s fall within 0.21 % of
-  ½gt² (limit 0.5 %). Velocities are recovered from the motion's increments, which keeps
-  them exact in float32. No contacts yet.
+  1/480 s under gravity with the gyroscopic torque by the implicit midpoint rule (|L| and
+  energy kept within 1e-3 over 10 s at 20 and 30 rad/s), the NaN guard (a dump with the
+  frame's starting state, time step and gravity, replayable) and checkpoints. V-RB-01: a
+  1 s fall within 0.21 % of ½gt² (limit 0.5 %). Velocities are recovered from the
+  motion's increments, which keeps them exact in float32. No contacts yet.
 - The M1 gate (#57, #58, ADR 0029):
   - `-m perf` gate benchmark: the game with 1 M particles, a dam break then the hose;
     the frame rate held in 90 % of the frames, the world's speed and every stage's GPU

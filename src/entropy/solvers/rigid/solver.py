@@ -14,8 +14,12 @@ frame), principal moments of inertia (kg·m², body frame), mass (kg), shape and
 Simplifications, named (CLAUDE.md rule 7):
 - symplectic Euler per substep: a body in free fall drops ½gt² + ½ght, 0.21 % more
   than ½gt² after 1 s at h = 1/480 s (V-RB-01 allows 0.5 %);
-- the gyroscopic torque is integrated explicitly once per substep, so a tumbling body's
-  angular momentum drifts slowly (under 1 % in 2 s in the tests);
+- the gyroscopic torque by the implicit midpoint rule, solved by four fixed-point
+  iterations: it keeps a tumbling body's |L| and energy (within 1e-3 over 10 s at 20 and
+  30 rad/s in the tests) while |ω|·h is well under 1, a few hundred rad/s;
+- positions accumulate in float32: far from the origin a body's position drifts from
+  x₀ + vt (1.5 cm after 60 s at 1.26 m/s, 20 to 80 m out), its velocity stays exact;
+- checkpoints are synchronous: on CUDA, taking one waits for the queued GPU work (#99);
 - no contacts, friction or sleeping yet (#87, #88, #89).
 
 NaN guard (SPEC 5.9): after each step a kernel counts non-finite bodies into a small
@@ -108,6 +112,7 @@ class RigidSolver:
         self._count = 0
         self._state = {name: wp.zeros(n, dtype=dtype, device=device) for name, dtype in _STATE}
         self._before = {name: wp.zeros(n, dtype=dtype, device=device) for name, dtype in _STATE}
+        self._before_count = 0
         self._properties = {
             name: wp.zeros(n, dtype=dtype, device=device)  # pyright: ignore[reportArgumentType]
             for name, dtype in _PROPERTIES
@@ -133,6 +138,7 @@ class RigidSolver:
         n = max(1, math.ceil(dt_s / MAX_SUBSTEP_S - 1e-9))
         h = dt_s / n
         count = self._count
+        self._before_count = count
         with self._stage("rigid bodies (CUDA)"):
             for name, _ in _STATE:
                 if count:
@@ -175,8 +181,14 @@ class RigidSolver:
         return state
 
     def restore(self, state: dict[str, Any]) -> None:
-        """Return to a checkpoint; a frozen solver runs again."""
+        """Return to a checkpoint; a frozen solver runs again, and a status not yet read
+        is dropped."""
         n = int(state["count"])
+        capacity = self._require_setup().max_bodies
+        if n > capacity:
+            raise ValueError(f"the checkpoint holds {n} bodies, over the capacity of {capacity}")
+        if self._status_event is not None and self._status_pending:
+            wp.synchronize_event(self._status_event)  # its copy must not land on later state
         for name, array in (*self._state.items(), *self._properties.items()):
             if n:
                 values = wp.array(state[name], dtype=array.dtype, device=self._device)
@@ -192,8 +204,10 @@ class RigidSolver:
     # Bodies -------------------------------------------------------------------------
 
     def add_bodies(self, bodies: list[Body]) -> None:
-        """Add bodies after the existing ones; refused whole if over the capacity."""
+        """Add bodies after the existing ones; refused whole if over the capacity. Raises
+        while the solver is frozen by the NaN guard."""
         setup = self._require_setup()
+        self._read_status()
         if self._count + len(bodies) > setup.max_bodies:
             raise ValueError(
                 f"{len(bodies)} more bodies exceed the capacity of {setup.max_bodies}"
@@ -222,7 +236,8 @@ class RigidSolver:
         self._diagnostics["bodies"] = self._count
 
     def set_body_velocity(self, index: int, velocity_m_per_s: tuple[float, float, float]) -> None:
-        """Set one body's velocity (m/s), as a tool would."""
+        """Set one body's velocity (m/s), as a tool would. Raises while frozen."""
+        self._read_status()
         self._check_index(index)
         values = wp.array(
             np.asarray([velocity_m_per_s], np.float32), dtype=wp.vec3, device=self._device
@@ -293,8 +308,9 @@ class RigidSolver:
         folder.mkdir(parents=True, exist_ok=True)
         path = folder / f"rigid-{time.strftime('%Y%m%d-%H%M%S')}-{time.perf_counter_ns()}.npz"
         state = self.checkpoint()
-        n = self._count
+        n = self._before_count
         before = {f"before_{name}": self._before[name].numpy()[:n].copy() for name, _ in _STATE}
         arrays = {key: np.asarray(value) for key, value in state.items()}
-        np.savez(path, dt_s=np.asarray(self._last_dt_s), **arrays, **before)  # pyright: ignore[reportArgumentType]
+        arrays["gravity_m_per_s2"] = np.asarray(setup.gravity_m_per_s2)
+        np.savez_compressed(path, dt_s=np.asarray(self._last_dt_s), **arrays, **before)  # pyright: ignore[reportArgumentType]
         return path

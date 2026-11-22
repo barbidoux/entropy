@@ -1,5 +1,7 @@
 """Validation of the rigid bodies: V-RB-01 (SPEC 9.4)."""
 
+import math
+
 import numpy as np
 import pytest
 
@@ -9,13 +11,15 @@ from entropy.world.maps import Environment
 GRAVITY = Environment().gravity_m_per_s2
 
 
-@pytest.mark.parametrize("frame_s", [1.0 / 60.0, 1.0 / 30.0])
+@pytest.mark.parametrize("frame_s", [1.0 / 60.0, 1.0 / 30.0, 1.0 / 50.0, 1.0 / 45.0])
 def test_v_rb_01_a_body_falls_as_z0_minus_half_g_t_squared(device: str, frame_s: float) -> None:
     """V-RB-01: a 1 s free fall, z = z₀ - ½gt², within 0.5 % of the distance fallen, at
-    60 and 30 fps. A body moving sideways keeps its horizontal speed.
+    60, 50, 45 and 30 fps. A body moving sideways keeps its horizontal speed.
 
     Symplectic Euler over substeps of h = 1/480 s falls ½gt² + ½ght: h/t = 0.21 % more
-    after 1 s, a named error of the integrator (SPEC 5.4)."""
+    after 1 s, a named error of the integrator (SPEC 5.4). That exact fall is asserted
+    too, which pins the integrator and the substep h (1/480 s at 60 and 30 fps, 1/500 s
+    at 50, 1/495 s at 45)."""
     solver = RigidSolver.create(RigidSetup(gravity_m_per_s2=GRAVITY, max_bodies=4), device)
     solver.add_bodies(
         [
@@ -36,6 +40,8 @@ def test_v_rb_01_a_body_falls_as_z0_minus_half_g_t_squared(device: str, frame_s:
 
     g = -GRAVITY[2]
     fallen = 20.0 - solver.body_positions()[:, 2]
-    np.testing.assert_allclose(fallen, 0.5 * g, rtol=0.005)
+    np.testing.assert_allclose(fallen, 0.5 * g, rtol=0.005)  # V-RB-01
+    h = frame_s / math.ceil(frame_s * 480.0 - 1e-9)
+    np.testing.assert_allclose(fallen, 0.5 * g * (1.0 + h), rtol=1e-4)  # t = 1 s
     assert solver.body_positions()[1, 0] == pytest.approx(3.0, rel=1e-5)
     np.testing.assert_allclose(solver.body_velocities()[:, 2], -g, rtol=1e-5)
