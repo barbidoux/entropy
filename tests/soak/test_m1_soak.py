@@ -9,24 +9,27 @@ random:
 - pause and resume, a slower or faster time scale, a single step;
 - F5 and F9.
 
-The amount of water is held between 480,000 and 600,000 particles: the eraser is used
-when there is more, the other tools when there is less. Checkpoints' host buffers grow
-by a quarter over what they hold (ADR 0024), so within that band they never grow
-again. The baseline is taken after the settling minute, once the checkpoint ring is
-full and every action has run once (its kernels loaded). Growth after it means a leak.
-It is measured on the process, ENTROPY's Warp pool and the whole GPU, with the same
-64 MiB limit and the same sampling as M0's soak.
+The amount of water is steered towards 480,000 to 600,000 particles: the eraser is
+used, in short strokes, when there is more, the other tools when there is less. An
+action can still leave it outside the band for a while. Checkpoints' host buffers grow
+by a quarter over what they hold (ADR 0024), so near that band they stop growing. The
+baseline is taken after the settling minute, once the checkpoint ring is full and every
+kind of action has run once (its kernels loaded). Growth after it means a leak. It is
+measured on the process, ENTROPY's Warp pool and the whole GPU, with the same 64 MiB
+limit and the same sampling as M0's soak.
 
 V-LIQ-02 over 10 minutes (SPEC 9.4, ADR 0019, ADR 0028): the last `QUIET_S` of every
-`QUIET_EVERY_S` start no action, so the water settles. In the last 2 s of each such
-window, with no tool held and no water in flight, the liquid's own measure of its
-water's volume (from the level set, as on the HUD) is averaged against its particles'
-volume.
+`QUIET_EVERY_S` start no action, and the world is resumed and set back to 1x, one key
+a frame, so the water settles in about 3 s of simulated time. In the last 2 s of each
+such window, at 1x, with no tool held and no water in flight, the liquid's own measure
+of its water's volume (from the level set, as on the HUD) is averaged against its
+particles' volume.
 
-At the end:
-- the world is not frozen by the NaN guard;
+Checked:
+- after every frame, that the NaN guard has not frozen the world (F9 would unfreeze it,
+  so the end alone would not show it), and at the end that it wrote no dump;
 - every frame completed;
-- the particles are finite;
+- the particles are finite at the end;
 - V-LIQ-02's two criteria: the first settled window's volume within 1 % of its
   particles' volume, and every later one, as a share of its particles' volume, within
   1 % of the first. (A 150 s trial read 0.9905 at first, then up to +0.4 % from it.)
@@ -43,10 +46,12 @@ import pytest
 
 from entropy.app.main import GameStages
 from entropy.core.config import default_settings_path, load_settings
+from entropy.core.paths import out_dir
 from entropy.core.profiler import FrameStats
 from entropy.game.free_camera import CameraPose
 from entropy.render.context import GameWindow
 from entropy.sim.loop import FrameLoop
+from entropy.sim.setup import LIQUID_CELL_M
 from entropy.solvers.liquid.solver import fill_box
 from tests.soak.test_m0_soak import LEAK_LIMIT_BYTES, SETTLE_S, _sample
 
@@ -75,7 +80,9 @@ def test_the_water_tank_runs_for_minutes_without_nan_or_leak() -> None:
         stages = GameStages(window, settings, stats)
         liquid = stages.liquid
         assert liquid is not None
-        liquid.add_particles(fill_box((-2.0, -2.0, 0.0), (2.0, 2.0, 1.0), 0.0625, 8, seed=3))
+        liquid.add_particles(fill_box((-2.0, -2.0, 0.0), (2.0, 2.0, 1.0), LIQUID_CELL_M, 8, seed=3))
+        dumps = out_dir() / "nan_dumps"
+        dumps_before = set(dumps.iterdir()) if dumps.exists() else set()
         loop = FrameLoop(
             stages, settings=stages.loop_settings, stats=stats, time_control=stages.time_control
         )
@@ -87,6 +94,7 @@ def test_the_water_tank_runs_for_minutes_without_nan_or_leak() -> None:
         frames = 0
         quiet: list[float] = []  # volume over particles' volume, this quiet window
         settled_volumes: list[float] = []
+        first_freeze: str | None = None
         try:
             while time.perf_counter() - start < duration_s:
                 now_s = time.perf_counter() - start
@@ -116,7 +124,11 @@ def test_the_water_tank_runs_for_minutes_without_nan_or_leak() -> None:
                         if name == "bucket" and rng.random() < 0.3:
                             stages.mode.input.on_mouse_button(glfw.MOUSE_BUTTON_RIGHT, glfw.PRESS)
                         stages.mode.input.on_mouse_button(glfw.MOUSE_BUTTON_LEFT, glfw.PRESS)
-                        release_at_s = now_s + rng.uniform(0.2, 1.5)
+                        # An eraser stroke of 1 s takes about 60,000 particles: kept short.
+                        hold_s = (
+                            rng.uniform(0.1, 0.3) if name == "eraser" else rng.uniform(0.2, 1.5)
+                        )
+                        release_at_s = now_s + hold_s
                     elif name == "time":
                         _tap(stages, rng.choice(TIME_KEYS))
                     elif name == "save":
@@ -125,9 +137,23 @@ def test_the_water_tank_runs_for_minutes_without_nan_or_leak() -> None:
                         _tap(stages, glfw.KEY_F9)
                     actions[name] = actions.get(name, 0) + 1
                     next_action_s = now_s + rng.uniform(1.0, 4.0)
+                time_control = stages.time_control
+                if into_quiet_s >= 0.0:  # back to 1x, running: one key a frame
+                    if time_control.paused:
+                        _tap(stages, glfw.KEY_P)
+                    elif time_control.scale != 1.0:
+                        _tap(stages, glfw.KEY_RIGHT_BRACKET)
                 loop.run_frame()
                 frames += 1
-                if into_quiet_s >= QUIET_S - 2.0 and release_at_s < 0.0 and not stages.toolbox.jet:
+                if first_freeze is None and stages.simulation.frozen_by is not None:
+                    first_freeze = f"at {now_s:.1f} s: {stages.simulation.frozen_by}"
+                at_full_speed = not time_control.paused and time_control.scale == 1.0
+                if (
+                    into_quiet_s >= QUIET_S - 2.0
+                    and at_full_speed
+                    and release_at_s < 0.0
+                    and not stages.toolbox.jet
+                ):
                     d = liquid.diagnostics()
                     quiet.append(
                         d["water_volume_m3"] / (d["particles"] * stages.particle_volume_m3)
@@ -145,7 +171,6 @@ def test_the_water_tank_runs_for_minutes_without_nan_or_leak() -> None:
                     baseline = _sample(loop, stages.device)
             final = _sample(loop, stages.device)
             elapsed_s = time.perf_counter() - start
-            frozen = stages.simulation.frozen_by
             particles = liquid.particle_count()
             finite = bool(np.isfinite(liquid.particle_positions()).all())
             overflow_m3 = stages.toolbox.overflow_m3
@@ -162,8 +187,10 @@ def test_the_water_tank_runs_for_minutes_without_nan_or_leak() -> None:
         f"pool {warp / 2**20:.1f} MiB, GPU-wide {device / 2**20:.1f} MiB; settled volume "
         f"over particles' volume {[round(v, 4) for v in settled_volumes]}"
     )
+    new_dumps = (set(dumps.iterdir()) if dumps.exists() else set()) - dumps_before
     assert frames > 0
-    assert frozen is None, f"the NaN guard froze the world: {frozen}"
+    assert first_freeze is None, f"the NaN guard froze the world {first_freeze}"
+    assert not new_dumps, f"NaN dumps written: {sorted(new_dumps)}"
     assert finite
     assert host < LEAK_LIMIT_BYTES
     assert warp < LEAK_LIMIT_BYTES
