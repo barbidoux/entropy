@@ -1,14 +1,17 @@
-"""Liquid particles sorted by cell (#65, ADR 0025).
+"""Liquid particles sorted by half-cell (#65, ADR 0025).
 
-Particles that share a cell then sit together in memory, so the transfers read and
-write the grid in order instead of at random. Measured on the laptop at 1 M particles
-in the Test Tank's grid (unofficial, GPU shared): particles to grid 3.42 to 2.34 ms per
-substep, grid to particles 0.87 to 0.14 ms, for a sort of 0.76 ms per frame.
+Neighbouring particles then sit near each other in memory, so the transfers read and
+write the grid in order instead of at random. The key is the half-cell: each cell is
+split in two along each axis (`SUBDIVISION`), so the 8 particles of a cell do not sit
+in consecutive threads, which would all add to the same 27 grid nodes at once. Measured
+at 1 M particles on the Test Tank's grid (unofficial, ADR 0025): particles to grid 3.55
+ms in random order, 2.38 ms by cell, 0.98 ms by half-cell.
 
-Cells are ordered x-major (x, then y, then z), the grid's own memory order; a
-particle outside the grid sorts with the nearest cell. The sort is stable (a radix
-sort of the cell keys), so particles that share a cell keep their order, and the
-order on CPU is reproducible.
+Half-cells are ordered x-major (x, then y, then z), the grid's own memory order; a
+particle outside the grid sorts with the nearest half-cell, each axis clamped on its
+own; one whose position is not finite takes key 0. The sort is stable (a radix sort of
+the keys), so particles that share a half-cell keep their order, and the order on CPU
+is reproducible.
 """
 
 from __future__ import annotations
@@ -19,10 +22,13 @@ from entropy.fields.mac import GridSpec
 from entropy.solvers.liquid import _sorting_kernels as _k
 from entropy.solvers.liquid.particles import LiquidParticles
 
+SUBDIVISION = 2
+"""Each cell's side is split in this many: the sort's key is the half-cell."""
+
 
 class CellSort:
-    """Sorts up to `capacity` particles by cell on one device; its key arrays are made
-    once (a radix sort needs twice the length as scratch)."""
+    """Sorts up to `capacity` particles by half-cell on one device; its key arrays are
+    made once (a radix sort needs twice the length as scratch)."""
 
     def __init__(self, spec: GridSpec, *, capacity: int, device: str) -> None:
         if capacity < 0:
@@ -34,9 +40,18 @@ class CellSort:
         self._order = wp.zeros(2 * max(capacity, 1), dtype=wp.int32, device=device)  # pyright: ignore[reportArgumentType]
 
     def sort(self, particles: LiquidParticles, out: LiquidParticles) -> None:
-        """Write `particles` into `out` in cell order. `out` holds at least as many and is
-        other arrays: the sort gathers, it does not move particles in place."""
+        """Write `particles` into `out` in half-cell order. `out` holds at least as many and
+        is other arrays: the sort gathers, it does not move particles in place."""
         n = particles.count
+        if any(
+            a.ptr == b.ptr and n > 0
+            for a, b in zip(
+                (particles.position_m, particles.velocity_m_per_s, particles.affine_per_s),
+                (out.position_m, out.velocity_m_per_s, out.affine_per_s),
+                strict=True,
+            )
+        ):
+            raise ValueError("out must be other arrays than particles: the sort gathers")
         if n > self.capacity:
             raise ValueError(f"{n} particles, more than the sort's capacity of {self.capacity}")
         if out.count < n:
@@ -50,8 +65,8 @@ class CellSort:
             inputs=[
                 particles.position_m,
                 wp.vec3(*spec.origin_m),
-                spec.dx_m,
-                wp.vec3i(*spec.shape),
+                spec.dx_m / SUBDIVISION,
+                wp.vec3i(*(SUBDIVISION * n for n in spec.shape)),
                 self._keys,
                 self._order,
             ],

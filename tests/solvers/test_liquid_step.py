@@ -86,12 +86,19 @@ def _surface_heights(liquid: LiquidSolver, columns: slice = slice(1, -1)) -> np.
     return z[k] + DX_M * lo / (lo - hi)
 
 
+def _half_cell_keys(positions_m: np.ndarray, shape: tuple[int, int, int]) -> np.ndarray:
+    """The x-major index of each position's half-cell (cells split in two along each
+    axis), for grids at the origin (ADR 0025)."""
+    halves = 2 * np.array(shape)
+    cells = np.clip(np.floor(positions_m / (DX_M / 2)).astype(int), 0, halves - 1)
+    return (cells[:, 0] * halves[1] + cells[:, 1]) * halves[2] + cells[:, 2]
+
+
 def _in_cell_order(positions_m: np.ndarray, shape: tuple[int, int, int]) -> np.ndarray:
-    """`positions_m` in the order the liquid keeps its particles (#65): by cell, x-major,
-    stable. Water that stays in its cells keeps this order frame after frame."""
-    cells = np.clip(np.floor(positions_m / DX_M).astype(int), 0, np.array(shape) - 1)
-    keys = (cells[:, 0] * shape[1] + cells[:, 1]) * shape[2] + cells[:, 2]
-    return positions_m[np.argsort(keys, kind="stable")]
+    """`positions_m` in the order the liquid keeps its particles (#65): by half-cell,
+    x-major, stable. Water that stays in its half-cells keeps this order frame after
+    frame."""
+    return positions_m[np.argsort(_half_cell_keys(positions_m, shape), kind="stable")]
 
 
 def test_still_water_stays_still(device: str) -> None:
@@ -630,23 +637,27 @@ def test_a_particle_stands_for_a_cell_over_its_particles() -> None:
     assert setup.particle_volume_m3 == pytest.approx(DX_M**3 / 8)
 
 
-def test_each_frame_starts_with_the_particles_sorted_by_cell(device: str) -> None:
-    """#65: the liquid sorts its particles by cell (x-major) as each frame starts, so the
-    transfers read and write the grid in order. Still water on a lattice keeps its cells
-    through the frame, so the order is still there after it."""
+def test_each_frame_starts_with_the_particles_sorted_by_half_cell(device: str) -> None:
+    """#65, ADR 0025: the liquid sorts its particles by half-cell (x-major) as each frame
+    starts, so the transfers read and write the grid in order. Still water on a lattice
+    keeps its half-cells through a frame, so the order is still there after it. Shuffled
+    again between frames, it is sorted again at the next one."""
     shape = (12, 10, 16)
     liquid = LiquidSolver.create(_setup(shape), device)
     points = fill_box((0.0, 0.0, 0.0), (0.75, 0.625, 0.5), DX_M, 8, seed=26, jitter=0.0)
-    liquid.add_particles(points[np.random.default_rng(3).permutation(len(points))])
+    rng = np.random.default_rng(3)
+    liquid.add_particles(points[rng.permutation(len(points))])
 
-    liquid.step(1.0 / 60.0)
-
-    cells = np.clip(
-        np.floor(liquid.particle_positions() / DX_M).astype(int), 0, np.array(shape) - 1
-    )
-    keys = (cells[:, 0] * shape[1] + cells[:, 1]) * shape[2] + cells[:, 2]
-    assert np.all(np.diff(keys) >= 0)
-    assert len(keys) == len(points)
+    for _ in range(3):
+        liquid.step(1.0 / 60.0)
+        positions = liquid.particle_positions()
+        assert np.all(np.diff(_half_cell_keys(positions, shape)) >= 0)
+        assert len(positions) == len(points)
+        shuffled = liquid.checkpoint()
+        order = rng.permutation(len(points))
+        for name in ("positions_m", "velocities_m_per_s", "affine_per_s"):
+            shuffled[name] = shuffled[name][order]
+        liquid.restore(shuffled)
 
 
 def test_the_grid_holds_at_most_its_volume_of_water(device: str) -> None:

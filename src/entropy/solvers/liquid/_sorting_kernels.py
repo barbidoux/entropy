@@ -27,8 +27,9 @@ def cell_keys(
     keys: wp.array(dtype=wp.int32),
     order: wp.array(dtype=wp.int32),
 ):
-    """keys[t] = the x-major index of particle t's cell (0 if its position is not finite:
-    the NaN guard still sees it), order[t] = t."""
+    """keys[t] = the x-major index of particle t's bin, bins of `dx_m` on a grid of
+    `shape` (the sort passes half-cells; 0 if the position is not finite: the NaN guard
+    still sees it), order[t] = t."""
     t = wp.tid()
     p = positions_m[t]
     key = wp.int32(0)  # a variable the branch below may change

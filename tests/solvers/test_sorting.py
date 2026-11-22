@@ -1,4 +1,4 @@
-"""Liquid particles sorted by cell (`entropy.solvers.liquid.sorting`, #65)."""
+"""Liquid particles sorted by half-cell (`entropy.solvers.liquid.sorting`, #65, ADR 0025)."""
 
 import numpy as np
 import pytest
@@ -12,10 +12,15 @@ SPEC = GridSpec(shape=(6, 5, 4), dx_m=0.25, origin_m=(-1.0, 0.5, 0.0))
 
 
 def _keys(positions_m: np.ndarray) -> np.ndarray:
-    """x-major cell index, cells clamped to the grid."""
-    g = np.floor((positions_m - np.asarray(SPEC.origin_m)) / SPEC.dx_m).astype(np.int64)
-    g = np.clip(g, 0, np.asarray(SPEC.shape) - 1)
-    return (g[:, 0] * SPEC.shape[1] + g[:, 1]) * SPEC.shape[2] + g[:, 2]
+    """x-major index of the half-cell (cells split in two along each axis), clamped to
+    the grid; 0 for a position that is not finite."""
+    shape = 2 * np.asarray(SPEC.shape)
+    with np.errstate(invalid="ignore", over="ignore"):
+        g = (positions_m - np.asarray(SPEC.origin_m)) / (SPEC.dx_m / 2)
+        g = np.clip(np.nan_to_num(g, nan=0.0, posinf=1e9, neginf=-1e9), -1.0, shape)
+    g = np.clip(np.floor(g).astype(np.int64), 0, shape - 1)
+    keys = (g[:, 0] * shape[1] + g[:, 1]) * shape[2] + g[:, 2]
+    return np.where(np.isfinite(positions_m).all(axis=1), keys, 0)
 
 
 def _particles(positions_m: np.ndarray, device: str) -> LiquidParticles:
@@ -32,7 +37,7 @@ def _empty(n: int, device: str) -> LiquidParticles:
     return LiquidParticles.from_numpy(np.zeros((n, 3)), device=device)
 
 
-def test_particles_come_out_in_cell_order_with_their_own_velocity_and_affine(
+def test_particles_come_out_in_half_cell_order_with_their_own_velocity_and_affine(
     device: str,
 ) -> None:
     rng = np.random.default_rng(1)
@@ -51,31 +56,43 @@ def test_particles_come_out_in_cell_order_with_their_own_velocity_and_affine(
     np.testing.assert_allclose(np.diagonal(affine, axis1=1, axis2=2), x, rtol=1e-6)
 
 
-def test_particles_that_share_a_cell_keep_their_order(device: str) -> None:
+def test_particles_that_share_a_half_cell_keep_their_order(device: str) -> None:
     """A stable sort: still water's order does not churn from frame to frame."""
-    centre = np.asarray(SPEC.origin_m) + 0.25 * np.array([2.5, 1.5, 0.5])
-    same_cell = centre + np.linspace(-0.1, 0.1, 9)[:, None] * np.array([1.0, 0.0, 0.0])
+    centre = np.asarray(SPEC.origin_m) + 0.25 * np.array([2.25, 1.25, 0.25])  # a half-cell
+    same = centre + np.linspace(-0.03, 0.03, 9)[:, None] * np.array([1.0, 0.0, 0.0])
     other = centre - np.array([0.5, 0.0, 0.0])
-    positions = np.vstack([same_cell[:4], other, same_cell[4:]])
+    positions = np.vstack([same[:4], other, same[4:]])
     sort = CellSort(SPEC, capacity=10, device=device)
     out = _empty(10, device)
 
     sort.sort(_particles(positions, device), out)
 
-    expected = np.vstack([other, same_cell]).astype(np.float32)
+    expected = np.vstack([other, same]).astype(np.float32)
     np.testing.assert_array_equal(out.position_m.numpy(), expected)
 
 
-def test_particles_outside_the_grid_sort_with_the_nearest_cell(device: str) -> None:
-    inside = np.asarray(SPEC.origin_m) + 0.25 * np.array([[0.5, 0.5, 0.5], [5.5, 4.5, 3.5]])
-    outside = np.asarray(SPEC.origin_m) + np.array([[-3.0, -1.0, -0.5], [9.0, 9.0, 9.0]])
-    positions = np.vstack([inside[1], outside[0], inside[0], outside[1]])
-    sort = CellSort(SPEC, capacity=4, device=device)
-    out = _empty(4, device)
+def test_particles_outside_the_grid_sort_with_the_nearest_half_cell(device: str) -> None:
+    """Out of range on one axis, on mixed axes (x low, y high), or by 1e30 m: each axis is
+    clamped to the grid on its own, the same on CPU and CUDA."""
+    origin = np.asarray(SPEC.origin_m)
+    positions = origin + np.array(
+        [
+            [1.4, 1.1, 0.9],
+            [-3.0, -1.0, -0.5],
+            [0.06, 0.06, 0.06],
+            [-0.5, 9.0, 0.5],
+            [9.0, -0.5, 0.5],
+            [1e30, 0.3, 0.3],
+            [-1e30, 0.3, -1e30],
+            [0.3, 1e30, 0.3],
+        ]
+    )
+    sort = CellSort(SPEC, capacity=len(positions), device=device)
+    out = _empty(len(positions), device)
 
     sort.sort(_particles(positions, device), out)
 
-    expected = np.vstack([outside[0], inside[0], inside[1], outside[1]]).astype(np.float32)
+    expected = positions[np.argsort(_keys(positions), kind="stable")].astype(np.float32)
     np.testing.assert_array_equal(out.position_m.numpy(), expected)
 
 
@@ -101,6 +118,14 @@ def test_the_sort_refuses_more_particles_than_it_was_made_for() -> None:
     sort = CellSort(SPEC, capacity=2, device="cpu")
     with pytest.raises(ValueError, match="capacity"):
         sort.sort(_particles(np.zeros((3, 3)), "cpu"), _empty(3, "cpu"))
+
+
+def test_the_sort_refuses_to_gather_into_its_own_input() -> None:
+    """A gather in place would read what it already overwrote (#75's review)."""
+    sort = CellSort(SPEC, capacity=4, device="cpu")
+    particles = _particles(np.zeros((3, 3)), "cpu")
+    with pytest.raises(ValueError, match="other arrays"):
+        sort.sort(particles, particles)
 
 
 def test_no_particles_is_nothing_to_sort(device: str) -> None:
