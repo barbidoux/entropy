@@ -12,7 +12,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
     the frame rate held in 90 % of the frames, the world's speed and every stage's GPU
     time; it fails on a frozen world or a hose that does not pour. Official on the
     laptop: dam break p10 58.7 fps twice; hose p10 35.0 fps, then 29.8 fps once the GPU
-    was heat-soaked (the hose part sits at the limit);
+    was heat-soaked (the hose part sits at the limit; Matt accepted the gate with it,
+    #81 brings it down before M3);
   - `-m soak` M1 soak: 10 minutes of random tool use, time controls and checkpoints in
     the Test Tank, the NaN guard checked every frame, no leak or crash, and V-LIQ-02's
     volume criteria on the settled water every 30 s, at 1x (ADR 0028);
