@@ -20,6 +20,7 @@ from entropy.render.context import GameWindow
 from entropy.render.interop import SharedBuffer
 from entropy.render.world_frame import WorldFrame
 from entropy.solvers.liquid.solver import fill_box
+from entropy.solvers.rigid import Body, RigidSetup, RigidSolver, Shape
 from entropy.world.maps import load_map
 from entropy.world.materials import load_material
 from entropy.world.world import build_world
@@ -139,10 +140,8 @@ def test_the_frame_draws_the_glass(window: GameWindow, monkeypatch: pytest.Monke
 
 
 def test_the_frame_draws_the_rigid_bodies_with_the_solids(window: GameWindow) -> None:
-    """A crate in the tank shows in the final image, under the water and the glass like
-    any solid (#91)."""
-    from entropy.solvers.rigid import Body, RigidSetup, RigidSolver, Shape
-
+    """A crate in the tank shows in the final image, drawn into the solids' target that
+    the water and the glass are drawn over (#91)."""
     world = build_world(load_map(content_dir() / "maps" / "test_tank"))
     eye = (5.0, -1.0, 1.5)
     forward = np.subtract((0.0, 0.0, 0.6), eye)
@@ -165,10 +164,13 @@ def test_the_frame_draws_the_rigid_bodies_with_the_solids(window: GameWindow) ->
         )
         try:
             assert frame.bodies is not None
+            solids = []
             for count in (0, 1):
                 frame.bodies.update(solver.fields(), count, colours)
                 frame.render(screen, view, SIZE, count=0)
                 images.append(np.frombuffer(screen.read(components=3), dtype=np.uint8))
+                target = frame._hdr(SIZE)[0]  # the solids, which the water is drawn over
+                solids.append(np.frombuffer(target.colour.read(), dtype=np.float16))
         finally:
             frame.release()
             screen.release()
@@ -178,3 +180,5 @@ def test_the_frame_draws_the_rigid_bodies_with_the_solids(window: GameWindow) ->
     # A 0.8 m cube 5.3 m away under a 60° field of view: about 1.3 % of the image for its
     # front face, more with its top and side (measured 1.8 %).
     assert changed.mean() > 0.01
+    in_solids = np.abs(solids[1].astype(np.float32) - solids[0].astype(np.float32)) > 1e-3
+    assert in_solids.reshape(-1, 4).any(axis=1).mean() > 0.01

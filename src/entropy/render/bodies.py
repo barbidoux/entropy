@@ -2,10 +2,18 @@
 
 The bodies are drawn after the scene's sky, ground and static boxes, into the same
 target and depth, with the same lighting (`scene.LIGHTING_GLSL`): a body box looks like
-a static box. Each frame a kernel writes one instance per body into a buffer shared
-with OpenGL (`SharedBuffer`, zero copy on CUDA) from the solver's arrays: its position,
-orientation (unit quaternion, body to world), shape, size and albedo. The renderer
-reads the solver's arrays and never writes them (SPEC 8.1).
+a static box. The renderer reads the solver's arrays and never writes them (SPEC 8.1).
+
+Each frame, two kernels fill buffers shared with OpenGL (`SharedBuffer`, zero copy on
+CUDA), with no read-back:
+- one indirect draw command per mesh (glDrawArraysIndirect, padded to the 20 bytes
+  moderngl reads), its instance count at 0;
+- one instance per body, in its shape's range of the instance buffer (shape times capacity
+  onwards), at a slot taken by an atomic count in that shape's command: its position,
+  orientation (unit quaternion, body to world), size and albedo.
+Then each mesh is drawn once, over its own shape's instances only. The order of the
+bodies within a shape varies from frame to frame; with the depth test, the image does
+not.
 
 Meshes, in the body's frame:
 - box: a cube with its face normals, scaled by the half sizes;
@@ -13,12 +21,10 @@ Meshes, in the body's frame:
 - capsule: the same sphere split at its equator, the halves moved ±h along z and joined
   by a cylinder, scaled by the radius.
 
-Simplifications, named (CLAUDE.md rule 7):
-- every mesh is drawn for every body, and a body keeps only its shape's: the others
-  are clipped in the vertex shader. Three draws of all bodies, the vertex work three
-  times over (about 900 vertices a body), instead of sorting the bodies by shape;
-- spheres and capsules are faceted: 24 slices make a silhouette at most 0.9 % of the
-  radius inside the true one.
+Simplification, named (CLAUDE.md rule 7): spheres and capsules are faceted; with 24
+slices and 16 stacks their surface is at most 1.3 % of the radius inside the true one.
+
+The bodies' arrays and the albedo must be on the device the renderer was made for.
 """
 
 from __future__ import annotations
@@ -26,12 +32,13 @@ from __future__ import annotations
 import itertools
 import math
 from collections.abc import Mapping
+from contextlib import ExitStack
 
 import moderngl
 import numpy as np
 import warp as wp
 
-from entropy.render._body_kernels import write_instances
+from entropy.render._body_kernels import COMMAND_INTS, reset_commands, write_instances
 from entropy.render.camera import CameraView, gl_bytes
 from entropy.render.interop import SharedBuffer
 from entropy.render.scene import (
@@ -44,19 +51,26 @@ from entropy.render.scene import (
 from entropy.solvers.rigid import Shape
 
 ROWS_PER_BODY = 4
-"""vec4s of instance data per body: position and shape, orientation, size, albedo."""
+"""vec4s of instance data per body: position, orientation, size, albedo."""
+MESH_SHAPES = (Shape.BOX, Shape.SPHERE, Shape.CAPSULE)
+"""The shape each mesh draws, in the order of the draw commands; every `Shape` has one."""
 SPHERE_STACKS = 16
 SPHERE_SLICES = 24
 
 
-_VERTEX = """
+_VERTEX = (
+    f"""
 #version 450 core
+#define SHAPE_BOX {int(Shape.BOX)}
+#define SHAPE_SPHERE {int(Shape.SPHERE)}
+"""
+    + """
 uniform mat4 view_projection;
 uniform int mesh_shape;
 in vec3 local;
 in vec3 normal;
 in float side;
-in vec4 position_shape;
+in vec4 position_m;
 in vec4 orientation;
 in vec4 size;
 in vec4 albedo_in;
@@ -67,25 +81,20 @@ vec3 rotate(vec4 q, vec3 v) {
     return v + q.w * t + cross(q.xyz, t);
 }
 void main() {
-    if (int(position_shape.w + 0.5) != mesh_shape) {
-        gl_Position = vec4(0.0, 0.0, 2.0, 1.0);  // clipped: another shape's mesh
-        world_normal = vec3(0.0);
-        albedo = vec3(0.0);
-        return;
-    }
     vec3 p;
-    if (mesh_shape == 0) {
+    if (mesh_shape == SHAPE_BOX) {
         p = local * size.xyz;
-    } else if (mesh_shape == 1) {
+    } else if (mesh_shape == SHAPE_SPHERE) {
         p = local * size.x;
     } else {
         p = local * size.x + vec3(0.0, 0.0, side * size.y);
     }
     world_normal = rotate(orientation, normal);
     albedo = albedo_in.rgb;
-    gl_Position = view_projection * vec4(position_shape.xyz + rotate(orientation, p), 1.0);
+    gl_Position = view_projection * vec4(position_m.xyz + rotate(orientation, p), 1.0);
 }
 """
+)
 
 _FRAGMENT = (
     "#version 450 core\n"
@@ -149,36 +158,54 @@ class BodyRenderer:
     """Draws up to `capacity` rigid bodies into a target that already holds the scene."""
 
     def __init__(self, ctx: moderngl.Context, capacity: int, device: str) -> None:
+        if set(MESH_SHAPES) != set(Shape):
+            raise RuntimeError("every rigid shape needs a mesh")  # a new Shape, unseen
         self.ctx = ctx
         self.capacity = capacity
         self.count = 0
-        self.instances = SharedBuffer(ctx, capacity * ROWS_PER_BODY, wp.vec4, device)
-        self._program = ctx.program(vertex_shader=_VERTEX, fragment_shader=_FRAGMENT)
-        self._program["sun_direction"].value = SUN_DIRECTION  # type: ignore[union-attr]
-        self._program["sun_irradiance"].value = SUN_IRRADIANCE  # type: ignore[union-attr]
-        self._program["sky_irradiance"].value = SKY_IRRADIANCE  # type: ignore[union-attr]
-        self._meshes = []
-        for shape, mesh in (
-            (Shape.BOX, box_mesh()),
-            (Shape.SPHERE, round_mesh(capsule=False)),
-            (Shape.CAPSULE, round_mesh(capsule=True)),
-        ):
-            buffer = ctx.buffer(mesh.tobytes())
-            vao = ctx.vertex_array(
-                self._program,
-                [
-                    (buffer, "3f 3f 1f", "local", "normal", "side"),
-                    (
-                        self.instances.buffer,
-                        "4f 4f 4f 4f/i",
-                        "position_shape",
-                        "orientation",
-                        "size",
-                        "albedo_in",
-                    ),
-                ],
+        meshes = {
+            Shape.BOX: box_mesh(),
+            Shape.SPHERE: round_mesh(capsule=False),
+            Shape.CAPSULE: round_mesh(capsule=True),
+        }
+        self._vertex_counts = wp.array(
+            np.array([len(meshes[shape]) for shape in MESH_SHAPES], np.int32),
+            dtype=wp.int32,
+            device=device,
+        )
+        with ExitStack() as made:
+            self.instances = SharedBuffer(
+                ctx, len(MESH_SHAPES) * capacity * ROWS_PER_BODY, wp.vec4, device
             )
-            self._meshes.append((int(shape), len(mesh), buffer, vao))
+            made.callback(self.instances.release)
+            self.commands = SharedBuffer(ctx, COMMAND_INTS * len(MESH_SHAPES), wp.int32, device)
+            made.callback(self.commands.release)
+            self._program = ctx.program(vertex_shader=_VERTEX, fragment_shader=_FRAGMENT)
+            made.callback(self._program.release)
+            self._program["sun_direction"].value = SUN_DIRECTION  # type: ignore[union-attr]
+            self._program["sun_irradiance"].value = SUN_IRRADIANCE  # type: ignore[union-attr]
+            self._program["sky_irradiance"].value = SKY_IRRADIANCE  # type: ignore[union-attr]
+            self._meshes = []
+            for shape in MESH_SHAPES:
+                buffer = ctx.buffer(meshes[shape].tobytes())
+                made.callback(buffer.release)
+                vao = ctx.vertex_array(
+                    self._program,
+                    [
+                        (buffer, "3f 3f 1f", "local", "normal", "side"),
+                        (
+                            self.instances.buffer,
+                            "4f 4f 4f 4f/i",
+                            "position_m",
+                            "orientation",
+                            "size",
+                            "albedo_in",
+                        ),
+                    ],
+                )
+                made.callback(vao.release)
+                self._meshes.append((int(shape), buffer, vao))
+            made.pop_all()
 
     def update(
         self, fields: Mapping[str, wp.array], count: int, albedo_linear_rgb: wp.array
@@ -187,46 +214,58 @@ class BodyRenderer:
         `fields()`, and their linear albedo (one vec3 per body)."""
         if not 0 <= count <= self.capacity:
             raise ValueError(f"count must be between 0 and {self.capacity}, got {count}")
+        names = ("positions_m", "orientations", "shapes", "sizes_m")
+        for name, array in (*((n, fields[n]) for n in names), ("albedo", albedo_linear_rgb)):
+            if array.shape[0] < count:
+                raise ValueError(f"{name} holds {array.shape[0]} values, fewer than {count}")
         self.count = count
-        if not count:
-            return
-        with self.instances.writable(count * ROWS_PER_BODY) as out:
+        with self.commands.writable() as commands, self.instances.writable() as out:
             wp.launch(
-                write_instances,
-                dim=count,
-                inputs=[
-                    fields["positions_m"],
-                    fields["orientations"],
-                    fields["shapes"],
-                    fields["sizes_m"],
-                    albedo_linear_rgb,
-                    out,
-                ],
+                reset_commands,
+                dim=len(MESH_SHAPES),
+                inputs=[self._vertex_counts, self.capacity, commands],
                 device=out.device,
             )
+            if count:
+                wp.launch(
+                    write_instances,
+                    dim=count,
+                    inputs=[
+                        *(fields[name] for name in names),
+                        albedo_linear_rgb,
+                        len(MESH_SHAPES),
+                        self.capacity,
+                        commands,
+                        out,
+                    ],
+                    device=out.device,
+                )
 
     def render(
         self, target: moderngl.Framebuffer, view: CameraView, size_px: tuple[int, int]
     ) -> None:
-        """Draw the bodies over what `target` holds, depth-tested against it."""
+        """Draw the bodies over what `target` holds, depth-tested against it and writing
+        their depth."""
         width, height = size_px
         if not self.count or width <= 0 or height <= 0:
             return
         ctx = self.ctx
         target.use()
+        ctx.viewport = (0, 0, width, height)  # moderngl keeps the screen's first size
         projection = view.projection(width / height).astype(np.float64)
         self._program["view_projection"].write(  # type: ignore[union-attr]
             gl_bytes(projection @ view.view().astype(np.float64))
         )
         ctx.enable(moderngl.DEPTH_TEST | moderngl.CULL_FACE)
-        for shape, vertices, _, vao in self._meshes:
+        for index, (shape, _, vao) in enumerate(self._meshes):
             self._program["mesh_shape"].value = shape  # type: ignore[union-attr]
-            vao.render(moderngl.TRIANGLES, vertices=vertices, instances=self.count)
+            vao.render_indirect(self.commands.buffer, moderngl.TRIANGLES, count=1, first=index)
         ctx.disable(moderngl.DEPTH_TEST | moderngl.CULL_FACE)
 
     def release(self) -> None:
-        for _, _, buffer, vao in self._meshes:
+        for _, buffer, vao in self._meshes:
             vao.release()
             buffer.release()
         self._program.release()
+        self.commands.release()
         self.instances.release()

@@ -51,7 +51,8 @@ class WorldFrame:
         body_capacity: int = 0,
     ) -> None:
         """`body_capacity` rigid bodies can be drawn (`bodies`, updated by the caller each
-        frame from the rigid solver); none when 0."""
+        frame from the rigid solver); none when 0. They are drawn on the particles'
+        device, so the rigid solver must run on the liquid's."""
         self.ctx = ctx
         self.bodies: BodyRenderer | None = None
         self._targets: tuple[HdrTarget, HdrTarget] | None = None
@@ -102,7 +103,8 @@ class WorldFrame:
         solids, water = self._hdr(size_px)
         with stage("scene (OpenGL)"):
             self.scene.render(solids.framebuffer, view, size_px)
-            if self.bodies is not None:
+        if self.bodies is not None:
+            with stage("bodies (OpenGL)"):
                 self.bodies.render(solids.framebuffer, view, size_px)
         with stage("liquid (OpenGL)"):
             self.liquid.render(water, solids, view, count=count)

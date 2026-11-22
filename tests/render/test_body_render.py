@@ -13,7 +13,13 @@ from entropy.render.camera import CameraView
 from entropy.render.context import GameWindow
 from entropy.render.frame import HdrTarget
 from entropy.render.interop import InteropMode
-from entropy.render.scene import SceneBox, SceneRenderer
+from entropy.render.scene import (
+    SKY_IRRADIANCE,
+    SUN_DIRECTION,
+    SUN_IRRADIANCE,
+    SceneBox,
+    SceneRenderer,
+)
 from entropy.solvers.rigid import Body, RigidSetup, RigidSolver, Shape
 
 pytestmark = pytest.mark.render
@@ -40,30 +46,42 @@ def _read(target: HdrTarget) -> np.ndarray:
     return colour.reshape(height, width, 4)[::-1, :, :3]
 
 
-def _draw(
+def _render(
     window: GameWindow,
     view: CameraView,
     bodies: list[Body] = (),  # type: ignore[assignment]
     boxes: tuple[SceneBox, ...] = (),
     albedo=RED,
-) -> np.ndarray:
-    """The scene (ground and `boxes`), then `bodies` over it, read back as linear RGB."""
+) -> tuple[np.ndarray, np.ndarray]:
+    """The scene (ground and `boxes`), then `bodies` over it: linear RGB and window
+    depth, rows from the top. `albedo` is one colour for all, or one per body."""
     ctx = window.ctx
     target = HdrTarget(ctx, SIZE)
     solver = RigidSolver.create(RigidSetup(gravity_m_per_s2=(0.0, 0.0, -9.81), max_bodies=8), "cpu")
     solver.add_bodies(list(bodies))
     scene = SceneRenderer(ctx, boxes, ground_z_m=-50.0)
     renderer = BodyRenderer(ctx, capacity=8, device="cpu")
-    colours = wp.array(np.tile(albedo, (8, 1)).astype(np.float32), dtype=wp.vec3, device="cpu")
+    rows = np.zeros((8, 3), np.float32)
+    if np.ndim(albedo) == 1:
+        rows[:] = albedo
+    else:
+        rows[: len(albedo)] = albedo
+    colours = wp.array(rows, dtype=wp.vec3, device="cpu")
     try:
         scene.render(target.framebuffer, view, SIZE)
         renderer.update(solver.fields(), solver.body_count(), colours)
         renderer.render(target.framebuffer, view, SIZE)
-        return _read(target)
+        width, height = SIZE
+        depth = np.frombuffer(target.depth.read(), dtype=np.float32).reshape(height, width)
+        return _read(target), depth[::-1]
     finally:
         renderer.release()
         scene.release()
         target.release()
+
+
+def _draw(window: GameWindow, view: CameraView, bodies=(), boxes=(), albedo=RED) -> np.ndarray:
+    return _render(window, view, list(bodies), boxes, albedo)[0]
 
 
 def _quat(axis, angle_rad: float) -> tuple[float, float, float, float]:
@@ -148,18 +166,91 @@ def test_a_capsule_is_as_long_as_its_cylinder_and_caps(window: GameWindow) -> No
         assert covered[_pixel(SIDE, point)] == inside, point
 
 
-def test_each_body_draws_only_its_own_shape(window: GameWindow) -> None:
-    """Every mesh is drawn for every body and a body keeps only its shape's: a sphere
-    whose unused sizes would make a large box or a long capsule stays a disc, and a box
-    keeps its corners."""
+def test_each_body_draws_only_its_own_shape_and_colour(window: GameWindow) -> None:
+    """A body keeps only its shape's mesh and its own albedo: a sphere whose unused sizes
+    would make a large box or a long capsule stays a disc, a box keeps its corners, and
+    each shows its colour."""
     sphere = Body(Shape.SPHERE, (0.2, 0.5, 0.5), 500.0, position_m=(0.0, -1.0, 0.0))
     box = Body(Shape.BOX, (0.3, 0.3, 0.3), 500.0, position_m=(0.0, 1.0, 0.0))
-    covered = _covered(window, SIDE, [sphere, box])
+    green = (0.1, 0.6, 0.1)
+    image = _draw(window, SIDE, [sphere, box], albedo=[RED, green])
+    covered = np.abs(image - _draw(window, SIDE)).max(axis=-1) > 1e-3
 
     assert covered[_pixel(SIDE, (0.0, -1.0, 0.0))]
     assert not covered[_pixel(SIDE, (0.0, -1.0, 0.4))]  # a capsule's end
     assert not covered[_pixel(SIDE, (0.0, -0.6, 0.0))]  # a box's side
     assert covered[_pixel(SIDE, (0.0, 1.25, 0.25))]  # a box's corner, outside its sphere
+    red_pixel, green_pixel = image[_pixel(SIDE, (0, -1, 0))], image[_pixel(SIDE, (0, 1, 0))]
+    assert red_pixel[0] > 3 * red_pixel[1]
+    assert green_pixel[1] > 3 * green_pixel[0]
+
+
+def test_bodies_of_mixed_shapes_in_any_order_are_all_drawn(window: GameWindow) -> None:
+    """The bodies are sorted by shape for drawing: every one is drawn, whatever its place
+    among the others."""
+    shapes = [Shape.SPHERE, Shape.BOX, Shape.CAPSULE, Shape.SPHERE, Shape.BOX, Shape.CAPSULE]
+    sizes = {
+        Shape.SPHERE: (0.15, 0, 0),
+        Shape.BOX: (0.15, 0.15, 0.15),
+        Shape.CAPSULE: (0.1, 0.1, 0),
+    }
+    centres = [(0.0, -1.25 + 0.5 * k, 0.4 * (-1) ** k) for k in range(len(shapes))]
+    bodies = [
+        Body(sh, sizes[sh], 500.0, position_m=c) for sh, c in zip(shapes, centres, strict=True)
+    ]
+    covered = _covered(window, SIDE, bodies)
+
+    for centre in centres:
+        assert covered[_pixel(SIDE, centre)], centre
+
+
+def test_a_body_behind_a_solid_is_hidden_and_a_body_writes_its_depth(window: GameWindow) -> None:
+    """Depth-tested against the scene, and writing its own depth, which the water and the
+    glass read."""
+    wall = SceneBox((1.0, 0.0, 0.0), (0.1, 1.0, 1.0), (0.4, 0.4, 0.4))
+    sphere = Body(Shape.SPHERE, (0.5, 0.0, 0.0), 500.0)
+
+    hidden = _draw(window, SIDE, [sphere], boxes=(wall,))
+    np.testing.assert_array_equal(hidden, _draw(window, SIDE, boxes=(wall,)))
+
+    _, depth = _render(window, SIDE, [sphere])
+    _, empty = _render(window, SIDE)
+    centre = _pixel(SIDE, (0.0, 0.0, 0.0))
+    assert depth[centre] < empty[centre]
+
+
+def test_the_orientation_turns_the_body_into_the_world(window: GameWindow) -> None:
+    """Orientations are body to world: a capsule turned 60 degrees about x lies along
+    q z q* = (0, -0.866, 0.5), not along its mirror (which q* would give)."""
+    capsule = Body(Shape.CAPSULE, (0.1, 0.5, 0.0), 500.0, orientation=_quat((1, 0, 0), math.pi / 3))
+    covered = _covered(window, SIDE, [capsule])
+
+    assert covered[_pixel(SIDE, (0.0, -0.476, 0.275))]
+    assert not covered[_pixel(SIDE, (0.0, -0.476, -0.275))]
+
+
+def test_a_sphere_is_lit_on_its_outside(window: GameWindow) -> None:
+    """The face towards the camera carries the scene's lighting for its normal, here
+    (1, 0, 0): its outside is drawn, not the far inner half."""
+    image = _draw(window, SIDE, [Body(Shape.SPHERE, (0.5, 0.0, 0.0), 500.0)])
+    n = np.array([1.0, 0.0, 0.0])
+    expected = np.asarray(RED) * (
+        np.asarray(SUN_IRRADIANCE) * max(float(n @ np.asarray(SUN_DIRECTION)), 0.0)
+        + np.asarray(SKY_IRRADIANCE) * (0.5 + 0.5 * n[2])
+    )
+    np.testing.assert_allclose(image[_pixel(SIDE, (0.0, 0.0, 0.0))], expected, rtol=0.05)
+
+
+def test_the_renderer_refuses_arrays_shorter_than_its_count(window: GameWindow) -> None:
+    solver = RigidSolver.create(RigidSetup(gravity_m_per_s2=(0.0, 0.0, -9.81), max_bodies=4), "cpu")
+    solver.add_bodies([Body(Shape.SPHERE, (0.2, 0, 0), 500.0)] * 3)
+    renderer = BodyRenderer(window.ctx, capacity=4, device="cpu")
+    try:
+        short = wp.zeros(2, dtype=wp.vec3, device="cpu")
+        with pytest.raises(ValueError, match="albedo"):
+            renderer.update(solver.fields(), 3, short)
+    finally:
+        renderer.release()
 
 
 def test_no_bodies_draw_nothing(window: GameWindow) -> None:
@@ -210,7 +301,6 @@ def test_on_cuda_the_bodies_go_to_opengl_without_a_copy(window: GameWindow) -> N
         assert renderer.instances.mode is InteropMode.ZERO_COPY, renderer.instances.fallback_reason
         scene.render(target.framebuffer, OBLIQUE, SIZE)
         renderer.update(solver.fields(), solver.body_count(), colours)
-        wp.synchronize_device("cuda:0")
         renderer.render(target.framebuffer, OBLIQUE, SIZE)
         image = _read(target)
     finally:
