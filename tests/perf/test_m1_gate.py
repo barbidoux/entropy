@@ -59,7 +59,11 @@ class _AllStats(FrameStats):
         self.gpu_samples.append(dict(stages_s))
 
 
-def _part(loop: FrameLoop, stats: _AllStats, stages: GameStages) -> dict[str, Any]:
+def _part(
+    loop: FrameLoop, stats: _AllStats, stages: GameStages, pose: CameraPose | None = None
+) -> dict[str, Any]:
+    """One part; `pose`, if given, is set before every frame: capturing the mouse can
+    turn the camera by the cursor's first jump."""
     assert stages.liquid is not None
     first_gpu = len(stats.gpu_samples)
     frame_ms, substeps, iterations = [], [], []
@@ -69,6 +73,8 @@ def _part(loop: FrameLoop, stats: _AllStats, stages: GameStages) -> dict[str, An
         if index == SKIP:
             first_gpu = len(stats.gpu_samples)  # the timers record one sample per stage
             before = stages.liquid.diagnostics()
+        if pose is not None:
+            stages.mode.pose = pose
         report = loop.run_frame()
         simulated_s += report.advance_s
         if index >= SKIP:
@@ -131,10 +137,10 @@ def test_one_million_particles_at_30_fps_or_more(bench_session: BenchSession) ->
             # The hose (tool 1, the default), held from above the rim, aimed into the tank,
             # through the game's own input: a click captures the mouse, then the left
             # button is pressed and never released.
-            stages.mode.pose = CameraPose((0.0, -2.6, 3.2), math.radians(90.0), math.radians(-50.0))
+            above_the_rim = CameraPose((0.0, -2.6, 3.2), math.radians(90.0), math.radians(-50.0))
             stages.mode.on_mouse_button(pressed=True)
             stages.mode.input.on_mouse_button(glfw.MOUSE_BUTTON_LEFT, glfw.PRESS)
-            hose = _part(loop, stats, stages)
+            hose = _part(loop, stats, stages, above_the_rim)
             frozen = stages.simulation.frozen_by
             hose_tool = stages.toolbox.current
             flow_m3_per_s = hose_tool.values["flow_l_per_s"] * 1e-3
