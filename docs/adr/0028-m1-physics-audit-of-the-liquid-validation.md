@@ -35,7 +35,7 @@ about what they say and what they cover:
 - **V-LIQ-01 could not tell θ per face from θ = 1/2.** Water 1 m deep puts the surface
   on a face. It also tested only the projection with the surface given. Through the full
   step, with the game's seeding, the particles' surface sits about a millimetre off 1 m,
-  so the top layer's small pressure is off by more than 2 %. The auditor's probe (12 ×
+  so the top layer's small pressure can be off by more than 2 %. The auditor's probe (12 ×
   12 × 24 cells) read −2.35 % to +0.3 % there; the test's own 8 × 8 × 24 cells with
   seed 3 read 1.81 % at most (5.6 Pa), 0.35 % below the top layer, and a surface −1.19
   to +1.02 mm off. Seeds 1, 2, 4, 5 and 6 read 1.1 % to 2.4 % in the top layer.
@@ -68,7 +68,7 @@ about what they say and what they cover:
     auditor and checked against the scan by the maintainer.
   - The window starts after τ = 0, where H = 1 by construction, and ends at τ = 2.21,
     the last mean within the dam break the front's test already runs (T = 3.2).
-  - Why 6 %: the worst point reads −4.06 % (seed 10) and −4.06 % to −4.22 % over seeds 1
+  - Why 6 %: the worst point reads −4.06 % (seed 10) and −4.11 % to −4.22 % over seeds 1
     to 5; the paper's two records differ by 3 % or less in H over the window. Gravity
     × 1.1 fails by 2.3 points or more, gravity × 0.9 by 0.9 point at 16 cells and 1.0
     at 32: a thin margin on the low side.
@@ -97,6 +97,14 @@ about what they say and what they cover:
   and 0.64 %. The volume correction steers by the same measure, so the soak checks that
   the correction holds over 10 minutes of play; the independent measure stays with
   V-LIQ-02's 33 s run.
+  - The first criterion has a thin margin. The share divides by every particle's
+    volume, including the film of particles left above the surface (ADR 0018's named
+    limit, 0.64 % after 75 s) and within the correction's 0.25 % dead band. In the M1
+    gate's official 10-minute soak the shares read 0.9904 to 0.9963 over 19 windows:
+    the first 0.04 point inside the limit, the later ones within +0.6 % of it.
+  - The offset is steady, not water being lost. If the first criterion fails while the
+    later ones hold, the film is looked at first; the criterion stays as V-LIQ-02 has
+    it.
 
 ## Alternatives considered
 
