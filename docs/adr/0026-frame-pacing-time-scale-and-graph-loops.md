@@ -26,7 +26,7 @@ Measured with `tests/perf/test_m1_frame_pacing.py`. The frame loop (60 fps cap,
 ADR 0008) runs in a window with vsync. The laptop drove its primary display: an external
 3840 × 2160 monitor at 60 Hz, through Windows' compositor. The work per frame is either a
 CPU busy-wait or a GPU fragment shader sized to take it (each pass measured with a GL timer
-query, within 1 %), with one longer frame.
+query, within 2 %), with one longer frame.
 
 | Work per frame | One longer frame | Median before | Median after | Longest run over 25 ms after |
 | --- | --- | --- | --- | --- |
@@ -39,8 +39,9 @@ query, within 1 %), with one longer frame.
   not at 33 ms.
 - With GPU work the long frame shows up to three frames later in the loop's times. At 8
   and 15 ms of GPU work it never shows: the frames queued ahead absorb it.
-- With 17.5 ms of GPU work a frame takes 18.5 ms: the compositor's own GPU work adds
-  about 1 ms. The two runs over 25 ms are single frames, apart.
+- With 17.5 ms of GPU work a frame takes 18.5 ms, about 1 ms more than the work. The
+  compositor's own GPU work is the likely cause; it was not measured. The frames over
+  25 ms are isolated, with one pair.
 - **Named limit: judder.** These are the loop's times, not when frames reach the screen.
   At 17.5 ms per frame the compositor repeats about one refresh in 20. Hysteresis would
   trade that judder for a steady 30 fps; the game does not make that trade.
