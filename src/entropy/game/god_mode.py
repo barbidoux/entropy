@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 
 from entropy.core.config import CameraSettings
 from entropy.game.free_camera import CameraPose, fly
-from entropy.game.input import Action, InputState, flight_input
+from entropy.game.input import Action, FrameInput, InputState, flight_input
 
 
 @dataclass
@@ -22,6 +22,8 @@ class GodMode:
     pose: CameraPose
     input: InputState = field(default_factory=InputState)
     hud_visible: bool = True
+    last_frame: FrameInput | None = None
+    """The input of the last update, for the tools."""
 
     @classmethod
     def from_settings(
@@ -43,6 +45,7 @@ class GodMode:
     def update(self, frame_dt_s: float) -> None:
         """Apply this frame's input; `frame_dt_s` is real time (SPEC 4.6)."""
         frame = self.input.take_frame()
+        self.last_frame = frame
         if Action.TOGGLE_HUD in frame.pressed:
             self.hud_visible = not self.hud_visible
         if Action.MENU in frame.pressed:

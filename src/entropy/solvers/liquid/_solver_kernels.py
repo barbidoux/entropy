@@ -164,9 +164,11 @@ def offsets(positions_m: wp.array(dtype=wp.vec3), step_m: float, out: wp.array(d
 
 @wp.kernel
 def copy_totals(totals: wp.array(dtype=wp.float64), out: wp.array(dtype=float)):
-    """out[2:4] = the last substep's water volume (cells) and particles in the water."""
+    """out[2:5] = the last substep's water volume (cells), particles in the water and
+    fluid cells."""
     out[2] = float(totals[0])
     out[3] = float(totals[1])
+    out[4] = float(totals[2])
 
 
 @wp.kernel
@@ -246,16 +248,20 @@ def fluid_volume(
     labels: wp.array3d(dtype=wp.int32),
     dx_m: float,
     slots: wp.array(dtype=wp.float64),
+    cell_slots: wp.array(dtype=wp.float64),
 ):
     """The water's volume in cells: each cell counts clamp(1/2 - phi/dx, 0, 1), its
-    share below the surface when phi is the distance to it (ADR 0018)."""
+    share below the surface when phi is the distance to it (ADR 0018). `cell_slots`
+    counts the fluid cells, for the HUD."""
     i, j, k = wp.tid()
     if labels[i, j, k] == SOLID:
         return
+    slot = ((i * labels.shape[1] + j) * labels.shape[2] + k) % SLOTS
     share = wp.clamp(0.5 - phi_m[i, j, k] / dx_m, 0.0, 1.0)
     if share > 0.0:
-        slot = ((i * labels.shape[1] + j) * labels.shape[2] + k) % SLOTS
         wp.atomic_add(slots, slot, wp.float64(share))
+    if labels[i, j, k] == FLUID:
+        wp.atomic_add(cell_slots, slot, wp.float64(1.0))
 
 
 @wp.kernel
@@ -270,6 +276,7 @@ def count_inside(phi_at: wp.array(dtype=float), slots: wp.array(dtype=wp.float64
 def volume_error(
     volume_slots: wp.array(dtype=wp.float64),
     inside_slots: wp.array(dtype=wp.float64),
+    cell_slots: wp.array(dtype=wp.float64),
     particles_per_cell: float,
     dead_band: float,
     integral_limit_s: float,
@@ -284,11 +291,14 @@ def volume_error(
     dead band)."""
     volume = wp.float64(0.0)
     inside = wp.float64(0.0)
+    cells = wp.float64(0.0)
     for s in range(SLOTS):
         volume = volume + volume_slots[s]
         inside = inside + inside_slots[s]
+        cells = cells + cell_slots[s]
     totals[0] = volume
     totals[1] = inside
+    totals[2] = cells
     volume_cells = volume
     target = inside / wp.float64(particles_per_cell)
     e = wp.float64(0.0)
@@ -344,3 +354,35 @@ def volume_correction(
                 if inside and labels[ii, jj, kk] == AIR:
                     return
     target[i, j, k] = target[i, j, k] + rate_per_s * (density[i, j, k] - 1.0)
+
+
+@wp.kernel
+def outside_sphere(
+    positions_m: wp.array(dtype=wp.vec3),
+    centre_m: wp.vec3,
+    radius_sq_m2: float,
+    keep: wp.array(dtype=wp.int32),
+):
+    """keep = 1 for particles farther than the radius from the centre, 0 within it."""
+    t = wp.tid()
+    keep[t] = wp.where(wp.length_sq(positions_m[t] - centre_m) > radius_sq_m2, 1, 0)
+
+
+@wp.kernel
+def compact(
+    keep: wp.array(dtype=wp.int32),
+    index: wp.array(dtype=wp.int32),
+    positions_m: wp.array(dtype=wp.vec3),
+    velocities: wp.array(dtype=wp.vec3),
+    affine: wp.array(dtype=wp.mat33),
+    positions_out: wp.array(dtype=wp.vec3),
+    velocities_out: wp.array(dtype=wp.vec3),
+    affine_out: wp.array(dtype=wp.mat33),
+):
+    """Kept particles move to their exclusive prefix-sum index, in their order."""
+    t = wp.tid()
+    if keep[t] == 1:
+        i = index[t]
+        positions_out[i] = positions_m[t]
+        velocities_out[i] = velocities[t]
+        affine_out[i] = affine[t]

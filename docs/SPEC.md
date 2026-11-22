@@ -121,8 +121,8 @@ Every tool exposes its parameters in SI units, so the player always knows what i
 | Tool | Effect | Parameters | Milestone |
 | --- | --- | --- | --- |
 | Hose | Water jet | flow 1–50 L/s, nozzle speed 5–30 m/s | M1 |
-| Bucket | Drops a volume of water | 0.01–2 m³ | M1 |
-| Flood source | Inflow that raises the water level | 0.01–5 m³/s | M1 |
+| Bucket | Drops a volume of water: a block, or a dam column against the far wall (right click) | 0.01–2 m³ | M1 |
+| Flood source | Inflow over the tank's whole floor that raises the water level (in M1 the water comes in at the level it stands at, a named simplification) | 0.01–5 m³/s | M1 |
 | Eraser | Removes an object, or liquid or gas in a radius | radius 0.1–5 m | M1 |
 | Spawner | Drops props: crate, barrel, furniture, blocks | prop, material, size | M2 |
 | Grabber | Picks up, carries and throws objects | up to 500 kg | M2 |
@@ -137,6 +137,8 @@ Every tool exposes its parameters in SI units, so the player always knows what i
 | Surge wave | Tsunami-style surge entering the street | height 0.5–8 m | M8 |
 
 Tools are plug-ins: a new tool is one class implementing the tool interface plus one content file for its parameters and icon (section 8).
+
+In M1, water thrown from outside the liquid's grid (the hose, from the camera) flies ballistically, without drag, until it enters the tank over its rim; water that hits the glass below the rim or the ground is lost, since water cannot exist outside the tank yet (ADR 0017, ADR 0020). Sources carry the fraction of a particle they could not release to the next frame, so slow motion loses no water.
 
 ### 4.3 Maps and Build mode
 
@@ -200,7 +202,7 @@ Keys below are positions on a QWERTY keyboard (W A S D is Z Q S D on AZERTY). Ev
 
 - Slow motion advances less simulated time per frame, every frame, and costs less per frame (ADR 0008). Solvers take smaller CFL substeps, so they take more substeps per simulated second; advection and particle–grid transfers lose a little at each, so slow motion is slightly more dissipative (smoke a little blurrier), not identical (ADR 0013).
 - The camera stays free while paused, to inspect a frozen explosion from every side.
-- Checkpoints copy the full simulation state to host memory asynchronously: automatically every 10 s (ring of 6) and on F5.
+- Checkpoints copy the full simulation state to host memory asynchronously: automatically every 10 s (ring of 6), at the start, and on F5. F9 restores the latest; pressing it again goes one further back. They keep in step with the NaN guard (ADR 0024): a checkpoint saved after the last step is checked before it can be restored, F5 does nothing while the world is frozen, and water in flight outside the grid is not saved (a named simplification).
 - A re-run from a checkpoint is not bit-identical on the GPU (section 9.6). Small divergence is expected and harmless.
 - Recording (F10) streams render-relevant state to disk every frame for the Blender export (section 7.4).
 

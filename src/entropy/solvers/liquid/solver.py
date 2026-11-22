@@ -50,6 +50,7 @@ from __future__ import annotations
 
 import math
 import time
+from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
@@ -60,12 +61,12 @@ import warp as wp
 from entropy.core.paths import out_dir
 from entropy.fields.mac import GridSpec, MacVelocity, sample_cells, sample_velocity
 from entropy.solvers.interface import NonFiniteStateError
-
-__all__ = ["LiquidSetup", "LiquidSolver", "NonFiniteStateError", "fill_box", "load_dump"]
 from entropy.solvers.liquid import _solver_kernels as _k
 from entropy.solvers.liquid.particles import LiquidParticles
 from entropy.solvers.liquid.projection import Projection
 from entropy.solvers.liquid.transfer import grid_to_particles, particles_to_grid
+
+__all__ = ["LiquidSetup", "LiquidSolver", "NonFiniteStateError", "fill_box", "load_dump"]
 
 MAX_SUBSTEPS = 4
 """Substep cap per frame (SPEC 5.9, ADR 0013)."""
@@ -143,6 +144,40 @@ def _arrays(particles: LiquidParticles) -> tuple[wp.array, wp.array, wp.array]:
     return particles.position_m, particles.velocity_m_per_s, particles.affine_per_s
 
 
+class PendingCheckpoint:
+    """A copy of the liquid's state on its way to host memory (`checkpoint_async`).
+
+    On CUDA the copies go to pinned memory on the device's stream, and an event marks
+    their end; `result()` waits for it, so only restoring can wait, not taking. The host
+    buffers (`buffers`) can be larger than the state (`arrays` are views of their heads),
+    so that a checkpoint handed back to `checkpoint_async` lends them to the next one."""
+
+    def __init__(
+        self,
+        arrays: dict[str, wp.array],
+        event: wp.Event | None,
+        extra: dict,
+        buffers: dict[str, wp.array] | None = None,
+    ) -> None:
+        self._arrays = arrays
+        self._event = event
+        self._extra = extra
+        self.buffers = buffers if buffers is not None else dict(arrays)
+
+    def wait(self) -> None:
+        """Until the copies have landed."""
+        if self._event is not None:
+            wp.synchronize_event(self._event)
+            self._event = None
+
+    def result(self) -> dict[str, Any]:
+        """The state, as `checkpoint()` gives it."""
+        self.wait()
+        state: dict[str, Any] = {name: a.numpy().copy() for name, a in self._arrays.items()}
+        state.update(self._extra)
+        return state
+
+
 def fill_box(
     low_m: tuple[float, float, float],
     high_m: tuple[float, float, float],
@@ -212,11 +247,12 @@ class LiquidSolver:
         self._velocity = MacVelocity.zeros(spec, device)
         self._mass = MacVelocity.zeros(spec, device)
         self._projection = Projection(spec, setup.density_kg_per_m3, device)
-        self._solid_phi = wp.array(
-            setup.solid_phi_m if setup.solid_phi_m is not None else np.ones(spec.shape),
-            dtype=float,
-            device=device,
-        )
+        solid_phi = setup.solid_phi_m if setup.solid_phi_m is not None else np.ones(spec.shape)
+        self._solid_phi = wp.array(solid_phi, dtype=float, device=device)
+        open_cells = int(np.count_nonzero(np.asarray(solid_phi) > 0.0))
+        self._water_capacity = min(capacity, open_cells * setup.particles_per_cell)
+        """The most particles the grid holds: its volume of water at rest, outside the
+        solids (a closed box in M1, ADR 0017), and at most the particle capacity."""
         self._valid = [
             (
                 wp.zeros(spec.face_shape(a), dtype=wp.int32, device=device),  # pyright: ignore[reportArgumentType]
@@ -227,13 +263,15 @@ class LiquidSolver:
         ]
         self._scratch = wp.zeros(capacity, dtype=wp.vec3, device=device)
         self._scratch_v = wp.zeros(capacity, dtype=wp.vec3, device=device)
+        self._affine_scratch: wp.array | None = None  # made on the first removal
         self._solid_distance = wp.zeros(capacity, dtype=float, device=device)
         self._shifted = wp.zeros(3 * capacity, dtype=wp.vec3, device=device)
         self._shifted_distance = wp.zeros(3 * capacity, dtype=float, device=device)
-        self._status = wp.zeros(4, dtype=float, device=device)
+        self._status = wp.zeros(5, dtype=float, device=device)
         cuda = wp.get_device(device).is_cuda
-        self._status_host = wp.zeros(4, dtype=float, device="cpu", pinned=cuda)
-        self._water = (0.0, 0.0)  # (volume in cells, particles in the water), a frame late
+        self._status_host = wp.zeros(5, dtype=float, device="cpu", pinned=cuda)
+        self._water = (0.0, 0.0, 0.0)  # (volume in cells, particles in it, fluid cells)
+        self._timer: Any = None
         self._status_event = wp.Event(device) if cuda else None
         self._status_pending = False
         self._frozen: NonFiniteStateError | None = None
@@ -244,14 +282,19 @@ class LiquidSolver:
         self._rest_mass = self._mass_at_rest()
         self._volume_slots = wp.zeros(int(_k.SLOTS), dtype=wp.float64, device=device)
         self._inside_slots = wp.zeros(int(_k.SLOTS), dtype=wp.float64, device=device)
-        self._totals = wp.zeros(2, dtype=wp.float64, device=device)
+        self._cell_slots = wp.zeros(int(_k.SLOTS), dtype=wp.float64, device=device)
+        self._totals = wp.zeros(3, dtype=wp.float64, device=device)
         self._volume_error = wp.zeros(2, dtype=wp.float64, device=device)
         self._before_volume_error = wp.zeros(2, dtype=wp.float64, device=device)
         """[relative volume error, its integral over time (s)]: the volume control's state."""
         self._phi_at = wp.zeros(capacity, dtype=float, device=device)
 
     def step(self, dt_s: float, ctx: Any = None) -> None:
-        """Advance the liquid by `dt_s` seconds, in at most `MAX_SUBSTEPS` substeps."""
+        """Advance the liquid by `dt_s` seconds, in at most `MAX_SUBSTEPS` substeps.
+
+        When `ctx` has a `timer` (a stage timer, `entropy.core.profiler`), the phases are
+        timed as "liquid transfers", "liquid pressure" and "liquid motion" (SPEC 4.7)."""
+        self._timer = getattr(ctx, "timer", None)
         self._read_status()
         if not (math.isfinite(dt_s) and dt_s > 0):
             raise ValueError(f"dt_s must be a positive time step, got {dt_s}")
@@ -289,8 +332,58 @@ class LiquidSolver:
             "volume_error": self._volume_error.numpy().copy(),
         }
 
-    def restore(self, state: dict[str, Any]) -> None:
-        """Return to `state`; a NaN freeze is lifted, and the speed comes from `state`."""
+    def checkpoint_async(self, reuse: PendingCheckpoint | None = None) -> PendingCheckpoint:
+        """A copy of the full state to host memory, enqueued without waiting (SPEC 4.6):
+        the game takes one every 10 s without a hitch. `restore` accepts it.
+
+        `reuse`, a checkpoint no longer needed (the one falling off the ring), lends its
+        pinned buffers: allocating pinned memory costs milliseconds of CPU per save
+        (measured 5.6 ms at 262 k particles, 11 ms at 655 k). Buffers grow by a quarter
+        more than needed when they are too small. `reuse` must not be used again."""
+        n, device = self._count, self._device
+        cuda = wp.get_device(device).is_cuda
+        if reuse is not None:
+            reuse.wait()
+        lent = reuse.buffers if reuse is not None else {}
+
+        def buffer(name: str, length: int, dtype: Any, grow: bool) -> wp.array:
+            host = lent.get(name)
+            if host is None or host.dtype != dtype or host.shape[0] < length:
+                size = max(length + length // 4 if grow else length, 1)  # a view needs one
+                host = wp.empty(size, dtype=dtype, device="cpu", pinned=cuda)
+            return host
+
+        buffers: dict[str, wp.array] = {}
+        arrays: dict[str, wp.array] = {}
+        for name, source, dtype in (
+            ("positions_m", self._particles.position_m, wp.vec3),
+            ("velocities_m_per_s", self._particles.velocity_m_per_s, wp.vec3),
+            ("affine_per_s", self._particles.affine_per_s, wp.mat33),
+        ):
+            buffers[name] = buffer(name, n, dtype, grow=True)
+            arrays[name] = _head(buffers[name], n)
+            if n:
+                wp.copy(arrays[name], source, count=n)
+        for name, source in (
+            ("pressure_pa", self._projection.pressure_pa),
+            ("volume_error", self._volume_error),
+        ):
+            host = lent.get(name)
+            if host is None or host.shape != source.shape or host.dtype != source.dtype:
+                host = wp.empty(source.shape, dtype=source.dtype, device="cpu", pinned=cuda)
+            wp.copy(host, source)
+            buffers[name] = arrays[name] = host
+        event = None
+        if cuda:
+            event = wp.Event(device)
+            wp.get_device(device).stream.record_event(event)
+        return PendingCheckpoint(arrays, event, {"count": n}, buffers)
+
+    def restore(self, state: dict[str, Any] | PendingCheckpoint) -> None:
+        """Return to `state` (a `checkpoint()`, or a `checkpoint_async()` waited for here);
+        a NaN freeze is lifted, and the speed comes from `state`."""
+        if isinstance(state, PendingCheckpoint):
+            state = state.result()
         if self._status_pending and self._status_event is not None:
             wp.synchronize_event(self._status_event)
         self._status_pending = False
@@ -302,7 +395,7 @@ class LiquidSolver:
         _head(self._particles.affine_per_s, self._count).assign(state["affine_per_s"])
         self._projection.pressure_pa.assign(state["pressure_pa"])
         self._volume_error.assign(state.get("volume_error", np.zeros(2)))
-        self._water = (0.0, 0.0)
+        self._water = (0.0, 0.0, 0.0)
         velocities = np.asarray(state["velocities_m_per_s"], dtype=float).reshape(-1, 3)
         speeds = np.linalg.norm(velocities, axis=1) if len(velocities) else np.zeros(1)
         finite = speeds[np.isfinite(speeds)]
@@ -316,11 +409,12 @@ class LiquidSolver:
         """Counts for the HUD. The water's volume (from the level set, m³) and the
         particles inside it come from the last frame's status, so reading them never
         waits for the GPU."""
-        volume_cells, inside = self._water
+        volume_cells, inside, fluid_cells = self._water
         return {
             "particles": self._count,
             "water_volume_m3": volume_cells * self._spec().dx_m ** 3,
             "particles_in_water": inside,
+            "water_cells": fluid_cells,
             **self._diagnostics,
         }
 
@@ -362,6 +456,54 @@ class LiquidSolver:
             finite = speeds[np.isfinite(speeds)]
             if len(finite):
                 self._speed_m_per_s = max(self._speed_m_per_s, float(finite.max()))
+
+    def remove_particles_within(self, centre_m: tuple[float, float, float], radius_m: float) -> int:
+        """Remove the particles within `radius_m` of `centre_m` (the eraser, #54); the
+        others keep their order. Returns how many went. It reads the new count back, so
+        it waits for the GPU once: a tool's action, not part of the step."""
+        n = self._count
+        if n == 0 or radius_m <= 0.0:
+            return 0
+        device = self._device
+        active = self._active()
+        keep = wp.zeros(n, dtype=wp.int32, device=device)  # pyright: ignore[reportArgumentType]
+        index = wp.zeros(n, dtype=wp.int32, device=device)  # pyright: ignore[reportArgumentType]
+        wp.launch(
+            _k.outside_sphere,
+            dim=n,
+            inputs=[active.position_m, wp.vec3(*centre_m), float(radius_m) ** 2, keep],
+            device=device,
+        )
+        wp.utils.array_scan(keep, index, inclusive=False)
+        # Scratch arrays free between steps; not `_before`, which the NaN guard may still
+        # need for the frame that just ran.
+        if self._affine_scratch is None:
+            capacity = self._require_setup().max_particles
+            self._affine_scratch = wp.zeros(capacity, dtype=wp.mat33, device=device)
+        target = LiquidParticles(self._scratch, self._scratch_v, self._affine_scratch)
+        wp.launch(
+            _k.compact,
+            dim=n,
+            inputs=[keep, index, *_arrays(active), *_arrays(target)],
+            device=device,
+        )
+        # Only the last entry of each is read back (two values, not 2 n).
+        last_keep, last_index = keep[n - 1 :].numpy()[0], index[n - 1 :].numpy()[0]
+        kept = int(last_index + last_keep)
+        for source, destination in zip(_arrays(target), _arrays(self._particles), strict=True):
+            if kept:
+                wp.copy(destination, source, count=kept)
+        self._count = kept
+        return n - kept
+
+    def particle_count(self) -> int:
+        """How many particles the liquid holds now (no GPU read)."""
+        return self._count
+
+    def room_particles(self) -> int:
+        """How many more particles the grid holds (`_water_capacity`): tools add no more
+        than this, and lose the rest (`entropy.game.tools.base.Inflow`)."""
+        return max(self._water_capacity - self._count, 0)
 
     def particle_positions(self) -> np.ndarray:
         return self._active().position_m.numpy()
@@ -460,8 +602,10 @@ class LiquidSolver:
         if self._status_event is not None:
             wp.synchronize_event(self._status_event)
         self._status_pending = False
-        speed, nonfinite, volume_cells, inside = (float(v) for v in self._status_host.numpy())
-        self._water = (volume_cells, inside)
+        speed, nonfinite, volume_cells, inside, cells = (
+            float(v) for v in self._status_host.numpy()
+        )
+        self._water = (volume_cells, inside, cells)
         if nonfinite > 0.0:
             self._frozen = NonFiniteStateError(self._dump())
             raise self._frozen
@@ -502,12 +646,17 @@ class LiquidSolver:
         )
         return path
 
+    def _stage(self, name: str):
+        """A timed stage of the step, when a timer was given; else nothing."""
+        return self._timer.stage(name) if self._timer is not None else nullcontext()
+
     def _substep(self, dt_s: float) -> None:
         setup = self._require_setup()
         spec, device = setup.spec, self._device
         active = self._active()
         n = self._count
-        particles_to_grid(active, self._particle_mass_kg(), self._velocity, self._mass)
+        with self._stage("liquid transfers (CUDA)"):
+            particles_to_grid(active, self._particle_mass_kg(), self._velocity, self._mass)
         for g, component in zip(
             setup.gravity_m_per_s2,
             (self._velocity.u, self._velocity.v, self._velocity.w),
@@ -545,10 +694,17 @@ class LiquidSolver:
             device=device,
         )
         self._volume_slots.zero_()
+        self._cell_slots.zero_()
         wp.launch(
             _k.fluid_volume,
             dim=spec.shape,
-            inputs=[projection.phi_m, projection.labels, spec.dx_m, self._volume_slots],
+            inputs=[
+                projection.phi_m,
+                projection.labels,
+                spec.dx_m,
+                self._volume_slots,
+                self._cell_slots,
+            ],
             device=device,
         )
         self._inside_slots.zero_()
@@ -562,6 +718,7 @@ class LiquidSolver:
             inputs=[
                 self._volume_slots,
                 self._inside_slots,
+                self._cell_slots,
                 float(setup.particles_per_cell),
                 VOLUME_CONTROL_DEAD_BAND,
                 VOLUME_CONTROL_INTEGRAL_LIMIT_S,
@@ -585,14 +742,17 @@ class LiquidSolver:
             ],
             device=device,
         )
-        result = projection.project(self._velocity, dt_s)
+        with self._stage("liquid pressure (CUDA)"):
+            result = projection.project(self._velocity, dt_s)
         self._diagnostics["pressure_iterations"] = result.iterations
         self._extrapolate()
         projection.zero_solid_faces(self._velocity)
         if not n:
             return
-        grid_to_particles(self._velocity, active)
-        self._advect(active, dt_s)
+        with self._stage("liquid transfers (CUDA)"):
+            grid_to_particles(self._velocity, active)
+        with self._stage("liquid motion (CUDA)"):
+            self._advect(active, dt_s)
 
     def _extrapolate(self) -> None:
         """Two layers of velocity into the air, so grid-to-particles reads sound values

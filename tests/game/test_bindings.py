@@ -8,7 +8,7 @@ import glfw
 import pytest
 
 from entropy.core.config import ControlsSettings
-from entropy.game.input import Action, bindings_from_settings
+from entropy.game.input import Action, bindings_from_settings, key_names
 
 _AZERTY_SWAPS = {
     glfw.KEY_Q: "a",
@@ -75,10 +75,12 @@ def test_labels_ignore_case_and_names_allow_several_keys() -> None:
 
 
 def test_digits_fall_back_to_the_digit_row_when_no_key_prints_them() -> None:
-    """On AZERTY the digit row prints & é \" ... unshifted; "1" still means that key."""
-    bindings = bindings_from_settings(ControlsSettings(toggle_hud="1"), key_label=azerty)
+    """On AZERTY the digit row prints & é \" ... unshifted; "1" still means that key
+    (tool 1, by default)."""
+    bindings = bindings_from_settings(ControlsSettings(), key_label=azerty)
 
-    assert bindings[glfw.KEY_1] is Action.TOGGLE_HUD
+    assert bindings[glfw.KEY_1] is Action.TOOL_1
+    assert bindings[glfw.KEY_9] is Action.TOOL_9
 
 
 def test_a_position_can_be_named_explicitly() -> None:
@@ -107,3 +109,31 @@ def test_impossible_controls_are_errors_naming_the_setting(
 ) -> None:
     with pytest.raises(ValueError, match=message):
         bindings_from_settings(controls, key_label=azerty)
+
+
+def test_the_settings_file_names_a_key_for_every_action() -> None:
+    """ADR 0012, #55: one entry per action in content/settings.toml, so every key can be
+    changed there (#74's review, S8)."""
+    import tomllib
+
+    from entropy.core.config import default_settings_path
+
+    controls = tomllib.loads(default_settings_path().read_text(encoding="utf-8"))["controls"]
+
+    assert {action.value for action in Action} <= set(controls)
+
+
+def test_a_key_is_shown_with_the_label_this_keyboard_prints_on_it() -> None:
+    """The HUD names the keys as they are printed: on AZERTY the key right of P is ^."""
+    labels = {glfw.KEY_LEFT_BRACKET: "^", glfw.KEY_RIGHT_BRACKET: "$", glfw.KEY_PERIOD: ":"}
+
+    def french(key: int) -> str | None:
+        return labels.get(key, azerty(key))
+
+    bindings = bindings_from_settings(ControlsSettings(), key_label=french)
+
+    assert key_names(bindings, Action.SLOWER, key_label=french) == "^"
+    assert key_names(bindings, Action.FASTER, key_label=french) == "$"
+    assert key_names(bindings, Action.STEP, key_label=french) == ":"
+    assert key_names(bindings, Action.SAVE_CHECKPOINT, key_label=french) == "F5"
+    assert key_names(bindings, Action.DOWN, key_label=french) == "LEFT CONTROL / RIGHT CONTROL"

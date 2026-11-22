@@ -13,7 +13,8 @@ from __future__ import annotations
 
 import logging
 import math
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
 from entropy.solvers.interface import NonFiniteStateError
@@ -36,6 +37,14 @@ class PacedSolver(Protocol):
     def step(self, dt_s: float, ctx: Any) -> None: ...
 
 
+@dataclass(frozen=True)
+class StepContext:
+    """What every solver's `step` receives. M1 passes the GPU stage timer, so solvers
+    can time their phases for the HUD (SPEC 4.7); coupling joins it in M2."""
+
+    timer: Any = None
+
+
 class Simulation:
     """The solvers of a world, stepped together by one advance per frame."""
 
@@ -43,8 +52,9 @@ class Simulation:
         self.solvers = tuple(solvers)
         self.context = context
         """What each solver's `step` receives for coupling; nothing until M2 couples solvers."""
-        self.frozen_because: str | None = None
-        """Why the world stopped (the NaN guard's alert), or None while it runs."""
+        self.frozen_by: NonFiniteStateError | None = None
+        """What stopped the world (the NaN guard's error, with its dump's path), or None
+        while it runs."""
 
     def advance_for(self, requested_s: float) -> float:
         """The advance every solver can take: `requested_s`, shrunk to the tightest limit."""
@@ -59,25 +69,42 @@ class Simulation:
             advance_s = min(advance_s, limit_s)
         return advance_s
 
-    def step(self, requested_s: float) -> float:
+    def step(self, requested_s: float, *, player: Callable[[float], None] | None = None) -> float:
         """Advance every solver by one shared advance; return it (s).
 
+        `player`, if given, is the frame's step 1 (SPEC 5.9): the player's tools act with
+        the shared advance (s), zero when paused, before any solver steps.
+
         NaN guard (SPEC 5.9): when a solver finds its state non-finite, it has dumped it
-        and raises; the world then freezes, nothing advances until `unfreeze`, and
-        `frozen_because` says where the dump is."""
-        if self.frozen_because is not None:
+        and raises; the world then freezes, nothing advances and the player does not act
+        until `unfreeze`, and `frozen_by` says where the dump is."""
+        if self.frozen_by is not None:
             return 0.0
         try:
             advance_s = self.advance_for(requested_s)
+            if player is not None:
+                player(advance_s)
             if advance_s > 0.0:
                 for solver in self.solvers:
                     solver.step(advance_s, self.context)
         except NonFiniteStateError as error:
-            self.frozen_because = f"état non fini, sauvegardé dans {error.dump_path}"
+            self.frozen_by = error
             _log.error("the world froze: %s", error)
             return 0.0
         return advance_s
 
+    def check(self) -> bool:
+        """Read what the solvers last found about their state (a step's state is read at
+        the next frame), inside the NaN guard, without stepping: True while the world
+        runs. The game checks before restoring a checkpoint (ADR 0024)."""
+        if self.frozen_by is None:
+            try:
+                self.advance_for(0.0)
+            except NonFiniteStateError as error:
+                self.frozen_by = error
+                _log.error("the world froze: %s", error)
+        return self.frozen_by is None
+
     def unfreeze(self) -> None:
         """Run again, after the solvers were restored to a finite state."""
-        self.frozen_because = None
+        self.frozen_by = None

@@ -1,0 +1,15 @@
+# The flood source (SPEC 4.2): water rising from the tank's floor at a set rate.
+name = "flood"
+label = "Crue"
+icon = "≈"
+power = "rate_m3_per_s"
+order = 3  # the key that chooses it
+
+[parameters.rate_m3_per_s]
+label = "débit"
+unit = "m³/s"
+minimum = 0.01
+maximum = 5.0
+default = 0.1
+step = 1.25  # each notch of the wheel multiplies the rate by 1.25
+by_factor = true

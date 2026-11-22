@@ -1,0 +1,14 @@
+# The bucket (SPEC 4.2): drops a block of water into the tank where the player aims.
+name = "bucket"
+label = "Seau"
+icon = "U"
+power = "volume_m3"
+order = 2  # the key that chooses it
+
+[parameters.volume_m3]
+label = "volume"
+unit = "m³"
+minimum = 0.01
+maximum = 2.0
+default = 0.25
+step = 0.05

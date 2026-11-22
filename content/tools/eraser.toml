@@ -1,0 +1,14 @@
+# The eraser (SPEC 4.2): removes the liquid within a radius of where the aim meets it.
+name = "eraser"
+label = "Gomme"
+icon = "x"
+power = "radius_m"
+order = 4  # the key that chooses it
+
+[parameters.radius_m]
+label = "rayon"
+unit = "m"
+minimum = 0.1
+maximum = 5.0
+default = 0.5
+step = 0.1

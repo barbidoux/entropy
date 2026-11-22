@@ -1,5 +1,6 @@
 """The liquid's full step (SPEC 5.2, 5.9; ADR 0013, 0016, 0017)."""
 
+import dataclasses
 import math
 from pathlib import Path
 
@@ -521,6 +522,166 @@ def test_jittered_still_water_stays_still_for_ten_seconds(device: str) -> None:
         liquid.step(1.0 / 60.0)
 
     assert np.abs(liquid.particle_velocities()).max() < 5e-3
+
+
+def test_particles_within_a_sphere_can_be_removed(device: str) -> None:
+    """The eraser (#54): the particles within the radius go, the others keep their order,
+    velocities and affine matrices."""
+    liquid = LiquidSolver.create(_setup((8, 8, 8)), device)
+    points = fill_box((0.0, 0.0, 0.0), (0.5, 0.5, 0.25), DX_M, 8, seed=20)
+    velocities = np.tile(np.arange(len(points), dtype=np.float32)[:, None], (1, 3))
+    liquid.add_particles(points, velocities=velocities)
+    state = liquid.checkpoint()
+    affine = np.arange(len(points) * 9, dtype=np.float32).reshape(-1, 3, 3)
+    state["affine_per_s"] = affine
+    liquid.restore(state)
+    centre, radius = np.array([0.25, 0.25, 0.1]), 0.12
+    outside = np.linalg.norm(points - centre, axis=1) > radius
+
+    removed = liquid.remove_particles_within(tuple(centre), radius)
+
+    assert removed == int((~outside).sum()) > 0
+    assert liquid.diagnostics()["particles"] == int(outside.sum())
+    np.testing.assert_allclose(liquid.particle_positions(), points[outside])
+    np.testing.assert_allclose(liquid.particle_velocities(), velocities[outside])
+    np.testing.assert_array_equal(liquid.checkpoint()["affine_per_s"], affine[outside])
+
+
+def test_removing_nothing_changes_nothing(device: str) -> None:
+    liquid = LiquidSolver.create(_setup((8, 8, 8)), device)
+    points = fill_box((0.0, 0.0, 0.0), (0.5, 0.5, 0.25), DX_M, 8, seed=21)
+    liquid.add_particles(points)
+
+    assert liquid.remove_particles_within((5.0, 5.0, 5.0), 0.1) == 0
+    np.testing.assert_allclose(liquid.particle_positions(), points)
+
+
+def test_an_asynchronous_checkpoint_holds_the_state_of_its_moment(device: str) -> None:
+    """#55: the copy to host memory is enqueued, not waited for; restoring from it
+    gives the state at the moment it was taken, whatever ran after."""
+    liquid = LiquidSolver.create(_setup((12, 12, 16)), device)
+    liquid.add_particles(fill_box((0.0, 0.0, 0.0), (0.25, 0.75, 0.75), DX_M, 8, seed=22))
+    for _ in range(3):
+        liquid.step(1.0 / 60.0)
+    expected = liquid.particle_positions().copy()
+
+    pending = liquid.checkpoint_async()
+    for _ in range(5):
+        liquid.step(1.0 / 60.0)
+    liquid.add_particles(np.full((10, 3), 0.5, dtype=np.float32))
+    liquid.restore(pending)
+
+    np.testing.assert_allclose(liquid.particle_positions(), expected)
+
+
+def test_diagnostics_count_the_cells_of_water(device: str) -> None:
+    """#56: the HUD's active cells are the fluid cells of the last substep."""
+    liquid = LiquidSolver.create(_setup((8, 8, 8)), device)
+    liquid.add_particles(fill_box((0.0, 0.0, 0.0), (0.5, 0.5, 0.25), DX_M, 8, seed=23, jitter=0.0))
+    liquid.step(1e-5)
+    liquid.max_advance_s()
+
+    assert liquid.diagnostics()["water_cells"] == 8 * 8 * 4
+
+
+class _Timer:
+    """Records the names of the stages a solver times."""
+
+    def __init__(self) -> None:
+        self.names: list[str] = []
+
+    def stage(self, name: str):
+        from contextlib import nullcontext
+
+        self.names.append(name)
+        return nullcontext()
+
+
+class _Context:
+    def __init__(self) -> None:
+        self.timer = _Timer()
+
+
+def test_the_step_times_its_phases_when_given_a_timer(device: str) -> None:
+    """#56: GPU time per liquid phase, through the context's stage timer."""
+    liquid = LiquidSolver.create(_setup((8, 8, 8)), device)
+    liquid.add_particles(fill_box((0.0, 0.0, 0.0), (0.5, 0.5, 0.25), DX_M, 8, seed=24))
+    ctx = _Context()
+
+    liquid.step(1.0 / 60.0, ctx)
+
+    assert {"liquid transfers (CUDA)", "liquid pressure (CUDA)", "liquid motion (CUDA)"} <= set(
+        ctx.timer.names
+    )
+
+
+def test_a_particle_stands_for_a_cell_over_its_particles() -> None:
+    """The volume the renderer and the tools count per particle (m³)."""
+    setup = _setup((4, 4, 4), particles_per_cell=8)
+
+    assert setup.particle_volume_m3 == pytest.approx(DX_M**3 / 8)
+
+
+def test_the_grid_holds_at_most_its_volume_of_water(device: str) -> None:
+    """Room for particles: the open cells times the particles per cell, at most the
+    particle capacity; what is added takes room (#74's review, B1)."""
+    liquid = LiquidSolver.create(_setup((4, 4, 4)), device)
+    assert liquid.room_particles() == 4 * 4 * 4 * 8
+    liquid.add_particles(fill_box((0.0, 0.0, 0.0), (DX_M, DX_M, DX_M), DX_M, 8, seed=1))
+    assert liquid.room_particles() == 4 * 4 * 4 * 8 - 8
+
+    solid = np.ones((4, 4, 4))
+    solid[:, :, :2] = -1.0  # the lower half is solid
+    walled = LiquidSolver.create(_setup((4, 4, 4), solid_phi_m=solid), device)
+    assert walled.room_particles() == 4 * 4 * 2 * 8
+
+    small = dataclasses.replace(_setup((4, 4, 4)), max_particles=100)
+    assert LiquidSolver.create(small, device).room_particles() == 100
+
+
+def test_an_async_checkpoint_reuses_the_buffers_it_is_handed(device: str) -> None:
+    """#74's review, S5: a checkpoint handed back lends its pinned buffers to the next,
+    which grow by a quarter when too small; each result is the state it was taken of."""
+    liquid = LiquidSolver.create(_setup((8, 8, 8)), device)
+    liquid.add_particles(fill_box((0.0, 0.0, 0.0), (0.25, 0.25, 0.25), DX_M, 8, seed=2))
+    first = liquid.checkpoint_async()
+    first.result()
+
+    second = liquid.checkpoint_async(reuse=first)
+
+    assert second.buffers["positions_m"] is first.buffers["positions_m"]
+    np.testing.assert_array_equal(second.result()["positions_m"], liquid.particle_positions())
+    liquid.add_particles(fill_box((0.25, 0.0, 0.0), (0.5, 0.25, 0.25), DX_M, 8, seed=3))
+    third = liquid.checkpoint_async(reuse=second)
+    count = len(liquid.particle_positions())
+    assert third.buffers["positions_m"] is not second.buffers["positions_m"]
+    assert third.buffers["positions_m"].shape[0] == count + count // 4
+    state = third.result()
+    np.testing.assert_array_equal(state["positions_m"], liquid.particle_positions())
+    assert state["count"] == count
+
+
+def test_erasing_between_frames_keeps_the_nan_dump_s_starting_state(
+    device: str, tmp_path: Path
+) -> None:
+    """The guard reads a frame's state at the next one; the eraser acts between them, so it
+    must not touch the state the dump holds (#74's review, mutant M13)."""
+    liquid = LiquidSolver.create(_setup((8, 8, 8), dump_dir=tmp_path), device)
+    points = fill_box((0.0, 0.0, 0.0), (0.5, 0.5, 0.25), DX_M, 8, seed=23)
+    liquid.add_particles(points)
+    liquid.step(1.0 / 60.0)
+    poisoned = liquid.checkpoint()
+    poisoned["velocities_m_per_s"][3] = np.inf
+    liquid.restore(poisoned)
+    start = liquid.particle_positions().copy()
+    liquid.step(1.0 / 60.0)  # goes non-finite; seen at the next frame
+
+    assert liquid.remove_particles_within((0.25, 0.25, 0.1), 0.12) > 0
+    with pytest.raises(NonFiniteStateError) as raised:
+        liquid.step(1.0 / 60.0)
+
+    dump = load_dump(raised.value.dump_path)
+    np.testing.assert_array_equal(dump["before_positions_m"], start)
 
 
 @pytest.mark.parametrize("jitter", [0.0, 0.8])

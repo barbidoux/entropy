@@ -1,0 +1,22 @@
+# The hose (SPEC 4.2): a jet of water from the camera along the aim.
+name = "hose"
+label = "Tuyau"
+icon = "~"
+power = "flow_l_per_s"  # the parameter the mouse wheel sets
+order = 1  # the key that chooses it
+
+[parameters.flow_l_per_s]
+label = "débit"
+unit = "L/s"
+minimum = 1.0
+maximum = 50.0
+default = 20.0
+step = 1.0
+
+[parameters.nozzle_speed_m_per_s]
+label = "vitesse en buse"
+unit = "m/s"
+minimum = 5.0
+maximum = 30.0
+default = 10.0  # ADR 0020: water entering faster than about 14 m/s slows the world at 60 fps
+step = 1.0
