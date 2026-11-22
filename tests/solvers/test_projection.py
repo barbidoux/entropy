@@ -302,12 +302,11 @@ def _sphere_error(n: int, device: str) -> float:
     f = np.exp(x) * (6.0 + 4.0 * x - SPHERE_RADIUS_M**2 + r2)
     projection = Projection(spec, 1.0, device)
     for target, values, dtype in (
-        (projection.labels, np.where(fluid, CELL_FLUID, CELL_AIR), wp.int32),
-        (projection.phi_m, phi, float),
-        (projection.target_divergence_per_s, np.where(fluid, f, 0.0), float),
+        (projection.labels, np.where(fluid, CELL_FLUID, CELL_AIR).astype(np.int32), wp.int32),
+        (projection.phi_m, phi.astype(np.float32), float),
+        (projection.target_divergence_per_s, np.where(fluid, f, 0.0).astype(np.float32), float),
     ):
-        wp.copy(target, wp.array(values.astype(np.float32 if dtype is float else np.int32),
-                                  dtype=dtype, device=device))  # fmt: skip
+        wp.copy(target, wp.array(values, dtype=dtype, device=device))
 
     result = projection.project(MacVelocity.zeros(spec, device), 1.0)
 

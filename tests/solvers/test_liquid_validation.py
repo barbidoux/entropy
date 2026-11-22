@@ -89,9 +89,10 @@ def test_v_liq_02_a_sloshing_tank_keeps_its_volume(device: str) -> None:
 CLOCK_DELAY = 0.25
 """V-LIQ-03's fixed delay of the simulated clock against Table 2, in T (ADR 0019, ADR
 0028). Table 2's clock is a normalisation (T = 1.19 at Z = 1.44, "of the order of
-magnitude" of the time since the heater current); solvers that release the column at
-once reach Z = 1.44 about 0.25 earlier (Landet et al. 2018: 0.21-0.27; ENTROPY converged:
-0.255). Never fitted per run. Table 6's column top, on the heater clock, needs none."""
+magnitude" of the time since the heater current). Solvers that release the column at
+once lead Table 2 by about 0.25 (Landet et al. 2018: 0.21-0.27 over Z = 1.44-3.67;
+ENTROPY's best constant delay: 0.23 at 16 cells, 0.255 at 32), for reasons not known.
+Never fitted per run. Table 6's column top, on the heater clock, needs none."""
 
 
 def _martin_moyce() -> tuple[np.ndarray, np.ndarray]:

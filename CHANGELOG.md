@@ -18,7 +18,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   - US-03 compares the fronts at 0.1x and 1x at the same simulated instants (within
     4 %; measured 2.6 %);
   - the liquid counts pressure solves that did not converge
-    (`diagnostics()["unconverged_solves"]`), and the HUD shows them when there are some.
+    (`diagnostics()["unconverged_solves"]`), and the HUD shows them when there are some;
+    overruns and unconverged solves are logged at the 1st, 10th, 100th... (#34).
 - The liquid sorts its particles by half-cell at the start of every frame (#65, ADR
   0025): a stable radix sort gathered into the second particle buffer, which then
   becomes the live one, so the NaN guard's dump keeps the frame's starting state at no
@@ -296,9 +297,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
-- V-LIQ-03's delay of 0.25 against Table 2 has its true cause in the spec, the test and
-  the data file: Table 2's clock is a normalisation, not the heater current, which is
-  Table 6's clock (ADR 0028, superseding ADR 0019 on this point).
+- V-LIQ-03's delay of 0.25 against Table 2 has an accurate rationale in the spec, the
+  test and the data file: Table 2's clock is a normalisation, not the heater current
+  (which is Table 6's clock), and solvers that release the column at once lead it by
+  about 0.25, for reasons not known (ADR 0028, superseding ADR 0019 on this point).
 - The liquid pass draws its spheres at half resolution (#57, ADR 0027): depth,
   thickness and smoothing in half-size targets; the composite at full resolution, its
   depth and normals interpolated between the four nearest half-size pixels on one

@@ -272,7 +272,7 @@ def test_the_hud_says_when_a_pressure_solve_did_not_converge(
     assert stages.liquid is not None
     stages.liquid.add_particles(fill_box((-0.5, -0.5, 0.0), (0.5, 0.5, 0.5), 0.0625, 8, seed=4))
     stages.step_simulation(1.0 / 60.0)
-    assert "non résolue" not in "\n".join(stages.hud_notes())
+    assert "non convergée" not in "\n".join(stages.hud_notes())
     solve = Mgpcg.solve
     monkeypatch.setattr(
         Mgpcg, "solve", lambda self, *a, **k: solve(self, *a, **{**k, "max_iterations": 1})
@@ -280,7 +280,7 @@ def test_the_hud_says_when_a_pressure_solve_did_not_converge(
 
     stages.step_simulation(1.0 / 60.0)
 
-    assert "pressions non résolues" in "\n".join(stages.hud_notes())
+    assert "résolutions de pression non convergées" in "\n".join(stages.hud_notes())
 
 
 def test_a_frozen_world_saves_no_checkpoint_and_keeps_the_last_good_one(

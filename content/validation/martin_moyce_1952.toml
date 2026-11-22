@@ -25,7 +25,10 @@ time_dimensionless = [0.82, 1.19, 1.58, 1.91, 2.23, 2.58, 2.91, 3.26, 3.60, 3.92
 
 # Table 6 (p. 320): the top of the column at the wall behind it, H = height / (n² a),
 # against tau = t·sqrt(g/a) = T/n from the heater current (tau = 0 when it was applied).
-# Means of the records, n² = 2, a = 2¼ in.
+# Means of the records, n² = 2, a = 2¼ in, as printed. Where a row has one record the
+# printed mean differs from it (H = 0.83: 0.93 against 0.96; 0.72: 1.28 against 1.33;
+# 0.17: 4.20 against 4.09); as for Table 2 (Z = 2.56 and 3.00 print 2.20 and 2.51, the
+# arithmetic means of the records being 2.18 and 2.53), the printed means are used.
 [column_top_2_25_in]
 height_dimensionless = [1.00, 0.94, 0.89, 0.83, 0.78, 0.72, 0.67, 0.61, 0.56, 0.50, 0.44, 0.39, 0.33, 0.28, 0.22, 0.17, 0.11, 0.06]
 time_heater_dimensionless = [0.0, 0.56, 0.77, 0.93, 1.08, 1.28, 1.46, 1.66, 1.84, 2.00, 2.21, 2.45, 2.70, 3.06, 3.44, 4.20, 5.25, 7.40]

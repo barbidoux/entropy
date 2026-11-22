@@ -1,6 +1,7 @@
 """The liquid's full step (SPEC 5.2, 5.9; ADR 0013, 0016, 0017)."""
 
 import dataclasses
+import logging
 import math
 from pathlib import Path
 
@@ -787,3 +788,26 @@ def test_a_pressure_solve_that_does_not_converge_is_counted(
     liquid.step(1.0 / 60.0)
 
     assert liquid.diagnostics()["unconverged_solves"] == liquid.diagnostics()["substeps"] >= 1
+
+
+def test_overruns_and_unconverged_solves_are_logged_sparingly(
+    device: str, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """#34 and the M1 physics audit: the HUD counts them, and the log says so at the 1st,
+    10th, 100th... of each, so a sustained one does not flood it."""
+    liquid = LiquidSolver.create(_setup((16, 8, 8)), device)
+    points = fill_box((0.125, 0.125, 0.125), (0.375, 0.375, 0.375), DX_M, 8, seed=12)
+    liquid.add_particles(points, velocities=np.tile([10.0, 0.0, 0.0], (len(points), 1)))
+    solve = Mgpcg.solve
+    monkeypatch.setattr(
+        Mgpcg, "solve", lambda self, *a, **k: solve(self, *a, **{**k, "max_iterations": 1})
+    )
+
+    with caplog.at_level(logging.WARNING, logger="entropy.solvers.liquid.solver"):
+        liquid.step(1.0 / 30.0)
+        liquid.max_advance_s()  # reads the frame's status
+
+    messages = [r.getMessage() for r in caplog.records]
+    assert sum("overrun" in m for m in messages) == 1
+    assert sum("did not converge" in m for m in messages) == 1  # 4 substeps, logged once
+    assert liquid.diagnostics()["unconverged_solves"] == MAX_SUBSTEPS

@@ -191,14 +191,13 @@ class GameStages:
             return f"{self.world.name} : pas d'eau possible"
         d = self.liquid.diagnostics()
         litres = d["particles"] * self.particle_volume_m3 * 1e3  # the water itself, exactly
+        unconverged = int(d.get("unconverged_solves", 0))
         return (
             f"{self.world.name} : {int(d['particles']):,} particules, "
             f"{litres:,.0f} L, {int(d['water_cells']):,} cellules d'eau, "
             f"{int(d['substeps'])} sous-pas, {int(d['pressure_iterations'])} itérations de "
             f"pression, {int(d['overruns'])} dépassements"
-            + (f", {int(d['unconverged_solves'])} pressions non résolues"
-               if d.get("unconverged_solves") else "")
-        )  # fmt: skip
+        ) + (f", {unconverged} résolutions de pression non convergées" if unconverged else "")
 
     def hud_notes(self) -> list[str]:
         """Extra HUD lines: an alert if the world froze, the controls, the map and its
