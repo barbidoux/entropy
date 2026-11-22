@@ -262,6 +262,27 @@ def test_the_hud_counts_the_water(stages: GameStages) -> None:
     assert "sous-pas" in text and "itérations" in text
 
 
+def test_the_hud_says_when_a_pressure_solve_did_not_converge(
+    stages: GameStages, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The M1 physics audit: an unconverged solve leaves divergence behind; the HUD shows
+    how many, and says nothing while there are none."""
+    from entropy.linalg.mgpcg import Mgpcg
+
+    assert stages.liquid is not None
+    stages.liquid.add_particles(fill_box((-0.5, -0.5, 0.0), (0.5, 0.5, 0.5), 0.0625, 8, seed=4))
+    stages.step_simulation(1.0 / 60.0)
+    assert "non convergée" not in "\n".join(stages.hud_notes())
+    solve = Mgpcg.solve
+    monkeypatch.setattr(
+        Mgpcg, "solve", lambda self, *a, **k: solve(self, *a, **{**k, "max_iterations": 1})
+    )
+
+    stages.step_simulation(1.0 / 60.0)
+
+    assert "résolutions de pression non convergées" in "\n".join(stages.hud_notes())
+
+
 def test_a_frozen_world_saves_no_checkpoint_and_keeps_the_last_good_one(
     stages: GameStages, monkeypatch: pytest.MonkeyPatch
 ) -> None:

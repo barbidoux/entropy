@@ -32,8 +32,8 @@ Simplifications, named:
   nodes, measured in ADR 0026, not yet adopted). Until then the CPU fixes n from the
   previous frame's speed. When the
   frame's end speed shows it needed more substeps than it ran, the frame is counted
-  in `diagnostics()["overruns"]`. A speed peak inside a frame that is gone by its
-  end is not seen.
+  in `diagnostics()["overruns"]` and logged (the 1st, 10th, 100th...). A speed peak
+  inside a frame that is gone by its end is not seen.
 - On CUDA, particles add to the grid with atomics in no fixed order, so two runs
   differ in the last bits and drift apart over time; on the CPU runs are identical.
 
@@ -49,6 +49,7 @@ needs from it.
 
 from __future__ import annotations
 
+import logging
 import math
 import time
 from contextlib import nullcontext
@@ -67,6 +68,14 @@ from entropy.solvers.liquid.particles import LiquidParticles
 from entropy.solvers.liquid.projection import Projection
 from entropy.solvers.liquid.sorting import CellSort
 from entropy.solvers.liquid.transfer import grid_to_particles, particles_to_grid
+
+_log = logging.getLogger(__name__)
+
+
+def _worth_logging(count: int) -> bool:
+    """The 1st, 10th, 100th... occurrence: a sustained one does not flood the log."""
+    return count > 0 and 10 ** round(math.log10(count)) == count
+
 
 __all__ = ["LiquidSetup", "LiquidSolver", "NonFiniteStateError", "fill_box", "load_dump"]
 
@@ -281,7 +290,12 @@ class LiquidSolver:
         self._frozen: NonFiniteStateError | None = None
         self._speed_m_per_s = 0.0
         self._last_frame: tuple[float, int] | None = None  # (dt_s, substeps) of the last step
-        self._diagnostics = {"substeps": 0, "pressure_iterations": 0, "overruns": 0}
+        self._diagnostics = {
+            "substeps": 0,
+            "pressure_iterations": 0,
+            "overruns": 0,
+            "unconverged_solves": 0,
+        }
         self._density = wp.zeros(spec.shape, dtype=float, device=device)
         self._rest_mass = self._mass_at_rest()
         self._volume_slots = wp.zeros(int(_k.SLOTS), dtype=wp.float64, device=device)
@@ -621,8 +635,16 @@ class LiquidSolver:
             raise self._frozen
         if self._last_frame is not None:
             dt_s, ran = self._last_frame
-            if self._substeps_needed(dt_s, speed) > ran:
+            needed = self._substeps_needed(dt_s, speed)
+            if needed > ran:
                 self._diagnostics["overruns"] += 1
+                if _worth_logging(self._diagnostics["overruns"]):
+                    _log.warning(
+                        "liquid overrun %d: a frame needed %d substeps and ran %d (SPEC 5.9)",
+                        self._diagnostics["overruns"],
+                        needed,
+                        ran,
+                    )
         self._speed_m_per_s = speed
 
     def _dump(self) -> Path:
@@ -755,6 +777,16 @@ class LiquidSolver:
         with self._stage("liquid pressure (CUDA)"):
             result = projection.project(self._velocity, dt_s)
         self._diagnostics["pressure_iterations"] = result.iterations
+        if not result.converged:  # divergence left behind: counted, not hidden (M1 audit)
+            self._diagnostics["unconverged_solves"] += 1
+            if _worth_logging(self._diagnostics["unconverged_solves"]):
+                _log.warning(
+                    "liquid pressure solve %d did not converge: relative residual %.2g "
+                    "after %d iterations",
+                    self._diagnostics["unconverged_solves"],
+                    result.relative_residual,
+                    result.iterations,
+                )
         self._extrapolate()
         projection.zero_solid_faces(self._velocity)
         if not n:
