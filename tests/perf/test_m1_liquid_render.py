@@ -9,6 +9,7 @@ pass on the GPU. Ten frames warm up first; the next 60 are measured.
 import math
 
 import numpy as np
+import pytest
 import warp as wp
 
 from bench.harness import BenchSession
@@ -31,13 +32,25 @@ BUDGET_MS = 2.5  # SPEC 7.2, liquid pass
 SIZE = (1600, 900)
 
 
-def test_liquid_pass_at_one_million_particles(bench_session: BenchSession) -> None:
+VIEWS = {
+    "start": None,  # the game's start camera, from a corner
+    "rim": ((0.0, -3.5, 3.6), 90.0, -40.0),  # above the near rim, looking in
+    "close": ((0.0, -2.6, 3.2), 90.0, -50.0),  # leaning over the water, where it costs most
+}
+"""Where the camera looks from (position m, yaw and pitch in degrees). Up close the
+spheres are large on screen, and their cost is per fragment (#57)."""
+
+
+@pytest.mark.parametrize("where", list(VIEWS))
+def test_liquid_pass_at_one_million_particles(bench_session: BenchSession, where: str) -> None:
     settings = load_settings(default_settings_path())
     camera = settings.camera
-    yaw, pitch = math.radians(camera.start_yaw_deg), math.radians(camera.start_pitch_deg)
+    pose = VIEWS[where] or (camera.start_position_m, camera.start_yaw_deg, camera.start_pitch_deg)
+    eye, yaw_deg, pitch_deg = pose
+    yaw, pitch = math.radians(yaw_deg), math.radians(pitch_deg)
     forward = (math.cos(pitch) * math.cos(yaw), math.cos(pitch) * math.sin(yaw), math.sin(pitch))
     view = CameraView(
-        camera.start_position_m,
+        eye,
         forward,
         fov_y_rad=math.radians(camera.fov_y_deg),
         near_m=camera.near_m,
@@ -59,7 +72,7 @@ def test_liquid_pass_at_one_million_particles(bench_session: BenchSession) -> No
             )
             times: dict[str, list[float]] = {}
             try:
-                bench_session.start("liquid_pass_1m")
+                bench_session.start(f"liquid_pass_1m_{where}")
                 for index in range(70):
                     frame.render(target, view, SIZE, count=len(points), timer=timer)
                     timer.end_frame()
@@ -75,7 +88,7 @@ def test_liquid_pass_at_one_million_particles(bench_session: BenchSession) -> No
     medians = {name: float(np.median(ms)) for name, ms in times.items()}
     liquid_ms = medians["liquid (OpenGL)"]
     path = bench_session.record(
-        "liquid_pass_1m",
+        f"liquid_pass_1m_{where}",
         {
             "particles": len(points),
             "size": list(SIZE),

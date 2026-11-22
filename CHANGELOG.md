@@ -7,6 +7,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- The liquid pass draws its spheres at half resolution (#57, ADR 0027): depth,
+  thickness and smoothing in half-size targets, the composite at full resolution; a
+  sphere smaller than a pixel adds its own volume (its chords weighted by d²), so far
+  water no longer reads too thick. At 1 M particles and 1600 x 900 (unofficial): 0.57,
+  1.12 and 1.56 ms from the start camera, above the rim and up close, against 1.46,
+  3.58 and 4.64 ms before (budget 2.5 ms). The liquid pass benchmark covers the three
+  views; the still pool's reference image is re-recorded.
 - The bucket, the flood source and the eraser (#54):
   - the bucket drops exactly its volume (0.01–2 m³) where the aim meets the rim over
     the tank; right click turns it into a dam, Martin & Moyce's column 2a high across

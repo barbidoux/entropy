@@ -29,9 +29,15 @@ Simplifications, named (CLAUDE.md rule 7):
   front of the water;
 - only the sky is reflected, not the scene;
 - absorption uses one wavelength per sRGB primary (`water.toml`);
-- a sprite is at least one pixel: far water whose spheres are smaller adds a whole
-  chord to one pixel, so its thickness reads high;
+- a sprite is at least one pixel; a sphere smaller than that has its chords weighted by
+  d² (d its diameter in pixels), so it adds its own volume on average and far water
+  keeps its thickness on average, not pixel by pixel;
 - glass behind the water is never seen through it (the water writes its depth);
+- the spheres, their depth and its smoothing are drawn at half the output's resolution
+  (ADR 0027):
+  the composite reads the depth at the nearest of those pixels and interpolates the
+  thickness, so silhouettes are two output pixels coarse; behind a solid's edge, a
+  sphere is tested against one of the four scene pixels it covers;
 - no foam, spray or caustics (later passes, SPEC 7.2).
 """
 
@@ -59,6 +65,9 @@ SMOOTHING_ITERATIONS = 3
 SMOOTHING_RANGE_PARTICLES = 8.0
 """Neighbours further than this (in particle radii) in depth are another surface."""
 MAX_FILTER_PX = 24
+SPRITE_DOWNSCALE = 2
+"""The spheres are drawn at 1/2 of the output's resolution (#57): their cost is per
+fragment, and a million of them seen up close took 4.6 ms at 1600 x 900."""
 
 _SPRITE_VERTEX = """
 #version 450 core
@@ -68,12 +77,17 @@ uniform float radius_m;
 uniform float viewport_height_px;
 in vec3 position_m;
 out vec3 centre_view;
+out float coverage;
 void main() {
     vec4 v = view * vec4(position_m, 1.0);
     centre_view = v.xyz;
     gl_Position = projection * v;
     float diameter_px = radius_m * projection[1][1] * viewport_height_px / max(-v.z, 1e-4);
     gl_PointSize = max(diameter_px, 1.0);
+    // A sphere smaller than its one-pixel sprite: the sprite still integrates a disc's
+    // chords, but over a one-pixel disc, d^-2 times the sphere's own area (d its true
+    // diameter in pixels). Weighted by d^2, it adds the sphere's volume, on average.
+    coverage = min(1.0, diameter_px * diameter_px);
 }
 """
 
@@ -81,7 +95,9 @@ _SPRITE_COMMON = """
 uniform mat4 projection;
 uniform float radius_m;
 uniform sampler2D scene_depth;
+uniform float scene_per_sprite_px;  // scene pixels per sprite-target pixel (2)
 in vec3 centre_view;
+in float coverage;
 
 // The sphere's point under this fragment, in view space; false outside the disc.
 bool sphere_point(out vec3 p, out float nz) {
@@ -100,7 +116,9 @@ float window_depth(vec3 p) {
 }
 
 bool behind_scene(float depth) {
-    return depth >= texelFetch(scene_depth, ivec2(gl_FragCoord.xy), 0).r;
+    ivec2 q = ivec2(gl_FragCoord.xy * scene_per_sprite_px);
+    q = min(q, textureSize(scene_depth, 0) - 1);
+    return depth >= texelFetch(scene_depth, q, 0).r;
 }
 """
 
@@ -132,7 +150,7 @@ void main() {
     float nz;
     if (!sphere_point(p, nz)) discard;
     if (behind_scene(window_depth(p))) discard;
-    thickness = 2.0 * nz * radius_m * thickness_scale;
+    thickness = 2.0 * nz * radius_m * thickness_scale * coverage;
 }
 """
 )
@@ -196,7 +214,8 @@ uniform float eta;
 uniform vec3 absorption_per_m;
 out vec4 colour;
 
-vec2 size_px() { return vec2(textureSize(fluid_depth, 0)); }
+vec2 size_px() { return vec2(textureSize(fluid_depth, 0)); }  // the water's targets
+vec2 scene_px() { return vec2(textureSize(scene_colour, 0)); }
 
 vec3 view_position(ivec2 p, float z) {
     vec2 ndc = (vec2(p) + 0.5) / size_px() * 2.0 - 1.0;
@@ -224,9 +243,10 @@ float window_depth(vec3 p) {
 }
 
 void main() {
-    ivec2 p = ivec2(gl_FragCoord.xy);
-    float behind_depth = texelFetch(scene_depth, p, 0).r;
-    vec3 behind = texelFetch(scene_colour, p, 0).rgb;
+    ivec2 s = ivec2(gl_FragCoord.xy);  // the scene's pixel
+    ivec2 p = min(ivec2(vec2(s) * size_px() / scene_px()), ivec2(size_px()) - 1);
+    float behind_depth = texelFetch(scene_depth, s, 0).r;
+    vec3 behind = texelFetch(scene_colour, s, 0).rgb;
     float z = texelFetch(fluid_depth, p, 0).r;
     if (z >= FAR) {
         colour = vec4(behind, 1.0);
@@ -242,18 +262,18 @@ void main() {
     float fresnel = f0 + (1.0 - f0) * pow(1.0 - c, 5.0);
     vec3 reflected = sky(normalize(view_to_world * reflect(-v, n)));
 
-    float thickness = texelFetch(fluid_thickness, p, 0).r;
+    float thickness = texture(fluid_thickness, (vec2(s) + 0.5) / scene_px()).r;
     float depth = window_depth(centre);
     vec3 straight = -v;
     vec3 bent = refract(straight, n, eta);
     vec2 shift_m = (bent - straight).xy * thickness;
-    vec2 shift_px = shift_m * projection[1][1] * 0.5 * size_px().y / z;
-    vec2 at = vec2(p) + 0.5 + shift_px;
+    vec2 shift_px = shift_m * projection[1][1] * 0.5 * scene_px().y / z;
+    vec2 at = vec2(s) + 0.5 + shift_px;
     ivec2 q = clamp(ivec2(at), ivec2(0), textureSize(scene_colour, 0) - 1);
     if (texelFetch(scene_depth, q, 0).r < depth) {
-        at = vec2(p) + 0.5;  // never refract what is in front
+        at = vec2(s) + 0.5;  // never refract what is in front
     }
-    vec3 behind_bent = texture(scene_colour, at / size_px()).rgb;
+    vec3 behind_bent = texture(scene_colour, at / scene_px()).rgb;
     vec3 transmitted = behind_bent * exp(-absorption_per_m * thickness);
 
     colour = vec4(fresnel * reflected + (1.0 - fresnel) * transmitted, 1.0);
@@ -302,6 +322,7 @@ class LiquidRenderer:
         for program in (self._depth, self._thickness):
             program["radius_m"].value = radius_m  # type: ignore[union-attr]
             program["scene_depth"].value = 0  # type: ignore[union-attr]
+            program["scene_per_sprite_px"].value = float(SPRITE_DOWNSCALE)  # type: ignore[union-attr]
         self._thickness["thickness_scale"].value = self.thickness_scale  # type: ignore[union-attr]
         self._smooth["depth_in"].value = 0  # type: ignore[union-attr]
         composite = self._composite
@@ -318,6 +339,8 @@ class LiquidRenderer:
         composite["eta"].value = 1.0 / self.refractive_index  # type: ignore[union-attr]
         composite["absorption_per_m"].value = self.absorption_per_m_rgb  # type: ignore[union-attr]
         self._size: tuple[int, int] | None = None
+        self.sprite_size_px: tuple[int, int] | None = None
+        """The size of the targets the spheres are drawn in: half the output's."""
         self._textures: list[moderngl.Texture] = []
         self._framebuffers: list[moderngl.Framebuffer] = []
         self._depth_buffer: moderngl.Renderbuffer | None = None
@@ -327,10 +350,13 @@ class LiquidRenderer:
             return
         self._release_targets()
         ctx = self.ctx
-        self._textures = [ctx.texture(size, 1, dtype="f4") for _ in range(3)]
+        small = (-(-size[0] // SPRITE_DOWNSCALE), -(-size[1] // SPRITE_DOWNSCALE))  # rounded up
+        self._textures = [ctx.texture(small, 1, dtype="f4") for _ in range(3)]
         for texture in self._textures:
             texture.filter = (moderngl.NEAREST, moderngl.NEAREST)
-        self._depth_buffer = ctx.depth_renderbuffer(size)
+        self._textures[2].filter = (moderngl.LINEAR, moderngl.LINEAR)  # thickness: smooth
+        self._depth_buffer = ctx.depth_renderbuffer(small)
+        self.sprite_size_px = small
         depth_a, depth_b, thickness = self._textures
         self._framebuffers = [
             ctx.framebuffer([depth_a], self._depth_buffer),
@@ -351,7 +377,9 @@ class LiquidRenderer:
             return
         self._resize(size)
         ctx = self.ctx
-        ctx.viewport = (0, 0, width, height)
+        assert self.sprite_size_px is not None
+        small_w, small_h = self.sprite_size_px
+        ctx.viewport = (0, 0, small_w, small_h)
         projection = view.projection(width / height).astype(np.float64)
         camera = view.view().astype(np.float64)
         depth_a, _, thickness = self._textures
@@ -363,7 +391,7 @@ class LiquidRenderer:
             for program in (self._depth, self._thickness):
                 program["view"].write(gl_bytes(camera))  # type: ignore[union-attr]
                 program["projection"].write(gl_bytes(projection))  # type: ignore[union-attr]
-                program["viewport_height_px"].value = float(height)  # type: ignore[union-attr]
+                program["viewport_height_px"].value = float(small_h)  # type: ignore[union-attr]
             scene.depth.use(location=0)
             ctx.enable(moderngl.PROGRAM_POINT_SIZE | moderngl.DEPTH_TEST)
             sprites_fb.use()
@@ -374,8 +402,9 @@ class LiquidRenderer:
             thickness_fb.use()
             self._thickness_vao.render(moderngl.POINTS, vertices=count)
             ctx.disable(moderngl.BLEND | moderngl.PROGRAM_POINT_SIZE)
-            self._smooth_depth(projection, height)
+            self._smooth_depth(projection, small_h)
 
+        ctx.viewport = (0, 0, width, height)
         composite = self._composite
         composite["projection"].write(gl_bytes(projection))  # type: ignore[union-attr]
         rotation = np.ascontiguousarray(camera[:3, :3], dtype=np.float32)  # view_to_world = Rᵀ

@@ -228,3 +228,29 @@ def test_a_solid_inside_the_water_shortens_what_light_crosses(window: GameWindow
     face = _centre(scene, half=8)
     expected = f0 * np.asarray(HORIZON) + (1.0 - f0) * face * np.exp(-absorption * 0.9)
     np.testing.assert_allclose(_centre(out, half=8), expected, rtol=0.03)
+
+
+@pytest.mark.parametrize(("size", "half"), [((120, 90), (60, 45)), ((121, 91), (61, 46))])
+def test_the_spheres_are_drawn_at_half_the_output_s_resolution(
+    window: GameWindow, size: tuple[int, int], half: tuple[int, int]
+) -> None:
+    """#57: drawing the spheres costs per fragment, and up close a million of them cost
+    4.6 ms at 1600 x 900 (SPEC 7.2's budget: 2.5 ms). Depth, thickness and smoothing run
+    at half the output's resolution; the composite runs at full resolution."""
+    slab = fill_box((0.0, -0.5, -0.5), (2.0, 0.5, 0.5), DX_M, 8, seed=1, jitter=0.0)
+    ctx = window.ctx
+    scene, out = HdrTarget(ctx, size), HdrTarget(ctx, size)
+    with SharedBuffer(ctx, len(slab), wp.vec3, device="cpu") as shared:
+        with shared.writable() as array:
+            wp.copy(array, wp.array(slab.astype(np.float32), dtype=wp.vec3, device="cpu"))
+        renderer = LiquidRenderer(
+            ctx, shared, radius_m=0.75 * SPACING_M, particle_volume_m3=SPACING_M**3, water=WATER
+        )
+        try:
+            scene.framebuffer.clear(1.0, 1.0, 1.0, 1.0, depth=1.0)
+            renderer.render(out, scene, _view((6.0, 0.0, 0.0), (0.0, 0.0, 0.0)), count=len(slab))
+            assert renderer.sprite_size_px == half
+        finally:
+            renderer.release()
+            scene.release()
+            out.release()
