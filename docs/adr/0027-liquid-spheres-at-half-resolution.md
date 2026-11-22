@@ -42,9 +42,11 @@ were a third to a half of a pixel across.
     refraction. At a silhouette it takes the nearest pixel's.
   - The thickness is interpolated too.
   - Water behind the output pixel's own solid is not drawn there: the scene and its
-    depth show instead. There is no allowance: none was needed, at grazing views or at
-    waterlines, and one of a few sphere radii let water show over a solid's edge just in
-    front of it.
+    depth show instead. There is no allowance: none was visibly needed, at grazing
+    views or at waterlines, and one of a few sphere radii let water show over a solid's
+    edge just in front of it. Seen within 20° of the floor, a thin sheet's side face is
+    dropped where the smoothing pulls its depth behind the floor: at most one 8-bit
+    level of difference, on the review's light-grey floor.
 - **Sub-pixel spheres weighted by d².**
   - Averaged over its position in the pixel, a one-pixel sprite adds the chords of a
     one-pixel disc. For a sphere of true diameter d < 1 pixel, that is 1/d² times its

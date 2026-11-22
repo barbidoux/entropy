@@ -404,8 +404,9 @@ def test_water_just_behind_a_solid_s_edge_is_not_drawn_over_it(
     window: GameWindow, offset_m: float
 ) -> None:
     """A thin plate 2.4 sphere radii in front of the water's surface, its edges off the
-    pixel blocks: every plate pixel shows the plate. The composite lets water through a
-    pixel's solid by at most a sphere's radius (#78's re-review)."""
+    pixel blocks: every plate pixel shows the plate. The composite has no allowance
+    behind a pixel's solid; this bounds any future one below about 2.4 sphere radii
+    (#78's re-review)."""
     size = (321, 241)
     radius_m = 0.75 * SPACING_M
     slab = fill_box((0.0, -0.5, -0.5), (2.0, 0.5, 0.5), DX_M, 8, seed=1, jitter=0.0)

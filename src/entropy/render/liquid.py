@@ -298,8 +298,8 @@ void main() {
         n = z < FAR ? normal_at(p, z) : vec3(0.0, 0.0, 1.0);
     }
     // No water here, or the water lies behind this pixel's solid (the spheres were kept
-    // where any of a block's pixels sees them). No allowance: none was needed, and one
-    // of a few sphere radii lets water show over a solid just in front of it.
+    // where any of a block's pixels sees them). No allowance: none was visibly needed,
+    // and one of a few sphere radii lets water show over a solid just in front of it.
     if (z >= FAR || z > eye_depth(behind_depth)) {
         colour = vec4(behind, 1.0);
         gl_FragDepth = behind_depth;
