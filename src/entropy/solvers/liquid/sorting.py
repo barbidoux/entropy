@@ -1,9 +1,9 @@
-"""Liquid particles sorted by cell (#65).
+"""Liquid particles sorted by cell (#65, ADR 0025).
 
 Particles that share a cell then sit together in memory, so the transfers read and
 write the grid in order instead of at random. Measured on the laptop at 1 M particles
-in the Test Tank's grid (unofficial, GPU shared): particles to grid 3.4 to 2.2 ms per
-substep, grid to particles 0.87 to 0.15 ms, for a sort of 0.8 ms per frame.
+in the Test Tank's grid (unofficial, GPU shared): particles to grid 3.42 to 2.34 ms per
+substep, grid to particles 0.87 to 0.14 ms, for a sort of 0.76 ms per frame.
 
 Cells are ordered x-major (x, then y, then z), the grid's own memory order; a
 particle outside the grid sorts with the nearest cell. The sort is stable (a radix

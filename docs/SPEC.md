@@ -265,7 +265,7 @@ Initial material values below are order-of-magnitude placeholders. Each one gets
 
 Water uses the Affine Particle-In-Cell method (APIC): particles carry the water, a grid enforces incompressibility. This is the family of methods used for film water, and it conserves angular momentum, so splashes keep their swirl.
 
-- **State:** particles with position, velocity and a 3 × 3 affine matrix; a staggered (MAC) grid with a default cell of 6.25 cm; about 8 particles per cell.
+- **State:** particles with position, velocity and a 3 × 3 affine matrix; a staggered (MAC) grid with a default cell of 6.25 cm; about 8 particles per cell. The particles are sorted by cell at the start of every frame, so the transfers read and write the grid in order (ADR 0025).
 - **Step:** transfer particles to grid with quadratic B-spline weights; add gravity, tool and coupling forces; build the liquid's density and level set from the particles' mass and label the cells from it (ADR 0018); enforce solid boundaries; correct the volume (ADR 0018); solve for pressure; extrapolate velocity two faces into the air; transfer back to particles; move particles with a second-order integrator and push them out of solids.
 - **Pressure:** a Poisson equation solved by multigrid-preconditioned conjugate gradient (MGPCG), with a second-order free-surface boundary condition.
 - **Solids:** static geometry enters as a signed distance field (SDF). Moving rigid bodies use variational solid–fluid coupling, so pressure pushes on bodies and bodies push on water in one solve.
