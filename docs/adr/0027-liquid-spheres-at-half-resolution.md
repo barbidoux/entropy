@@ -23,7 +23,7 @@ SPEC 7.2's budget for the pass is 2.5 ms. In the M1 gate's hose scenario, the pa
 
 A bias was also already named: a sphere smaller than a pixel was drawn as a one-pixel
 sprite, so far water read too thick. It read +48 % too thick, and +484 % once spheres
-were a fifth of a pixel.
+were a third to a half of a pixel across.
 
 ## Decision
 
@@ -41,8 +41,10 @@ were a fifth of a pixel.
     interpolates their depth and their normals bilinearly, and so its reflection and
     refraction. At a silhouette it takes the nearest pixel's.
   - The thickness is interpolated too.
-  - Water farther than the output pixel's own solid, by more than a sphere's radius, is
-    not drawn there: the scene and its depth show instead.
+  - Water behind the output pixel's own solid is not drawn there: the scene and its
+    depth show instead. There is no allowance: none was needed, at grazing views or at
+    waterlines, and one of a few sphere radii let water show over a solid's edge just in
+    front of it.
 - **Sub-pixel spheres weighted by d².**
   - Averaged over its position in the pixel, a one-pixel sprite adds the chords of a
     one-pixel disc. For a sphere of true diameter d < 1 pixel, that is 1/d² times its
@@ -84,6 +86,9 @@ Named simplifications (in `entropy.render.liquid` and SPEC 7.2):
   Most of the increase comes from drawing the sprites at half resolution, not from the
   upsampling. Matt's play session is the judge.
 - **Far water's thickness is right on average,** not pixel by pixel.
+- **Thickness blends across a solid's outline inside the water** over one or two output
+  pixels. The review measured, for a submerged box, a mean error of 4 % in that band
+  and 15 % at the 95th percentile.
 
 ## Alternatives considered
 
@@ -102,4 +107,5 @@ Named simplifications (in `entropy.render.liquid` and SPEC 7.2):
 - Matt finds the water's edges blocky, or its surface shimmering, in play.
 - The pass exceeds 2.5 ms in a view the game reaches. The benchmark covers three views.
 - Solids inside the water (M2) show water drawn over their edges, or unabsorbed gaps
-  beside them. A test covers off-grid box edges.
+  beside them. Tests cover off-grid box edges, water just behind a solid's edge, and
+  water in front of water.

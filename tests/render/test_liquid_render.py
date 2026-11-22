@@ -384,3 +384,61 @@ def test_the_water_varies_within_each_block_of_pixels(
     within = step[:, 0::2][both[:, 0::2]].mean()  # columns 2k and 2k + 1: one block
     across = step[:, 1::2][both[:, 1::2]].mean()  # columns 2k + 1 and 2k + 2: two blocks
     assert within > 0.5 * across, f"within {within:.5f}, across {across:.5f}"
+
+
+def _world(view: CameraView, window_depth: np.ndarray, size: tuple[int, int]) -> np.ndarray:
+    """World position (m) of every pixel (rows from the top) from its window depth."""
+    width, height = size
+    x = (np.arange(width) + 0.5) / width * 2.0 - 1.0
+    y = (np.arange(height)[::-1] + 0.5) / height * 2.0 - 1.0
+    ndc = np.stack(
+        [*np.meshgrid(x, y), 2.0 * window_depth - 1.0, np.ones_like(window_depth)], axis=-1
+    )
+    inverse = np.linalg.inv(view.projection(width / height).astype(np.float64) @ view.view())
+    world = ndc @ inverse.T
+    return world[..., :3] / world[..., 3:]
+
+
+@pytest.mark.parametrize("offset_m", [0.003, 0.007])
+def test_water_just_behind_a_solid_s_edge_is_not_drawn_over_it(
+    window: GameWindow, offset_m: float
+) -> None:
+    """A thin plate 2.4 sphere radii in front of the water's surface, its edges off the
+    pixel blocks: every plate pixel shows the plate. The composite lets water through a
+    pixel's solid by at most a sphere's radius (#78's re-review)."""
+    size = (321, 241)
+    radius_m = 0.75 * SPACING_M
+    slab = fill_box((0.0, -0.5, -0.5), (2.0, 0.5, 0.5), DX_M, 8, seed=1, jitter=0.0)
+    face_m = float(slab[:, 0].max()) + radius_m  # the water's surface, towards the camera
+    view = _view((6.0, 0.0, 0.0), (0.0, 0.0, 0.0))
+    plate = SceneBox(
+        (face_m + 2.0 * radius_m + 0.005, offset_m, offset_m * 0.6),
+        (0.005, 0.12, 0.12),
+        (0.6, 0.1, 0.1),
+    )
+
+    scene, scene_depth, out, out_depth = _draw(window, slab, view, boxes=(plate,), size=size)
+
+    on_plate = _eye_depths(view, scene_depth, size) < 6.0 - face_m
+    assert on_plate.sum() > 100
+    np.testing.assert_allclose(out[on_plate], scene[on_plate], atol=1e-3)
+    np.testing.assert_allclose(out_depth[on_plate], scene_depth[on_plate], atol=1e-6)
+
+
+def test_water_in_front_of_water_keeps_its_own_depth_at_its_edge(window: GameWindow) -> None:
+    """A thin sheet 3 m in front of a wider one, its edges off the pixel blocks: at the
+    near sheet's outline the composite does not interpolate depth between the two sheets
+    (#78's re-review). The smoothing itself may pull the far sheet forward there, by at
+    most its passes times its range (1.1 m here): the narrow-range filter (ADR 0023)."""
+    size = (321, 241)
+    far = fill_box((-1.5, -1.2, -1.2), (-1.0, 1.2, 1.2), DX_M, 8, seed=1, jitter=0.0)
+    near = fill_box((1.9375, 0.013, -0.507), (2.0, 0.6, 0.493), DX_M, 8, seed=2, jitter=0.0)
+    view = _view((6.0, 0.0, 0.0), (0.0, 0.0, 0.0))
+
+    _, _, _, out_depth = _draw(window, np.vstack([far, near]), view, size=size)
+
+    depth_m = _eye_depths(view, out_depth, size)
+    water = out_depth < 1.0
+    assert (water & (depth_m < 4.3)).sum() > 1000 and (water & (depth_m > 5.8)).sum() > 1000
+    between = water & (depth_m > 4.3) & (depth_m < 5.8)
+    assert not between.any(), f"{between.sum()} pixels between the sheets"

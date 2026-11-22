@@ -259,7 +259,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   thickness and smoothing in half-size targets; the composite at full resolution, its
   depth and normals interpolated between the four nearest half-size pixels on one
   surface, and water behind each output pixel's solid left out. At 1 M particles and
-  1600 x 900 (unofficial): 0.57, 1.13 and 1.6 ms from the start camera, above the rim
+  1600 x 900 (unofficial): 0.58, 1.13 and 1.62 ms from the start camera, above the rim
   and up close, against 1.46, 3.58 and 4.64 ms before (budget 2.5 ms). The liquid pass
   benchmark covers the three views; the still pool's reference image is re-recorded.
 - The HUD drops a GPU stage that has not been timed for a whole window of frames, such
@@ -299,7 +299,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - A sphere smaller than a pixel adds its own volume to the water's thickness (its
   chords weighted by d², ADR 0027): far water no longer reads too thick (+48 % to
-  +484 % before, once spheres fell below a pixel).
+  +484 % before, once spheres were a third to a half of a pixel across).
 - Water sealed from air (#69, ADR 0021): when no cell is air, the pressure solve
   (MGPCG) drops the right-hand side's part along the constant, removes the constant from
   its preconditioned residual every iteration, and sets the pressure's mean to 0. A grid

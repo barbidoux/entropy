@@ -40,6 +40,10 @@ Simplifications, named (CLAUDE.md rule 7):
 - the spheres, their depth and its smoothing are drawn at half the output's resolution
   (ADR 0027): silhouettes are two output pixels coarse, detail under two output pixels
   is lost, and the water shimmers more as the camera turns (measured in ADR 0027);
+- around a solid inside the water, the thickness blends across the solid's outline
+  over one or two output pixels (ADR 0027);
+- at the outline of water in front of other water, the smoothing pulls the far
+  surface forward, by at most its passes times its range (the narrow-range filter);
 - no foam, spray or caustics (later passes, SPEC 7.2).
 """
 
@@ -219,7 +223,6 @@ uniform mat3 view_to_world;
 uniform float f0;
 uniform float eta;
 uniform vec3 absorption_per_m;
-uniform float radius_m;
 uniform float range_m;
 out vec4 colour;
 
@@ -295,8 +298,9 @@ void main() {
         n = z < FAR ? normal_at(p, z) : vec3(0.0, 0.0, 1.0);
     }
     // No water here, or the water lies behind this pixel's solid (the spheres were kept
-    // where any of a block's pixels sees them).
-    if (z >= FAR || z > eye_depth(behind_depth) + radius_m) {
+    // where any of a block's pixels sees them). No allowance: none was needed, and one
+    // of a few sphere radii lets water show over a solid just in front of it.
+    if (z >= FAR || z > eye_depth(behind_depth)) {
         colour = vec4(behind, 1.0);
         gl_FragDepth = behind_depth;
         return;
@@ -384,7 +388,6 @@ class LiquidRenderer:
         composite["f0"].value = fresnel_f0(self.refractive_index)  # type: ignore[union-attr]
         composite["eta"].value = 1.0 / self.refractive_index  # type: ignore[union-attr]
         composite["absorption_per_m"].value = self.absorption_per_m_rgb  # type: ignore[union-attr]
-        composite["radius_m"].value = radius_m  # type: ignore[union-attr]
         composite["range_m"].value = SMOOTHING_RANGE_PARTICLES * radius_m  # type: ignore[union-attr]
         self._size: tuple[int, int] | None = None
         self.sprite_size_px: tuple[int, int] | None = None
