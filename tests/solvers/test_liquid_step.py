@@ -682,6 +682,8 @@ def test_erasing_between_frames_keeps_the_nan_dump_s_starting_state(
 
     dump = load_dump(raised.value.dump_path)
     np.testing.assert_array_equal(dump["before_positions_m"], start)
+
+
 @pytest.mark.parametrize("jitter", [0.0, 0.8])
 def test_a_grid_full_of_water_stays_still(device: str, jitter: float) -> None:
     """#69: water up to the grid's lid, no air anywhere: still, finite, converged."""
