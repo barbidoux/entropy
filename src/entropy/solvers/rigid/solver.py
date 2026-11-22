@@ -6,7 +6,8 @@ gravity and the gyroscopic torque, solves the contacts' depths once and their st
 friction (between bodies in parallel, then each body against the static solids by its
 own thread), recovers the velocities from the motion, then runs the velocity pass at
 the contact patches: restitution and dynamic friction (Müller et al. 2020, "Detailed
-rigid body simulation with extended position based dynamics"; ADR 0031, 0032). The substeps follow the advance, so the solver never limits it (ADR 0013).
+rigid body simulation with extended position based dynamics"; ADR 0031, 0032). The
+substeps follow the advance, so the solver never limits it (ADR 0013).
 
 State on the device, one entry per body (ADR 0030): position (m), orientation (unit
 quaternion x, y, z, w, body to world), velocity (m/s), angular velocity (rad/s, world
