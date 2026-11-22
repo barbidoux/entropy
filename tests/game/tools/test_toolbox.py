@@ -1,5 +1,7 @@
 """The toolbox (`entropy.game.toolbox`): choosing a tool, its power, using it (SPEC 4.5)."""
 
+import re
+
 import glfw
 import pytest
 
@@ -242,3 +244,193 @@ def test_a_click_while_the_world_stands_still_is_forgotten() -> None:
     box.apply(AIM, 1.0 / 60.0)
 
     assert log == []
+
+
+def test_a_tool_held_into_a_pause_and_let_go_there_is_released_afterwards() -> None:
+    """Clicks during a pause are dropped, but a tool already in use still gets its
+    release, so a tool that holds something lets go of it (#74's review)."""
+    box, log = _recording_toolbox()
+    box.handle(_frame(tool_pressed=True, tool_held=True))
+    box.apply(AIM, 1.0 / 60.0)
+    box.handle(_frame(tool_released=True))  # paused: no apply
+
+    box.forget_clicks()
+    box.apply(AIM, 1.0 / 60.0)
+
+    assert log == [("A", "press"), ("A", "hold"), ("A", "release")]
+
+
+def test_the_eraser_works_through_the_toolbox_on_the_cpu() -> None:
+    """The toolbox hands tools its `Inflow`; the eraser must reach the liquid behind it
+    (#74's review: this was caught only by a GPU test)."""
+    from entropy.fields.mac import GridSpec
+    from entropy.solvers.liquid.solver import LiquidSetup, LiquidSolver, fill_box
+
+    setup = LiquidSetup(
+        spec=GridSpec(shape=(16, 16, 16), dx_m=0.0625),
+        density_kg_per_m3=998.21,  # its value does not matter to the eraser
+        gravity_m_per_s2=(0.0, 0.0, -9.81),
+    )
+    liquid = LiquidSolver.create(setup, "cpu")
+    liquid.add_particles(fill_box((0.0, 0.0, 0.0), (1.0, 1.0, 0.25), 0.0625, 8, seed=1))
+    liquid.step(1e-5)  # builds the level set
+    pool = Domain(low_m=(0.0, 0.0, 0.0), high_m=(1.0, 1.0, 1.0), rim_z_m=0.75, ground_z_m=-0.1)
+    box = Toolbox.standard(
+        gravity_m_per_s2=(0.0, 0.0, -9.81),
+        domain=pool,
+        liquid=liquid,
+        particle_volume_m3=setup.particle_volume_m3,
+    )
+    before = liquid.particle_count()
+    box.handle(_frame(pressed=frozenset({Action.TOOL_4})))
+    box.handle(_frame(tool_pressed=True, tool_held=True))
+
+    box.apply(Aim(origin_m=(0.5, 0.5, 0.9), direction=(0.0, 0.0, -1.0)), 1.0 / 60.0)
+
+    assert liquid.particle_count() < before
+
+
+def test_the_bucket_says_how_much_it_could_drop_into_a_full_tank() -> None:
+    liquid = _SmallTank(room=100)
+    toolbox = _toolbox(liquid)
+    toolbox.handle(_frame(pressed=frozenset({Action.TOOL_2})))
+    toolbox.handle(_frame(tool_pressed=True))
+    aim = Aim(origin_m=(0.0, -3.0, 3.0), direction=(0.0, 0.8, -0.6))
+
+    toolbox.apply(aim, 1.0 / 60.0)
+
+    status = toolbox.current.status  # pyright: ignore[reportAttributeAccessIssue]
+    assert liquid.added == 100
+    assert "pleine" in status and f"{100 * PARTICLE_M3:.3g}" in status
+
+
+def test_a_tool_let_go_during_a_pause_is_released_even_after_a_switch() -> None:
+    """Held into a pause, let go there, then another tool chosen: the first still gets its
+    release when the world runs again (#77's review, S1)."""
+    box, log = _recording_toolbox()
+    box.handle(_frame(tool_pressed=True, tool_held=True))
+    box.apply(AIM, 1.0 / 60.0)
+    box.handle(_frame(tool_released=True))  # paused
+    box.forget_clicks()
+    box.handle(_frame(pressed=frozenset({Action.TOOL_2})))
+    box.forget_clicks()
+
+    box.apply(AIM, 1.0 / 60.0)
+
+    assert log == [("A", "press"), ("A", "hold"), ("A", "release")]
+
+
+def test_a_switch_releases_only_a_tool_that_was_pressed() -> None:
+    """A click dropped during a pause, the button still held, then a switch: the old tool
+    was never pressed, so it gets no release, and neither tool acts on that held button
+    until a new press (#77's review, S2 and N5)."""
+    box, log = _recording_toolbox()
+    box.handle(_frame(tool_pressed=True, tool_held=True))  # paused: dropped
+    box.forget_clicks()
+    box.handle(_frame(tool_held=True))
+    box.apply(AIM, 1.0 / 60.0)
+    box.handle(_frame(pressed=frozenset({Action.TOOL_2}), tool_held=True))
+    box.apply(AIM, 1.0 / 60.0)
+
+    assert log == []
+
+
+def test_a_switch_in_the_frame_the_button_is_let_go_is_no_click_for_the_new_tool() -> None:
+    """Key 2 and the button's release in one frame: the old tool lets go, and the new one
+    is not pressed, held and released, which would drop a bucket for nothing (N5)."""
+    box, log = _recording_toolbox()
+    box.handle(_frame(tool_pressed=True, tool_held=True))
+    box.apply(AIM, 1.0 / 60.0)
+
+    box.handle(_frame(pressed=frozenset({Action.TOOL_2}), tool_released=True))
+    box.apply(AIM, 1.0 / 60.0)
+
+    assert log == [("A", "press"), ("A", "hold"), ("A", "release")]
+
+
+def test_a_switch_while_held_in_a_pause_starts_the_new_tool_when_the_world_runs() -> None:
+    """Held through a pause, another tool chosen there: at resume the new tool is pressed
+    before it is held (N5)."""
+    box, log = _recording_toolbox()
+    box.handle(_frame(tool_pressed=True, tool_held=True))
+    box.apply(AIM, 1.0 / 60.0)
+    box.handle(_frame(pressed=frozenset({Action.TOOL_2}), tool_held=True))  # paused
+    box.forget_clicks()
+    box.handle(_frame(tool_held=True))
+
+    box.apply(AIM, 1.0 / 60.0)
+
+    assert log[2:] == [("A", "release"), ("B", "press"), ("B", "hold")]
+
+
+def test_the_dam_says_how_much_it_could_drop_into_a_full_tank() -> None:
+    """The bucket's other shape reports a full tank too, with its units (#77's review)."""
+    liquid = _SmallTank(room=100)
+    toolbox = _toolbox(liquid)
+    toolbox.handle(_frame(pressed=frozenset({Action.TOOL_2})))
+    toolbox.handle(_frame(alternate_pressed=True))
+    toolbox.handle(_frame(tool_pressed=True))
+    aim = Aim(origin_m=(0.0, -3.0, 3.0), direction=(0.0, 0.8, -0.6))
+
+    toolbox.apply(aim, 1.0 / 60.0)
+
+    status = toolbox.current.status  # pyright: ignore[reportAttributeAccessIssue]
+    assert liquid.added == 100
+    assert "barrage" in status and "pleine" in status
+    assert re.search(r"sur [0-9.e+-]+ m³", status), status
+
+
+def test_a_release_left_from_a_pause_does_not_stop_the_tool_a_switch_starts() -> None:
+    """Held into a pause, let go and pressed again there (that click is dropped), key 2
+    while held, then the world runs with the button down: the old tool's release is not
+    the new one's (#77's re-review, R1)."""
+    box, log = _recording_toolbox()
+    box.handle(_frame(tool_pressed=True, tool_held=True))
+    box.apply(AIM, 1.0 / 60.0)
+    for paused in (
+        _frame(tool_released=True),
+        _frame(tool_pressed=True, tool_held=True),
+        _frame(pressed=frozenset({Action.TOOL_2}), tool_held=True),
+    ):
+        box.handle(paused)
+        box.forget_clicks()
+
+    for _ in range(2):
+        box.handle(_frame(tool_held=True))
+        box.apply(AIM, 1.0 / 60.0)
+
+    assert log[2:] == [("A", "release"), ("B", "press"), ("B", "hold"), ("B", "hold")]
+
+
+def test_a_button_let_go_and_pressed_again_within_a_frame_keeps_the_tool_going() -> None:
+    """The release came first, since the button is down at the end of the frame: the tool
+    lets go and starts again (#77's re-review, R2)."""
+    box, log = _recording_toolbox()
+    box.handle(_frame(tool_pressed=True, tool_held=True))
+    box.apply(AIM, 1.0 / 60.0)
+
+    box.handle(_frame(tool_released=True, tool_pressed=True, tool_held=True))
+    box.apply(AIM, 1.0 / 60.0)
+    box.handle(_frame(tool_held=True))
+    box.apply(AIM, 1.0 / 60.0)
+
+    assert log[2:] == [("A", "release"), ("A", "press"), ("A", "hold"), ("A", "hold")]
+
+
+def test_a_switch_while_held_in_a_pause_then_let_go_there_starts_nothing() -> None:
+    """The new tool starts only if the button is still held when the world runs; let go
+    in the pause, it would be a phantom click (a bucket dropped) (#77's re-review, R3)."""
+    box, log = _recording_toolbox()
+    box.handle(_frame(tool_pressed=True, tool_held=True))
+    box.apply(AIM, 1.0 / 60.0)
+    for paused in (
+        _frame(pressed=frozenset({Action.TOOL_2}), tool_held=True),
+        _frame(tool_released=True),
+    ):
+        box.handle(paused)
+        box.forget_clicks()
+
+    box.handle(_frame())
+    box.apply(AIM, 1.0 / 60.0)
+
+    assert log == [("A", "press"), ("A", "hold"), ("A", "release")]

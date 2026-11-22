@@ -46,6 +46,9 @@ def discover_tools(folder: Path | None = None) -> list[Any]:
     folder = folder if folder is not None else content_dir() / "tools"
     specs = [load_tool_spec(path.stem, folder) for path in sorted(folder.glob("*.toml"))]
     orders = [spec.order for spec in specs]
+    outside = [spec.name for spec in specs if not 1 <= spec.order <= 9]
+    if outside:
+        raise ValueError(f"a tool's order is its key, 1 to 9: {outside}")
     if len(set(orders)) != len(orders):
         raise ValueError(f"two tools share an order (a key): {sorted(orders)}")
     tools = []

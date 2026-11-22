@@ -236,3 +236,19 @@ def test_water_is_lost_on_the_frame_it_reaches_the_ground() -> None:
     assert len(jet) == 1
     jet.advance(1.0 / 60.0, TANK)
     assert len(jet) == 0 and jet.lost_parcels == 1
+
+
+def test_hosing_from_inside_the_tank_below_the_rim_puts_the_water_in() -> None:
+    """God mode flies anywhere, into the tank too: water from a camera already inside the
+    grid joins the liquid at once, whatever the rim (#74's review, mutant N9)."""
+    aim = Aim(origin_m=(0.0, 0.0, 1.0), direction=(1.0, 0.0, 0.0))
+    hose = Hose(load_tool_spec("hose"))
+    jet = Jet(GRAVITY)
+    liquid = _Liquid()
+    context = ToolContext(aim=aim, liquid=liquid, jet=jet, particle_volume_m3=PARTICLE_M3)
+    hose.on_press(context)
+    hose.on_hold(context, 1.0 / 60.0)
+
+    jet.advance(1.0 / 60.0, TANK, liquid)
+
+    assert len(liquid.positions) > 0 and jet.lost_parcels == 0

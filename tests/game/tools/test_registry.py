@@ -65,3 +65,11 @@ def test_two_tools_on_one_key_are_refused(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="order"):
         discover_tools(tmp_path)
+
+
+@pytest.mark.parametrize("order", [0, 10])
+def test_a_tool_s_key_is_1_to_9(tmp_path: Path, order: int) -> None:
+    _write_tool(tmp_path, "test_tap", order=order)
+
+    with pytest.raises(ValueError, match="1 to 9"):
+        discover_tools(tmp_path)
