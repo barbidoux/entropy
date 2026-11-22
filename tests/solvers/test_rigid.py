@@ -18,6 +18,7 @@ from entropy.solvers.rigid import (
     mass_properties,
 )
 from entropy.world.maps import Environment
+from entropy.world.sdf import HalfSpace, Solids
 
 GRAVITY = Environment().gravity_m_per_s2
 TEST_DENSITY_KG_PER_M3 = 600.0  # any density will do; no material is meant
@@ -320,43 +321,35 @@ def test_a_non_finite_body_freezes_the_solver_and_dumps_its_frame(
 
 
 def test_a_dump_replays_its_frame(tmp_path) -> None:
-    """Restoring a dump's starting state and stepping its time step gives its result, bit
-    for bit on the CPU: a dump is a regression test."""
-    solver = _solver("cpu", tmp_path)
+    """A dump holds the frame's starting state, the static solids and the room for pairs:
+    `RigidSolver.from_dump` rebuilds the solver at that state, and stepping the dump's
+    time step gives its result bit for bit on the CPU, contacts included (#101's review).
+    A dump is a regression test."""
+    floor = Solids((HalfSpace((0.0, 0.0, 0.0), (0.0, 0.0, 1.0)),)).to_device("cpu")
+    setup = RigidSetup(gravity_m_per_s2=GRAVITY, max_bodies=64, dump_dir=tmp_path,
+                       solids=floor, max_pairs=7)  # fmt: skip
+    solver = RigidSolver.create(setup, "cpu")
     solver.add_bodies(
-        [_box(angular_velocity_rad_per_s=(1.0, 2.0, 3.0)), _box(position_m=(1.0, 0.0, 5.0))]
+        [
+            _box(position_m=(0.0, 0.0, 0.1)),
+            _box(position_m=(0.02, 0.0, 0.3), angular_velocity_rad_per_s=(0.1, 0.2, 0.3)),
+            _box(position_m=(3.0, 0.0, 5.0)),
+        ]
     )
-    solver.step(1.0 / 60.0)
-    solver.set_body_velocity(1, (math.nan, 0.0, 0.0))
+    for _ in range(20):
+        solver.step(1.0 / 60.0)
+    solver.set_body_velocity(2, (math.nan, 0.0, 0.0))
     solver.step(1.0 / 30.0)
     with pytest.raises(NonFiniteStateError) as raised:
         solver.step(1.0 / 60.0)
     dump = load_dump(raised.value.dump_path)
 
-    replay = RigidSolver.create(
-        RigidSetup(gravity_m_per_s2=tuple(dump["gravity_m_per_s2"]), max_bodies=64), "cpu"
-    )
-    start = {
-        key[len("before_") :]: value for key, value in dump.items() if key.startswith("before_")
-    }
-    properties = {
-        key: dump[key]
-        for key in (
-            "masses_kg",
-            "inertia_kg_m2",
-            "shapes",
-            "sizes_m",
-            "bounds_m",
-            "static_friction",
-            "dynamic_friction",
-            "restitution",
-        )
-    }
-    replay.restore({"count": int(dump["count"]), **start, **properties})
+    replay = RigidSolver.from_dump(dump, "cpu")
     replay.step(float(dump["dt_s"]))
 
-    np.testing.assert_array_equal(replay.body_positions()[0], dump["positions_m"][0])
-    np.testing.assert_array_equal(replay.body_orientations()[0], dump["orientations"][0])
+    assert replay.setup.max_pairs == 7
+    np.testing.assert_array_equal(replay.body_positions()[:2], dump["positions_m"][:2])
+    np.testing.assert_array_equal(replay.body_orientations()[:2], dump["orientations"][:2])
 
 
 def test_a_restore_drops_a_status_not_yet_read(device: str) -> None:

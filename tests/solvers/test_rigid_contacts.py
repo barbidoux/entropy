@@ -285,27 +285,128 @@ def test_the_tank_s_glass_keeps_a_thrown_box_in(
     assert np.linalg.norm(solver.body_velocities()[0]) <= speed_m_per_s
 
 
-def test_contacts_past_the_capacity_are_counted_not_lost_silently(device: str) -> None:
-    """With room for 4 contacts between bodies, a small box resting on a wide one (its 9
-    bottom samples in) is still held, and the overflow of the last step is counted for the
-    HUD: one step's, not a sum that grows (and wraps), and cleared by a restore. The
-    contacts with the static solids need no room."""
-    solver = _solver(device, max_contacts=4)
+def test_pairs_past_the_capacity_are_counted_not_lost_silently(device: str) -> None:
+    """With room for 1 pair of bodies, two small boxes resting on a wide one make 2: one is
+    dropped each substep and counted for the HUD, as one step's count, not a sum that
+    grows (and wraps), and cleared by a restore. The contacts with the static solids need
+    no room."""
+    solver = _solver(device, max_pairs=1)
+    small = (0.1, 0.1, 0.1)
     solver.add_bodies(
         [
-            Body(Shape.BOX, (0.3, 0.3, 0.1), 600.0, position_m=(0.0, 0.0, 0.1)),
-            Body(Shape.BOX, (0.1, 0.1, 0.1), 600.0, position_m=(0.0, 0.0, 0.3)),
+            Body(Shape.BOX, (0.5, 0.5, 0.1), 600.0, position_m=(0.0, 0.0, 0.1)),
+            Body(Shape.BOX, small, 600.0, position_m=(-0.25, 0.0, 0.3)),
+            Body(Shape.BOX, small, 600.0, position_m=(0.25, 0.0, 0.3)),
         ]
     )
 
     _run(solver, 0.5)
     solver.max_advance_s()
+    first = solver.diagnostics()["pair_overflows"]
+    solver.step(1.0 / 60.0)
+    solver.max_advance_s()
 
-    assert solver.diagnostics()["contact_overflows"] > 0
-    # One step's at most: 8 substeps of the pair's 52 samples, past the 4 places.
-    assert solver.diagnostics()["contact_overflows"] <= 8 * (52 - 4)
-    positions = solver.body_positions()
-    assert positions[0, 2] > 0.099 and positions[1, 2] - positions[0, 2] > 0.15
+    assert first == 8  # one pair dropped in each of the step's 8 substeps
+    assert solver.diagnostics()["pair_overflows"] == first
     solver.restore({**solver.checkpoint(), "count": 0})
     assert solver.diagnostics()["contacts"] == 0
-    assert solver.diagnostics()["contact_overflows"] == 0
+    assert solver.diagnostics()["pair_overflows"] == 0
+
+
+@pytest.mark.parametrize("overhang_m", [0.01, 0.05, 0.09])
+@pytest.mark.parametrize("drop_m", [0.0, 0.05])
+def test_a_box_over_a_table_s_edge_stays_on_it(
+    device: str, overhang_m: float, drop_m: float
+) -> None:
+    """A 20 cm box over the edge of a static table by 1, 5 or 9 cm (under half its width),
+    placed or dropped from 5 cm, stays on it for 10 s: the table's edge under its face
+    holds it (#101's review: it toppled off from 1 cm)."""
+    table = Solids(
+        (Box((0.0, 0.0, 0.4), (0.5, 0.5, 0.4)), HalfSpace((0.0, 0.0, 0.0), (0.0, 0.0, 1.0)))
+    )
+    solver = _solver(device, solids=table)
+    solver.add_bodies([Body(Shape.BOX, (0.1, 0.1, 0.1), DENSITY_KG_PER_M3,
+                            position_m=(0.4 + overhang_m, 0.0, 0.9 + drop_m))])  # fmt: skip
+
+    _run(solver, 10.0)
+
+    position = solver.body_positions()[0]
+    assert position[2] == pytest.approx(0.9, abs=1e-3)
+    assert position[0] == pytest.approx(0.4 + overhang_m, abs=1e-3)
+
+
+def test_a_box_dropped_tilted_on_an_equal_one_ends_level(device: str) -> None:
+    """A box dropped 1° tilted on an equal box comes to lie level on it (under 0.1°): the
+    pair shares its axis of least overlap as the normal (7.6° without it)."""
+    a = math.radians(1.0) / 2.0
+    solver = _solver(device)
+    solver.add_bodies(
+        [
+            Body(Shape.BOX, (0.1, 0.1, 0.1), DENSITY_KG_PER_M3, position_m=(0.0, 0.0, 0.1)),
+            Body(Shape.BOX, (0.1, 0.1, 0.1), DENSITY_KG_PER_M3, position_m=(0.0, 0.0, 0.31),
+                 orientation=(0.6 * math.sin(a), 0.8 * math.sin(a), 0.0, math.cos(a))),
+        ]
+    )  # fmt: skip
+
+    _run(solver, 5.0)
+
+    x, y = solver.body_orientations()[1, :2]
+    assert math.degrees(2.0 * max(abs(x), abs(y))) < 0.1
+
+
+@pytest.mark.parametrize("name", ["sphere", "capsule"])
+def test_a_curved_body_stays_put_on_a_box(device: str, name: str) -> None:
+    """A sphere, or a capsule lying, resting on a box on the floor for 10 s, moves under
+    1 mm: against a sphere only its own sample is tested, and a box tests only its
+    corners and edges against a capsule (its face points would push sideways)."""
+    base = Body(Shape.BOX, (0.6, 0.6, 0.1), DENSITY_KG_PER_M3, position_m=(0.0, 0.0, 0.1))
+    top = SHAPES[name]
+    solver = _solver(device)
+    solver.add_bodies([base, Body(top.shape, top.size_m, top.density_kg_per_m3,
+                                  position_m=(0.0, 0.0, 0.2 + (0.15 if name == "sphere" else 0.1)),
+                                  orientation=top.orientation)])  # fmt: skip
+    _run(solver, 1.0)
+    settled = solver.body_positions()[1].copy()
+
+    _run(solver, 9.0)
+
+    assert np.linalg.norm(solver.body_positions()[1] - settled) < 1e-3
+    assert np.abs(solver.body_velocities()).max() < 1e-3
+
+
+def test_nine_boxes_rest_on_one_slab(device: str) -> None:
+    """Nine boxes resting on one slab: the slab is in nine pairs, each pair's correction
+    scaled by 1 / (the larger pair count), so the slab neither jitters nor sinks."""
+    solver = _solver(device)
+    small, density = (0.1, 0.1, 0.1), DENSITY_KG_PER_M3
+    boxes = [Body(Shape.BOX, small, density, position_m=(0.25 * ix, 0.25 * iy, 0.3))
+             for ix in (-1, 0, 1) for iy in (-1, 0, 1)]  # fmt: skip
+    slab = Body(Shape.BOX, (0.5, 0.5, 0.1), density, position_m=(0.0, 0.0, 0.1))
+    solver.add_bodies([slab, *boxes])
+
+    _run(solver, 3.0)
+
+    positions = solver.body_positions()
+    assert positions[0, 2] == pytest.approx(0.1, abs=3e-4)
+    np.testing.assert_allclose(positions[1:, 2], 0.3, atol=1e-3)
+    assert np.abs(solver.body_velocities()).max() < 1e-3
+
+
+def test_bodies_already_parting_keep_their_speed(device: str) -> None:
+    """No gravity: two boxes spawned 1 cm into each other and already moving apart at
+    1 m/s each are pushed out and keep parting at 2 m/s: the velocity pass never slows a
+    separation under way."""
+    solver = _solver(device, solids=None, gravity=(0.0, 0.0, 0.0))
+    solver.add_bodies(
+        [
+            Body(Shape.BOX, (0.1, 0.1, 0.1), DENSITY_KG_PER_M3, position_m=(-0.095, 0.0, 0.0),
+                 velocity_m_per_s=(-1.0, 0.0, 0.0)),
+            Body(Shape.BOX, (0.1, 0.1, 0.1), DENSITY_KG_PER_M3, position_m=(0.095, 0.0, 0.0),
+                 velocity_m_per_s=(1.0, 0.0, 0.0)),
+        ]
+    )  # fmt: skip
+
+    _run(solver, 0.5)
+
+    velocities = solver.body_velocities()
+    assert velocities[1, 0] - velocities[0, 0] == pytest.approx(2.0, rel=1e-3)

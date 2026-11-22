@@ -2,12 +2,12 @@
 
 Each advance is split into ⌈advance / (1/480 s)⌉ equal substeps (`MAX_SUBSTEP_S`):
 16 for a 1/30 s frame, 8 for 1/60 s. A substep predicts every body's motion under
-gravity and the gyroscopic torque, solves the contacts' depths once and their static
-friction (between bodies in parallel, then each body against the static solids by its
-own thread), recovers the velocities from the motion, then runs the velocity pass at
-the contact patches: restitution and dynamic friction (Müller et al. 2020, "Detailed
-rigid body simulation with extended position based dynamics"; ADR 0031, 0032). The
-substeps follow the advance, so the solver never limits it (ADR 0013).
+gravity and the gyroscopic torque, solves the contacts' depths once (each pair of
+bodies by its own thread, the pairs in parallel, then each body against the static
+solids by its own thread), recovers the velocities from the motion, then runs the
+velocity pass at the contact patches (Müller et al. 2020, "Detailed rigid body
+simulation with extended position based dynamics"; ADR 0031). The substeps follow the
+advance, so the solver never limits it (ADR 0013).
 
 State on the device, one entry per body (ADR 0030): position (m), orientation (unit
 quaternion x, y, z, w, body to world), velocity (m/s), angular velocity (rad/s, world
@@ -22,17 +22,16 @@ Simplifications, named (CLAUDE.md rule 7):
 - positions accumulate in float32: far from the origin a body's position drifts from
   x₀ + vt (1.5 cm after 60 s at 1.26 m/s, 20 to 80 m out), its velocity stays exact;
 - checkpoints are synchronous: on CUDA, taking one waits for the queued GPU work (#99);
-- contacts (ADR 0031, which gives the numbers): edge-on-edge contacts are sampled; a
-  capsule's envelope sags by up to 0.13 r between samples; contacts between bodies are
-  solved by Jacobi, so stacks sink under load (7.7 mm for 10 boxes of 20 cm) and a far
-  heavier body on a stack sinks and jitters; angular momentum is kept within 8e-4 in
-  V-RB-04's scene, the linear within 1e-4; a contact overflow loses support; a sphere or
-  capsule at 20 m/s or more can pass through a body 2 cm thick or thinner;
-- friction and restitution (ADR 0032, which gives the numbers): one surface material
-  for all the static solids; friction against turning about the normal is about 1.4
-  times too strong on box faces, and dynamic only; between bodies friction always turns
-  them (no wide-patch rule); bounces come out 1.3 to 1.7 % low;
-- no sleeping yet (#89).
+- contacts (ADR 0031, which gives the numbers): edge-on-edge contacts between bodies
+  are sampled; a capsule's envelope sags by up to 0.13 r between samples; bodies pass
+  through each other when a substep's relative travel exceeds about half the smaller
+  body plus half the other's thickness; small boxes can leave the Test Tank through its
+  floor-to-wall edge at 30 m/s; without friction, bodies resting off-centre slide off;
+  pairs are Jacobi between them, so stacks sink under load (7.7 mm for 10 boxes of
+  20 cm) and a far heavier body sinks into the one under it; angular momentum is kept
+  within 8.7e-4 of its terms in V-RB-04's scene, the linear within 1e-5; a pair overflow
+  loses support; the tank's rims are not sampled as edges;
+- no friction, restitution or sleeping yet (#88, #89).
 
 NaN guard (SPEC 5.9): after each step a kernel counts non-finite bodies into a small
 status array, copied to the host without waiting; the next call reads it. A non-finite
@@ -47,7 +46,7 @@ from __future__ import annotations
 import math
 import time
 from contextlib import nullcontext
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Any
 
@@ -58,7 +57,7 @@ from entropy.core.paths import out_dir
 from entropy.fields.solids import DeviceSolids
 from entropy.solvers.interface import NonFiniteStateError
 from entropy.solvers.rigid import _kernels as _k
-from entropy.solvers.rigid.bodies import Body, Shape, check_surface, mass_properties
+from entropy.solvers.rigid.bodies import Body, Shape, mass_properties
 
 MAX_SUBSTEP_S = 1.0 / 480.0
 """The longest rigid substep (SPEC 5.4, ADR 0013)."""
@@ -75,12 +74,10 @@ _PROPERTIES = (
     ("shapes", wp.int32),
     ("sizes_m", wp.vec3),
     ("bounds_m", float),
-    ("static_friction", float),
-    ("dynamic_friction", float),
-    ("restitution", float),
 )
-CONTACTS_PER_BODY = 32
-"""Room for contacts per body by default: a box has 26 samples."""
+PAIRS_PER_BODY = 16
+"""Room for pairs of bodies in contact, per body by default: a box in a pile touches up
+to about 10 others."""
 _BOX_SIGNS = np.array(
     [[sx, sy, sz] for sx in (-1, 1) for sy in (-1, 1) for sz in (-1, 1)]
     + [[0, sy, sz] for sy in (-1, 1) for sz in (-1, 1)]
@@ -106,21 +103,16 @@ class RigidSetup:
     """Where the NaN guard writes its dumps; `out/nan_dumps` by default."""
     solids: DeviceSolids | None = None
     """The map's static solids, on the solver's device; none when None."""
-    max_contacts: int | None = None
-    """Room for contacts each substep; `CONTACTS_PER_BODY` per body when None. Contacts
-    past it are dropped and counted (`diagnostics()["contact_overflows"]`)."""
-    static_friction: float = 0.0
-    dynamic_friction: float = 0.0
-    restitution: float = 0.0
-    """The static solids' surface coefficients, one set for all of them (a named
-    simplification, ADR 0032); 0, none, when not given."""
+    max_pairs: int | None = None
+    """Room for pairs of bodies in contact each substep; `PAIRS_PER_BODY` per body when
+    None. Pairs past it are dropped and counted (`diagnostics()["pair_overflows"]`); the
+    contacts with the static solids need no room."""
 
     def __post_init__(self) -> None:
         if self.max_bodies <= 0:
             raise ValueError(f"max_bodies must be positive, got {self.max_bodies}")
-        if self.max_contacts is not None and self.max_contacts <= 0:
-            raise ValueError(f"max_contacts must be positive, got {self.max_contacts}")
-        check_surface(self.static_friction, self.dynamic_friction, self.restitution)
+        if self.max_pairs is not None and self.max_pairs <= 0:
+            raise ValueError(f"max_pairs must be positive, got {self.max_pairs}")
         if len(self.gravity_m_per_s2) != 3 or not all(
             math.isfinite(g) for g in self.gravity_m_per_s2
         ):
@@ -152,7 +144,9 @@ def _no_solids(device: str) -> DeviceSolids:
 
 
 def load_dump(path: Path) -> dict[str, np.ndarray]:
-    """The arrays of a NaN-guard dump, for a regression test."""
+    """The arrays of a NaN-guard dump, for a regression test (`RigidSolver.from_dump`):
+    the frame's starting state (`before_*`), its result, its time step, the setup
+    (`setup_*`) and the static solids (`solids_*`)."""
     with np.load(path) as data:
         return {key: data[key] for key in data.files}
 
@@ -169,6 +163,42 @@ class RigidSolver:
         solver = cls()
         solver.allocate(setup, device)
         return solver
+
+    @classmethod
+    def from_dump(cls, dump: dict[str, np.ndarray], device: str) -> RigidSolver:
+        """A solver at a NaN-guard dump's starting state, with its setup (the static
+        solids and the room for pairs included): stepping the dump's `dt_s` replays the
+        frame, bit for bit on the CPU (rule 8)."""
+        values: dict[str, Any] = {}
+        for field in fields(RigidSetup):
+            key = f"setup_{field.name}"
+            if key in dump:
+                value = dump[key]
+                if value.ndim == 1:
+                    values[field.name] = tuple(float(v) for v in value)
+                elif np.issubdtype(value.dtype, np.integer):
+                    values[field.name] = int(value)
+                else:
+                    values[field.name] = float(value)
+        solids = DeviceSolids(
+            **{
+                field.name: wp.array(
+                    dump[f"solids_{field.name}"],
+                    dtype=float if field.name == "tank_walls_m" else wp.vec3,
+                    device=device,
+                )
+                for field in fields(DeviceSolids)
+            }
+        )
+        solver = cls.create(RigidSetup(**values, solids=solids), device)
+        start = {name: dump[f"before_{name}"] for name, _ in _STATE}
+        properties = {name: dump[name] for name, _ in _PROPERTIES}
+        solver.restore({"count": int(dump["count"]), **start, **properties})
+        return solver
+
+    @property
+    def setup(self) -> RigidSetup:
+        return self._require_setup()
 
     # Solver interface ---------------------------------------------------------------
 
@@ -189,16 +219,7 @@ class RigidSolver:
         self._turn = wp.zeros(n, dtype=wp.quat, device=device)
         self._shift = wp.zeros(n, dtype=wp.vec3, device=device)
         self._spin = wp.zeros(n, dtype=wp.vec3, device=device)
-        self._body_contacts = wp.zeros(n, dtype=wp.int32, device=device)  # pyright: ignore[reportArgumentType]
-        capacity = setup.max_contacts or CONTACTS_PER_BODY * n
-        self._contacts = {
-            "a": wp.zeros(capacity, dtype=wp.int32, device=device),  # pyright: ignore[reportArgumentType]
-            "b": wp.zeros(capacity, dtype=wp.int32, device=device),  # pyright: ignore[reportArgumentType]
-            "point_m": wp.zeros(capacity, dtype=wp.vec3, device=device),
-            "normal": wp.zeros(capacity, dtype=wp.vec3, device=device),
-            "depth_m": wp.zeros(capacity, dtype=float, device=device),
-            "patch": wp.zeros(capacity, dtype=wp.int32, device=device),  # pyright: ignore[reportArgumentType]
-        }
+        capacity = setup.max_pairs or PAIRS_PER_BODY * n
         patches = _k.Patches()
         patches.count = wp.zeros(1, dtype=wp.int32, device=device)  # pyright: ignore[reportArgumentType]
         patches.a = wp.zeros(capacity, dtype=wp.int32, device=device)  # pyright: ignore[reportArgumentType]
@@ -206,19 +227,14 @@ class RigidSolver:
         patches.impulse = wp.zeros(capacity, dtype=float, device=device)
         patches.moment = wp.zeros(capacity, dtype=wp.vec3, device=device)
         patches.normal = wp.zeros(capacity, dtype=wp.vec3, device=device)
-        patches.anchor = wp.zeros(capacity, dtype=wp.vec3, device=device)
-        patches.second = wp.zeros(capacity, dtype=wp.mat33, device=device)
         patches.per_body = wp.zeros(n, dtype=wp.int32, device=device)  # pyright: ignore[reportArgumentType]
         self._patches = patches
-        """At most one patch per contact: a patch is made by its first contact."""
         static = _k.STATIC_PATCHES * n
         self._static_patches = [
             wp.zeros(static, dtype=float, device=device),
             wp.zeros(static, dtype=wp.vec3, device=device),
             wp.zeros(static, dtype=wp.vec3, device=device),
-            wp.zeros(static, dtype=wp.mat33, device=device),
         ]
-        self._static_touch = wp.zeros(static, dtype=wp.vec4, device=device)
         self._static_contacts = wp.zeros(1, dtype=wp.int32, device=device)  # pyright: ignore[reportArgumentType]
         self._rotated = wp.zeros(n, dtype=wp.vec3, device=device)
         self._velocity_before = wp.zeros(n, dtype=wp.vec3, device=device)
@@ -239,7 +255,7 @@ class RigidSolver:
         self._frozen: NonFiniteStateError | None = None
         self._last_dt_s = 0.0
         self._timer: Any = None
-        self._diagnostics = {"bodies": 0, "substeps": 0, "contacts": 0, "contact_overflows": 0}
+        self._diagnostics = {"bodies": 0, "substeps": 0, "contacts": 0, "pair_overflows": 0}
 
     def step(self, dt_s: float, ctx: Any = None) -> None:
         """Advance every body by `dt_s` seconds in substeps of at most `MAX_SUBSTEP_S`.
@@ -297,7 +313,7 @@ class RigidSolver:
                 wp.copy(array, values, count=n)
         self._count = n
         self._max_bound_m = float(np.max(state["bounds_m"])) if n else 0.0
-        self._diagnostics.update(bodies=n, contacts=0, contact_overflows=0)
+        self._diagnostics.update(bodies=n, contacts=0, pair_overflows=0)
         self._contact_count.zero_()
         self._static_contacts.zero_()
         self._overflows.zero_()
@@ -334,9 +350,6 @@ class RigidSolver:
             rows["shapes"].append(int(Shape(body.shape)))
             rows["sizes_m"].append(body.size_m)
             rows["bounds_m"].append(_bound(body))
-            rows["static_friction"].append(body.static_friction)
-            rows["dynamic_friction"].append(body.dynamic_friction)
-            rows["restitution"].append(body.restitution)
         start, count = self._count, len(bodies)
         for name, array in (*self._state.items(), *self._properties.items()):
             values = np.asarray(rows[name], dtype=np.int32 if name == "shapes" else np.float32)
@@ -388,78 +401,59 @@ class RigidSolver:
         return self._timer.stage(name) if self._timer is not None else nullcontext()
 
     def _substep(self, h: float, gravity: wp.vec3) -> None:
-        """Predict; solve the contacts between bodies once, in parallel, and their static
-        friction; then each body's contacts with the static solids and their static
-        friction by its own thread (ADR 0031, 0032); recover the velocities; then the
-        velocity pass (restitution, dynamic friction), the static patches first."""
+        """Predict; solve each pair of bodies by its own thread, the pairs in parallel, then
+        each body's contacts with the static solids by its own thread (ADR 0031); recover
+        the velocities; then the velocity pass, the static patches first."""
         count, device = self._count, self._device
-        setup = self._require_setup()
-        slow = 2.0 * math.sqrt(sum(g * g for g in setup.gravity_m_per_s2)) * h
         state = [self._state[name] for name, _ in _STATE]
         positions, orientations = state[0], state[1]
         velocities = state[2:]
         increments = [self._displacement, self._turn, self._rotated]
         properties = self._properties
         masses, inertia = properties["masses_kg"], properties["inertia_kg_m2"]
-        bodies = [positions, orientations, masses, inertia]
         before = [self._velocity_before, self._angular_before]
         wp.copy(before[0], velocities[0], count=count)
         wp.copy(before[1], velocities[1], count=count)
         wp.launch(_k.predict, dim=count, inputs=[*state, inertia, gravity, h, *increments],
                   device=device)  # fmt: skip
-        contacts = [self._contacts[k] for k in ("a", "b", "point_m", "normal", "depth_m", "patch")]
         patches = self._patches
         self._contact_count.zero_()
         self._static_contacts.zero_()
-        self._body_contacts.zero_()
         patches.count.zero_()
         patches.per_body.zero_()
         self._grid.build(positions[:count], max(2.0 * self._max_bound_m, 1e-3))
+        shapes, sizes = properties["shapes"], properties["sizes_m"]
         wp.launch(
             _k.detect,
             dim=count,
-            inputs=[self._grid.id, positions, orientations, properties["shapes"],
-                    properties["sizes_m"], properties["bounds_m"], self._max_bound_m,
-                    self._signs, self._contact_count, self._overflows, self._body_contacts,
-                    *contacts, patches],
+            inputs=[self._grid.id, positions, orientations, shapes, sizes, properties["bounds_m"],
+                    self._max_bound_m, self._signs, self._overflows, patches],
             device=device,
         )  # fmt: skip
         corrections = [self._shift, self._spin]
         wp.launch(
-            _k.solve_contacts,
-            dim=contacts[0].shape[0],
-            inputs=[self._contact_count, *contacts, self._body_contacts, *bodies, patches,
-                    *corrections],
+            _k.solve_pairs,
+            dim=patches.a.shape[0],
+            inputs=[patches, positions, orientations, shapes, sizes, masses, inertia, self._signs,
+                    self._contact_count, *corrections],
             device=device,
         )  # fmt: skip
-        apply = [*corrections, positions, orientations, *increments]
-        wp.launch(_k.apply_corrections, dim=count, inputs=apply, device=device)
-        wp.launch(_k.solve_friction, dim=patches.a.shape[0],
-                  inputs=[patches, *bodies, self._displacement, self._turn,
-                          properties["static_friction"], *corrections],
+        wp.launch(_k.apply_corrections, dim=count,
+                  inputs=[*corrections, positions, orientations, *increments],
                   device=device)  # fmt: skip
-        wp.launch(_k.apply_corrections, dim=count, inputs=apply, device=device)
-        wp.launch(
-            _k.solve_static,
-            dim=count,
-            inputs=[positions, orientations, *increments, properties["shapes"],
-                    properties["sizes_m"], masses, inertia, self._signs, *self._solids.arrays(),
-                    self._static_contacts, *self._static_patches, self._static_touch,
-                    properties["static_friction"], setup.static_friction],
-            device=device,
-        )  # fmt: skip
+        static = [positions, orientations, *increments, properties["shapes"], properties["sizes_m"],
+                  properties["bounds_m"], masses, inertia, self._signs, *self._solids.arrays(),
+                  self._static_contacts, *self._static_patches]  # fmt: skip
+        wp.launch(_k.solve_static, dim=count, inputs=static, device=device)
         wp.launch(_k.recover, dim=count, inputs=[self._displacement, self._rotated, h, *velocities],
                   device=device)  # fmt: skip
         wp.launch(_k.solve_static_velocities, dim=count,
                   inputs=[positions, orientations, *velocities, *before, masses, inertia,
-                          *self._static_patches, properties["dynamic_friction"],
-                          properties["restitution"], setup.dynamic_friction, setup.restitution,
-                          slow, h],
+                          *self._static_patches],
                   device=device)  # fmt: skip
         kicks = [self._kick, self._twist]
         wp.launch(_k.solve_velocities, dim=patches.a.shape[0],
                   inputs=[patches, positions, orientations, *velocities, *before, masses, inertia,
-                          properties["dynamic_friction"], properties["restitution"], slow, h,
                           *kicks],
                   device=device)  # fmt: skip
         wp.launch(_k.apply_velocity_corrections, dim=count, inputs=[*kicks, *velocities],
@@ -470,13 +464,7 @@ class RigidSolver:
         wp.launch(
             _k.contact_status,
             dim=1,
-            inputs=[
-                self._contact_count,
-                self._static_contacts,
-                self._overflows,
-                self._contacts["a"].shape[0],
-                self._status,
-            ],
+            inputs=[self._contact_count, self._static_contacts, self._overflows, self._status],
             device=self._device,
         )
         if self._count:
@@ -501,7 +489,7 @@ class RigidSolver:
         self._status_pending = False
         status = self._status_host.numpy()
         self._diagnostics["contacts"] = int(status[1])
-        self._diagnostics["contact_overflows"] = int(status[2])
+        self._diagnostics["pair_overflows"] = int(status[2])
         if float(status[0]) > 0.0:
             self._frozen = NonFiniteStateError(self._dump())
             raise self._frozen
@@ -516,5 +504,11 @@ class RigidSolver:
         before = {f"before_{name}": self._before[name].numpy()[:n].copy() for name, _ in _STATE}
         arrays = {key: np.asarray(value) for key, value in state.items()}
         arrays["gravity_m_per_s2"] = np.asarray(setup.gravity_m_per_s2)
+        for field in fields(setup):
+            value = getattr(setup, field.name)
+            if field.name not in ("dump_dir", "solids") and value is not None:
+                arrays[f"setup_{field.name}"] = np.asarray(value)
+        for field in fields(self._solids):
+            arrays[f"solids_{field.name}"] = getattr(self._solids, field.name).numpy()
         np.savez_compressed(path, dt_s=np.asarray(self._last_dt_s), **arrays, **before)  # pyright: ignore[reportArgumentType]
         return path

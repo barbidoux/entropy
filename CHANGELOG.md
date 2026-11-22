@@ -26,22 +26,26 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   other.
   - A hash grid finds the pairs. Each body's sample spheres (a box's corners, edge
     midpoints and face centres, a sphere's centre, points along a capsule at most a
-    radius apart) are tested against the other body's exact signed distance and the
-    solids'. Two boxes share their axis of least overlap as the normal.
-  - Each body's contacts with the static solids are solved by its own thread, one after
-    the other. Contacts between bodies are solved in parallel as XPBD position
-    constraints, scaled to keep momentum.
+    radius apart) are tested against the other body's exact signed distance and against
+    every static plane. The static boxes' edges are tested against the body. Two boxes
+    share their axis of least overlap as the normal.
+  - Each body's contacts with the static solids are solved by its own thread, and each
+    pair of bodies by its own, the pairs in parallel, scaled to keep momentum. A sweep
+    takes a box's face centres first and a capsule's middle first.
   - A velocity pass at each contact patch stops the corrections turning into speed.
-  - V-RB-04: linear momentum within 1e-4 in collisions without gravity, angular within
-    1e-3.
+  - V-RB-04: linear momentum within 1e-4 in collisions without gravity; angular
+    momentum within 1e-3, provisional until the M2 physics audit.
   - A body alone rests on the floor sunk by under 0.3 mm. A stack of 10 boxes of 20 cm
-    sinks 7.7 mm. Thrown boxes stay in the tank up to 30 m/s, and a long capsule stays on
-    a thin beam.
-  - Contacts past the capacity are counted per step. The limits are named in ADR 0031,
-    with their numbers.
+    sinks 7.7 mm. A box with 45 % of it over a table's edge stays on.
+  - 10 and 20 cm boxes stay in the tank up to 30 m/s; smaller ones up to 20 m/s.
+  - A long capsule stays on a thin beam.
+  - A NaN dump replays, contacts included (`RigidSolver.from_dump`).
+  - Pairs past the room are counted per step.
+  - The limits are named in ADR 0031, with their numbers. Without friction, bodies
+    resting off-centre slide off.
   - The static solids' distance maths moves to `entropy.fields.solids`, shared by
     `world` and the solvers (SPEC 8.1).
-  - Unofficial cost: 32.9 ms per 1/30 s frame at 5,000 bodies, against SPEC 3's 3 ms.
+  - Unofficial cost: 19.5 ms per 1/30 s frame at 5,000 bodies, against SPEC 3's 3 ms.
     That is #90's.
 - Rigid bodies drawn with the solids (#91): `entropy.render.bodies` sorts the bodies by
   shape on the GPU into a buffer shared with OpenGL (zero copy on CUDA), writes one
