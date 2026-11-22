@@ -41,17 +41,19 @@ Named limits:
 - **The 10th percentile over 540 frames** lets 54 frames per part fall under 30 fps.
   Isolated long frames do not fail it; a sustained slowdown does.
 - **30 fps is not real time.** Under the hose the liquid runs at its substep cap and the
-  world advances slower than real time (about 0.95×): the frame rate holds, the world's
-  speed is recorded beside it.
+  world advances slower than real time (0.93× and 0.95× in unofficial runs of this
+  test): the frame rate holds, the world's speed is recorded beside it.
 - **The liquid alone.** M1 has no other solver; later gates share the GPU.
-- **The GPU's thermal state.** The hose part is GPU-bound near 30 ms a frame, so the
-  result moves with the clocks. Official runs, each after the 300 s warm-up: p10
-  35.0 fps with the SM at 2235–2310 MHz; 29.8 fps after about 80 minutes of
-  continuous load, the SM at a median 2010 MHz under thermal slowdown in 79 % of the
-  samples (`docs/benchmarks/2026-11-22-m1-laptop.md`).
+- **The margin is about 5 fps.** The hose part's p10 read 35.0 fps in the official
+  run and 35.4 and 36.1 fps in unofficial runs of this test, its frames GPU-bound at
+  about 25 ms (`docs/benchmarks/2026-11-22-m1-laptop.md`).
+- **Other work on the GPU is not detected.** A run with Windows' screensaver drawing on
+  the GPU read 29.8 fps and was set aside by hand; the harness neither records the
+  GPU's utilisation nor checks it is idle (#82).
 - **Stage times overlap.** The simulation (CUDA) and the passes (OpenGL) share the GPU
-  and its time slices: in the hose part a stage's timer reads up to about twice its
-  cost measured alone. They show where time goes, not costs to add up.
+  and its time slices: in the hose part of the unofficial runs, the transfers read
+  2.2 ms per substep and the liquid pass 3.0 ms, about twice their cost measured
+  alone. They show where time goes, not costs to add up.
 
 ## Alternatives considered
 
@@ -59,7 +61,7 @@ Named limits:
 - **The slowest frame.** The frame-pacing benchmark shows isolated long frames under
   load (ADR 0026); one would fail the gate for a stall the player hardly sees.
 - **A visible window at 1920 × 1080.** It would count the compositor, but the
-  benchmark would depend on the display attached; Matt's play session covers the
+  benchmark would depend on the display attached; Matt's play session (#83) covers the
   visible game.
 
 ## How we would know it is wrong

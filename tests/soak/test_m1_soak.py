@@ -16,7 +16,11 @@ by a quarter over what they hold (ADR 0024), so near that band they stop growing
 baseline is taken after the settling minute, once the checkpoint ring is full and every
 kind of action has run once (its kernels loaded). Growth after it means a leak. It is
 measured on the process, ENTROPY's Warp pool and the whole GPU, with the same 64 MiB
-limit and the same sampling as M0's soak.
+limit and the same sampling as M0's soak. The checkpoint ring's pinned host buffers are
+counted at both samples and taken out of the process's growth: F9 drops the
+checkpoints after the one it restores, and the ring refills at the counts of the
+moment (#80's review). The process figure still starts with a 30.8 MiB offset whose
+source is not known (#84).
 
 V-LIQ-02 over 10 minutes (SPEC 9.4, ADR 0019, ADR 0028): the last `QUIET_S` of every
 `QUIET_EVERY_S` start no action, and the world is resumed and set back to 1x, one key
@@ -65,6 +69,16 @@ ABOVE_THE_RIM = CameraPose((0.0, -3.2, 3.4), math.radians(90.0), math.radians(-3
 TIME_KEYS = (glfw.KEY_P, glfw.KEY_LEFT_BRACKET, glfw.KEY_RIGHT_BRACKET, glfw.KEY_PERIOD)
 
 
+def _ring_bytes(stages: GameStages) -> int:
+    """Host bytes the checkpoint ring's entries hold (their pinned buffers)."""
+    total = 0
+    for _, states in stages.rewind.ring.entries:
+        for state in states:
+            buffers = getattr(state, "buffers", {})
+            total += sum(int(array.capacity) for array in buffers.values())
+    return total
+
+
 def _tap(stages: GameStages, key: int) -> None:
     stages.mode.input.on_key(key, glfw.PRESS)
     stages.mode.input.on_key(key, glfw.RELEASE)
@@ -91,6 +105,7 @@ def test_the_water_tank_runs_for_minutes_without_nan_or_leak() -> None:
         start = time.perf_counter()
         next_action_s, release_at_s = 1.0, -1.0
         baseline = None
+        ring_baseline = 0
         frames = 0
         quiet: list[float] = []  # volume over particles' volume, this quiet window
         settled_volumes: list[float] = []
@@ -169,7 +184,9 @@ def test_the_water_tank_runs_for_minutes_without_nan_or_leak() -> None:
                 )
                 if baseline is None and settled:
                     baseline = _sample(loop, stages.device)
+                    ring_baseline = _ring_bytes(stages)
             final = _sample(loop, stages.device)
+            ring_change = _ring_bytes(stages) - ring_baseline
             elapsed_s = time.perf_counter() - start
             particles = liquid.particle_count()
             finite = bool(np.isfinite(liquid.particle_positions()).all())
@@ -179,11 +196,14 @@ def test_the_water_tank_runs_for_minutes_without_nan_or_leak() -> None:
 
     assert baseline is not None
     host, warp, device = (after - before for after, before in zip(final, baseline, strict=True))
+    host_without_ring = host - ring_change
     summary = stats.summary()
     print(
         f"\nM1 soak: {frames} frames in {elapsed_s:.0f} s ({frames / elapsed_s:.1f} fps), "
         f"{particles:,} particles at the end, actions {actions}, overflow {overflow_m3:.3f} m³, "
-        f"world speed {summary.world_speed:.2f}; growth process {host / 2**20:.1f} MiB, Warp "
+        f"world speed {summary.world_speed:.2f}; growth process {host / 2**20:.1f} MiB "
+        f"(checkpoint ring {ring_change / 2**20:+.1f} MiB, so {host_without_ring / 2**20:.1f} "
+        f"MiB without it), Warp "
         f"pool {warp / 2**20:.1f} MiB, GPU-wide {device / 2**20:.1f} MiB; settled volume "
         f"over particles' volume {[round(v, 4) for v in settled_volumes]}"
     )
@@ -192,7 +212,7 @@ def test_the_water_tank_runs_for_minutes_without_nan_or_leak() -> None:
     assert first_freeze is None, f"the NaN guard froze the world {first_freeze}"
     assert not new_dumps, f"NaN dumps written: {sorted(new_dumps)}"
     assert finite
-    assert host < LEAK_LIMIT_BYTES
+    assert abs(host_without_ring) < LEAK_LIMIT_BYTES
     assert warp < LEAK_LIMIT_BYTES
     assert device < LEAK_LIMIT_BYTES
     assert len(settled_volumes) >= int(duration_s // QUIET_EVERY_S) - 1
