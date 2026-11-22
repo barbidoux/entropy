@@ -27,7 +27,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from entropy.core.profiler import FrameStats
-from entropy.sim.time_control import TimeControl
+from entropy.sim.time_control import MIN_TIME_SCALE, TimeControl
 
 
 class FrameStages(Protocol):
@@ -56,7 +56,8 @@ class LoopSettings:
     min_frame_s: float = 1.0 / 60.0
     """Shortest frame, in seconds: the 60 fps cap (ADR 0008); 0 disables it."""
     time_scale: float = 1.0
-    """Simulated seconds per real second; 0 pauses (SPEC 4.6)."""
+    """Simulated seconds per real second; 0 pauses (SPEC 4.6), otherwise at least
+    `MIN_TIME_SCALE`."""
     max_logic_dt_s: float = 0.1
     """Largest real time handed to game logic, in seconds, after a stall."""
 
@@ -65,8 +66,11 @@ class LoopSettings:
             raise ValueError("the largest advance per frame must be positive and finite")
         if not 0.0 <= self.min_frame_s < math.inf:
             raise ValueError("the shortest frame must be zero or positive")
-        if not 0.0 <= self.time_scale < math.inf:
-            raise ValueError("the time scale must be zero or positive")
+        if not (self.time_scale == 0.0 or MIN_TIME_SCALE <= self.time_scale < math.inf):
+            raise ValueError(
+                f"the time scale must be 0 (paused) or at least {MIN_TIME_SCALE} (float32 "
+                "positions, #36)"
+            )
         if not 0.0 < self.max_logic_dt_s < math.inf:
             raise ValueError("the largest logic step must be positive and finite")
 

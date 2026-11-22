@@ -89,7 +89,7 @@ Matt confirmed on 2026-11-21, after the M0 sessions, that the Dell thermal profi
 
 - Planning bandwidth (estimate): 450 GB/s for read-write streaming in the sustained state, the 503 GB/s copy measured at the full 9001 MHz memory clock scaled to the 8001 MHz seen under the power cap (the 192³ streaming pass measured 462 GB/s during a run in which the memory clock fell to 8001 MHz). A kernel moving B bytes per cell over N cells costs at least B·N / 450 GB/s. Grids that fit in the 64 MiB L2 cache run up to twice as fast; solvers with many live fields should not count on it.
 - Sustained GPU state after warm-up, over the two M0 sessions: 82–93 °C, enforced power limit 110–122 W, thermal and power capped; SM clock 1.05–2.3 GHz, memory clock 7001–9001 MHz (7001 MHz seen once, at the start of a benchmark). Estimates use the DRAM rate of 28 ps per cell per sweep for planning and each grid's slower L2 rate (house 15.0 ps, 128³ 15.2 ps) as the optimistic end.
-- A kernel launched from Python costs about 15 µs of CPU time (measured), so solver frames launch their kernels from CUDA graphs only (median 0.2–0.7 µs of CPU per kernel depending on graph size, up to 1.1 µs at p90 for large graphs): at most about 1,800 graph kernels per frame on the CPU side if launches had the whole 2 ms orchestration budget, which they share with game logic and the interface. Iterative solver loops replay as CUDA graphs in fixed batches, with one read-back per batch (the M1 pressure solver: batches of 4 iterations, about 4 synchronisations per solve, ADR 0016), so CPU launches grow only by one graph launch per batch. Conditional graph nodes would remove the read-backs (support checked, cost measured in #36). On the GPU every executed kernel costs about 1.2 µs on top of its work (measured on tiny kernels; estimate for others) and is counted in the solver's budget (2,000 kernels = 2.4 ms).
+- A kernel launched from Python costs about 15 µs of CPU time (measured), so solver frames launch their kernels from CUDA graphs only (median 0.2–0.7 µs of CPU per kernel depending on graph size, up to 1.1 µs at p90 for large graphs): at most about 1,800 graph kernels per frame on the CPU side if launches had the whole 2 ms orchestration budget, which they share with game logic and the interface. Iterative solver loops replay as CUDA graphs in fixed batches, with one read-back per batch (the M1 pressure solver: batches of 4 iterations, about 4 synchronisations per solve, ADR 0016), so CPU launches grow only by one graph launch per batch. Conditional graph nodes would remove the read-backs, at about 4–5 µs of GPU time per iteration (measured, unofficial, ADR 0026); the pressure solve keeps its batches while it converges in 4–8 iterations. On the GPU every executed kernel costs about 1.2 µs on top of its work (measured on tiny kernels; estimate for others) and is counted in the solver's budget (2,000 kernels = 2.4 ms).
 - CPU and GPU work concurrently (reasoned, measured from M1): Python enqueues while the GPU runs earlier work, so the orchestration budget is the CPU time the GPU has to wait for: synchronisation points such as CUDA–OpenGL map and unmap, read-backs, and OpenGL and interface calls on the same thread.
 
 **Memory budgets**
@@ -190,7 +190,7 @@ Keys below are positions on a QWERTY keyboard (W A S D is Z Q S D on AZERTY). Ev
 | Switch God and Walk | Tab |
 | Build mode | B |
 | Pause | P |
-| Slow motion | \[ and \] cycle 1×, 0.5×, 0.25×, 0.1× |
+| Slow motion | \[ and \] cycle 1×, 0.5×, 0.25×, 0.1× (the slowest: float32 positions, ADR 0026) |
 | Single step while paused | . (period) |
 | Checkpoint save and restore | F5 and F9 |
 | Record a sequence for Blender | F10 |
@@ -353,7 +353,7 @@ Each frame advances the world once by the measured frame time multiplied by the 
   - Rigid bodies: substeps of at most 1/480 s.
   - The CPU fixes the advance from the previous frame's maximum speeds, read back without a synchronisation point. When the cap would be exceeded, the advance shrinks before any solver steps, the time scale drops automatically and the HUD says so. The world slows down rather than blowing up numerically.
   - Simplification: if speed grows faster within one frame than that estimate allowed, the fluid substeps stay at the cap and move more than one cell for that frame. The HUD and the log count such frames, and the next advance shrinks.
-  - Simplification, until conditional graph nodes (#36): the CPU, not the GPU, counts the liquid's substeps, from the same previous-frame speed. A frame whose speed outgrew it is counted the same way.
+  - Simplification, kept by ADR 0026 (conditional graph nodes measured, not yet adopted): the CPU, not the GPU, counts the liquid's substeps, from the same previous-frame speed. A frame whose speed outgrew it is counted the same way.
   - With the cap and the 1/30 s clamp, flows faster than about 4 cells per advance slow the world down: about 6.7 m/s for water in 6.25 cm cells at 30 fps.
 - **Guards:** every solver checks for NaN and infinity after its step. On detection, the simulation freezes, dumps its state to disk and shows an alert, so every crash becomes a reproducible bug report.
 

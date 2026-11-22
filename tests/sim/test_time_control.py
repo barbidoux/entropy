@@ -106,3 +106,31 @@ def test_pausing_or_resuming_forgets_a_requested_step() -> None:
     control.toggle_pause()
 
     assert not control.step_requested
+
+
+def test_the_slowest_scale_still_moves_slow_water_at_the_edge_of_a_large_map() -> None:
+    """#36: positions are float32, whose spacing is 1.5e-5 m at 128 m from the origin.
+    At the slowest scale, one 60 fps frame still moves water at 1 cm/s there; at 0.04x the
+    step is rounded away (the threshold is 0.046x, ADR 0026)."""
+    import numpy as np
+
+    from entropy.sim.time_control import MIN_TIME_SCALE
+
+    x = np.float32(128.0)
+
+    def moved(scale: float) -> bool:
+        return bool(x + np.float32(0.01 * scale / 60.0) != x)
+
+    assert min(SCALES) == MIN_TIME_SCALE
+    assert moved(MIN_TIME_SCALE)
+    assert not moved(MIN_TIME_SCALE / 2.5)
+
+
+@pytest.mark.parametrize("scale", [0.05, 0.099])
+def test_the_loop_refuses_a_time_scale_below_the_slowest(scale: float) -> None:
+    with pytest.raises(ValueError, match="time scale"):
+        LoopSettings(time_scale=scale)
+
+
+def test_the_loop_still_takes_a_pause() -> None:
+    assert LoopSettings(time_scale=0.0).time_scale == 0.0
