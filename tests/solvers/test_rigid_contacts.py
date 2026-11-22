@@ -410,3 +410,140 @@ def test_bodies_already_parting_keep_their_speed(device: str) -> None:
 
     velocities = solver.body_velocities()
     assert velocities[1, 0] - velocities[0, 0] == pytest.approx(2.0, rel=1e-3)
+
+
+SLABS = Solids(
+    (Box((-5.0, 0.0, -0.15), (5.0, 5.0, 0.15)), Box((5.0, 0.0, -0.15), (5.0, 5.0, 0.15)))
+)
+"""Two floor slabs side by side, flush, meeting at x = 0 (a map built of boxes)."""
+
+
+@pytest.mark.parametrize("speed_m_per_s", [0.5, 1.0, 4.0])
+def test_a_box_slides_across_the_seam_of_two_slabs(device: str, speed_m_per_s: float) -> None:
+    """A box sliding (frictionless) across the seam of two flush slabs keeps its speed:
+    the slabs' inner faces are not walls (#101's third review: it bounced back)."""
+    solver = _solver(device, solids=SLABS)
+    solver.add_bodies([Body(Shape.BOX, (0.1, 0.1, 0.1), DENSITY_KG_PER_M3,
+                            position_m=(-1.0031, 0.0, 0.1),
+                            velocity_m_per_s=(speed_m_per_s, 0.0, 0.0))])  # fmt: skip
+
+    _run(solver, 2.5 / speed_m_per_s)
+
+    v = solver.body_velocities()[0]
+    assert solver.body_positions()[0, 0] > 1.0
+    np.testing.assert_allclose(v, (speed_m_per_s, 0.0, 0.0), atol=0.01 * speed_m_per_s)
+
+
+def test_a_box_slides_along_a_wall_of_two_boxes(device: str) -> None:
+    """A box sliding along a wall built of two flush boxes keeps its speed and is not
+    pushed off the wall at their seam."""
+    wall = Solids(
+        (
+            FLOOR.shapes[0],
+            Box((-1.0, 0.0, 0.5), (1.0, 0.1, 0.5)),
+            Box((1.0, 0.0, 0.5), (1.0, 0.1, 0.5)),
+        )
+    )
+    solver = _solver(device, solids=wall)
+    solver.add_bodies([Body(Shape.BOX, (0.1, 0.1, 0.1), DENSITY_KG_PER_M3,
+                            position_m=(-1.0013, 0.2005, 0.1),
+                            velocity_m_per_s=(2.0, 0.0, 0.0))])  # fmt: skip
+
+    _run(solver, 1.0)
+
+    np.testing.assert_allclose(solver.body_velocities()[0], (2.0, 0.0, 0.0), atol=0.02)
+
+
+def test_a_box_falling_beside_a_table_does_not_touch_it(device: str) -> None:
+    """A 10 cm box falling from 2 m, 1 mm beside a table's side face, falls freely past
+    its edge: no contact before the floor (#101's third review: the edge's diagonal
+    tangent plane kicked it sideways)."""
+    table = Solids((FLOOR.shapes[0], Box((0.0, 0.0, 0.4), (0.5, 0.5, 0.4))))
+    solver = _solver(device, solids=table)
+    solver.add_bodies([Body(Shape.BOX, (0.05, 0.05, 0.05), DENSITY_KG_PER_M3,
+                            position_m=(0.551, 0.0, 2.0013))])  # fmt: skip
+
+    for _ in range(140):  # 0.58 s: past the table's top edge, still above the floor
+        solver.step(1.0 / 240.0)
+
+    v = solver.body_velocities()[0]
+    assert abs(v[0]) < 1e-6 and abs(v[1]) < 1e-6
+    assert v[2] == pytest.approx(GRAVITY[2] * 140 / 240.0, rel=1e-3)
+    assert np.abs(solver.body_angular_velocities()[0]).max() < 1e-6
+
+
+def test_a_box_sliding_past_a_pillar_does_not_touch_it(device: str) -> None:
+    """A box sliding at 3 m/s past a pillar's corner, 0.5 mm off its face, keeps its
+    velocity and does not turn."""
+    pillar = Solids((FLOOR.shapes[0], Box((0.0, 0.0, 1.0), (0.2, 0.2, 1.0))))
+    solver = _solver(device, solids=pillar)
+    solver.add_bodies([Body(Shape.BOX, (0.1, 0.1, 0.1), DENSITY_KG_PER_M3,
+                            position_m=(-1.0013, 0.3005, 0.1),
+                            velocity_m_per_s=(3.0, 0.0, 0.0))])  # fmt: skip
+
+    _run(solver, 1.0)
+
+    np.testing.assert_allclose(solver.body_velocities()[0], (3.0, 0.0, 0.0), atol=1e-3)
+    assert np.abs(solver.body_angular_velocities()[0]).max() < 1e-3
+
+
+def test_a_heavy_box_on_a_stack_does_not_jitter(device: str) -> None:
+    """A box 100 times heavier on a stack of three: after it settles, it moves under
+    20 mm from 5 to 10 s (the pairs' 1 / (larger pair count) scaling; unscaled it
+    jitters 82 mm)."""
+    solver = _solver(device)
+    cube = (0.1, 0.1, 0.1)
+    stack = [Body(Shape.BOX, cube, 600.0, position_m=(0.0, 0.0, 0.1 + 0.2 * k)) for k in range(3)]
+    solver.add_bodies([*stack, Body(Shape.BOX, cube, 60000.0, position_m=(0.0, 0.0, 0.7))])
+    _run(solver, 5.0)
+    heights = []
+    for _ in range(300):
+        solver.step(1.0 / 60.0)
+        heights.append(solver.body_positions()[3, 2])
+
+    assert max(heights) - min(heights) < 0.02
+
+
+def test_a_long_plank_on_its_edge_over_a_table_stays(device: str) -> None:
+    """A 1 m plank 2 cm thick standing on its narrow side, 35 % of it over a table's
+    edge, stays for 15 s: the table's edge is tested along the plank's own extent, at
+    points under its narrow face (#101's third review: it fell at 11 s)."""
+    table = Solids((FLOOR.shapes[0], Box((0.0, 0.0, 0.4), (0.5, 0.5, 0.4))))
+    solver = _solver(device, solids=table)
+    solver.add_bodies([Body(Shape.BOX, (0.5, 0.01, 0.05), DENSITY_KG_PER_M3,
+                            position_m=(0.35, 0.023, 0.85))])  # fmt: skip
+
+    _run(solver, 15.0)
+
+    assert solver.body_positions()[0, 2] == pytest.approx(0.85, abs=2e-3)
+
+
+def test_a_body_above_the_tank_s_rim_flies_over_the_glass(device: str) -> None:
+    """A ball inside the tank's column but above its rim, thrown sideways, flies over
+    the glass: the walls' planes stop at the rim."""
+    solver = _solver(device, solids=TANK, gravity=(0.0, 0.0, 0.0))
+    solver.add_bodies([Body(Shape.SPHERE, (0.1, 0.0, 0.0), DENSITY_KG_PER_M3,
+                            position_m=(1.5, 0.0, 2.2),
+                            velocity_m_per_s=(3.0, 0.0, 0.0))])  # fmt: skip
+
+    _run(solver, 1.0)
+
+    assert solver.body_positions()[0, 0] > 4.0
+
+
+def test_a_box_at_rest_does_not_start_turning(device: str) -> None:
+    """A box resting on the floor for 20 s keeps still about the vertical (|w| under
+    1e-4 rad/s): within a static sweep the body turns to first order, once at the end."""
+    solver = _solver(device)
+    solver.add_bodies([Body(Shape.BOX, (0.3, 0.2, 0.1), DENSITY_KG_PER_M3,
+                            position_m=(0.0, 0.0, 0.1),
+                            orientation=(0.0, 0.0, 0.2, 0.98))])  # fmt: skip
+
+    _run(solver, 20.0)
+
+    assert np.abs(solver.body_angular_velocities()[0]).max() < 1e-4
+
+
+def test_room_for_pairs_must_be_positive() -> None:
+    with pytest.raises(ValueError, match="max_pairs"):
+        RigidSetup(gravity_m_per_s2=GRAVITY, max_pairs=0)

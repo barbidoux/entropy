@@ -352,6 +352,25 @@ def test_a_dump_replays_its_frame(tmp_path) -> None:
     np.testing.assert_array_equal(replay.body_orientations()[:2], dump["orientations"][:2])
 
 
+def test_a_nan_orientation_is_caught(tmp_path) -> None:
+    """A NaN orientation is caught by the NaN guard at the next call: it reaches the
+    angular velocity, recovered from the substep's rotation vectors, even where Warp's
+    normalize would turn the quaternion itself back into the identity."""
+    floor = Solids((HalfSpace((0.0, 0.0, 0.0), (0.0, 0.0, 1.0)),)).to_device("cpu")
+    solver = RigidSolver.create(
+        RigidSetup(gravity_m_per_s2=GRAVITY, max_bodies=4, dump_dir=tmp_path, solids=floor),
+        "cpu",
+    )
+    solver.add_bodies([_box(position_m=(0.0, 0.0, 0.1))])
+    state = solver.checkpoint()
+    state["orientations"][0] = math.nan
+    solver.restore(state)
+    solver.step(1.0 / 60.0)
+
+    with pytest.raises(NonFiniteStateError):
+        solver.step(1.0 / 60.0)
+
+
 def test_a_restore_drops_a_status_not_yet_read(device: str) -> None:
     """A step that went non-finite, then a restore before the next call: the old status
     must not freeze the restored state."""
