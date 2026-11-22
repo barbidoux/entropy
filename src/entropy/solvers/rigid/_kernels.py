@@ -122,6 +122,45 @@ STATIC_PATCHES = wp.constant(3)
 PATCH_COS = wp.constant(0.9)
 """A body's contacts with the static solids share a patch when their normals lie within
 about 25° of the patch's first one: a floor and a wall make two patches."""
+ANCHOR_COS = wp.constant(0.98)
+"""A patch keeps its friction anchor while its normal stays within about 11° of the one
+the anchor was set with; a patch turned farther is a new one (ADR 0032)."""
+ANCHOR_SLIP_M = wp.constant(0.0002)
+"""How far a patch's anchors may stay apart once static friction is at its bound: within
+it the anchor holds and the drift left is undone in later substeps; past it the patch
+slides (ADR 0032)."""
+ANCHOR_MEAN = wp.constant(8.0)
+"""Static friction's bound is μs times the patch's normal impulse averaged over about
+this many substeps while its anchor holds (an exponential mean): one substep's dips and
+peaks as the Jacobi shares and the sinking samples change are not the normal force."""
+
+
+@wp.struct
+class Anchors:
+    """Friction anchors (ADR 0032): per contact patch, the two material points that static
+    friction holds together, kept from substep to substep while the patch lasts, as
+    PhysX's patch friction and Solver2D's sticky solver keep theirs. Static friction then
+    undoes the drift since the patch began, not only this substep's: a pair's correction
+    is shared with its body's other pairs (Jacobi), so the part left over each substep
+    would otherwise add up, and stacked boxes crept apart at about 1 mm/s.
+
+    For a pair, entry `PAIRS_PER_BODY` x a + k holds the pair (a, `other`) with a < other:
+    `local_a_m` in a's frame, `local_b_m` in b's (m). For the static solids, entries 3i
+    to 3i + 2: `local_a_m` in body i's frame, `local_b_m` the point on the solid, in the
+    world (m). `normal` is the patch's when the anchor was set; `stuck` is 1 while the
+    anchor holds; `pressing_kg_m` is the patch's normal impulse per substep, averaged
+    over `ANCHOR_MEAN` substeps. `offset_a_m` and `offset_b_m` go from a's and b's centres
+    to the anchor, in the world, when it was set: on a wide patch the upper body's anchor
+    follows its centre, not its rocking (`_wide`)."""
+
+    other: wp.array(dtype=wp.int32)
+    stuck: wp.array(dtype=wp.int32)
+    local_a_m: wp.array(dtype=wp.vec3)
+    local_b_m: wp.array(dtype=wp.vec3)
+    normal: wp.array(dtype=wp.vec3)
+    pressing_kg_m: wp.array(dtype=float)
+    offset_a_m: wp.array(dtype=wp.vec3)
+    offset_b_m: wp.array(dtype=wp.vec3)
 
 
 @wp.func
@@ -472,6 +511,23 @@ def _wide(spread: wp.mat33, direction: wp.vec3, height_m: float, mu: float) -> b
 
 
 @wp.func
+def _static_impulse(needed_kg_m: float, bound_kg_m: float, stuck: int, weight: float):
+    """(static friction's impulse (kg·m), whether its anchor holds): the impulse that
+    brings the anchors together, or, past μs times the patch's normal impulse, that bound,
+    while the anchor holds and the drift left is within `ANCHOR_SLIP_M` (`weight` is the
+    inverse mass the impulse moves the anchors by). One substep's normal impulse dips
+    and peaks as the bodies settle; clamped, the anchor keeps the drift and undoes it when
+    the bound allows, so it holds as long as Coulomb holds on average, as an impulse
+    solver's friction is clamped to its cone (PhysX, Box2D, Bullet). Otherwise none: the
+    patch slides, and dynamic friction holds it back in the velocity pass."""
+    if needed_kg_m <= bound_kg_m:
+        return needed_kg_m, stuck
+    if stuck == 1 and (needed_kg_m - bound_kg_m) * weight <= ANCHOR_SLIP_M:
+        return bound_kg_m, stuck
+    return 0.0, 0
+
+
+@wp.func
 def _torsion_radius(spread: wp.mat33, n: wp.vec3) -> float:
     """The root-mean-square distance of a patch's points from their mean, across the
     normal (m): the lever of its friction against turning about the normal."""
@@ -504,9 +560,11 @@ def solve_static(
     patch_moment_kg_m2: wp.array(dtype=wp.vec3),
     patch_normal_kg_m: wp.array(dtype=wp.vec3),
     patch_spread_m2: wp.array(dtype=wp.mat33),
+    patch_clamped: wp.array(dtype=wp.int32),
     patch_touch: wp.array(dtype=wp.vec4),
     static_friction: wp.array(dtype=float),
     solids_static_friction: float,
+    anchors: Anchors,
 ):
     """Body i against the static solids, by its own thread: one Gauss-Seidel sweep, each
     correction applied before the next is tested, compliance 0.
@@ -529,11 +587,15 @@ def solve_static(
     the velocity pass.
 
     Then static friction (Müller et al. 2020, §3.5; ADR 0032), once per patch, one after
-    the other: the correction that undoes the sliding of the patch's centre of pressure
-    this substep, kept only when it is within μs times the patch's normal impulse. On a
-    patch wide enough along the sliding (`_wide`) it moves the body without turning it:
-    the normal forces would shift and hold the torque, which one point cannot show, and
-    a box on a slope crept by rolling about its centre of pressure."""
+    the other: the correction that brings the patch's anchor on the body back over its
+    anchor on the solid, kept only when it is within μs times the patch's normal
+    impulse; past it the body slides, and the anchor is set again where the patch is
+    now. A new patch has no anchor yet: its correction undoes the sliding of its centre
+    of pressure this substep. The anchors (`Anchors`, entries 3i to 3i + 2) last while
+    their patch does, matched by its normal within `ANCHOR_COS`. On a patch wide enough
+    along the sliding (`_wide`) the correction moves the body without turning it: the
+    normal forces would shift and hold the torque, which one point cannot show, and a
+    box on a slope crept by rolling about its centre of pressure."""
     i = wp.tid()
     x = position_m[i]
     q = orientation[i]
@@ -556,6 +618,7 @@ def solve_static(
         patch_normal_kg_m[STATIC_PATCHES * i + s] = wp.vec3(0.0, 0.0, 0.0)
         patch_spread_m2[STATIC_PATCHES * i + s] = wp.mat33()
         patch_touch[STATIC_PATCHES * i + s] = wp.vec4(0.0, 0.0, 0.0, 0.0)
+        patch_clamped[STATIC_PATCHES * i + s] = 0
     candidates = plane_points.shape[0] + box_centres.shape[0] + 6 * tank_lows.shape[0]
     count = _samples(shape, size)
     for step in range(count):
@@ -659,6 +722,35 @@ def solve_static(
                                         found += 1
     mu = _mean(static_friction[i], solids_static_friction)
     undo = wp.quat_inverse(turn[i])
+    # Each patch keeps the anchor set when it began, matched by its normal; a new patch
+    # takes a free one, and an anchor whose patch is gone is let go.
+    matched = wp.vec3i(-1, -1, -1)
+    claimed = int(0)  # noqa: UP018, RUF046 (a mutable int for Warp: a bit per anchor)
+    for s in range(STATIC_PATCHES):
+        entry = STATIC_PATCHES * i + s
+        if patch_impulse_kg_m[entry] > 0.0 and wp.length(patch_normal_kg_m[entry]) > 0.0:
+            n = wp.normalize(patch_normal_kg_m[entry])
+            for k in range(STATIC_PATCHES):
+                slot = STATIC_PATCHES * i + k
+                free = matched[s] < 0 and (claimed >> k) & 1 == 0
+                if (
+                    free
+                    and anchors.stuck[slot] == 1
+                    and wp.dot(anchors.normal[slot], n) >= ANCHOR_COS
+                ):
+                    matched[s] = k
+                    claimed = claimed | (1 << k)
+    for s in range(STATIC_PATCHES):
+        entry = STATIC_PATCHES * i + s
+        if patch_impulse_kg_m[entry] > 0.0 and wp.length(patch_normal_kg_m[entry]) > 0.0:
+            for k in range(STATIC_PATCHES):
+                if matched[s] < 0 and (claimed >> k) & 1 == 0:
+                    matched[s] = k
+                    claimed = claimed | (1 << k)
+                    anchors.stuck[STATIC_PATCHES * i + k] = 0
+    for k in range(STATIC_PATCHES):
+        if (claimed >> k) & 1 == 0:
+            anchors.stuck[STATIC_PATCHES * i + k] = 0
     for s in range(STATIC_PATCHES):
         entry = STATIC_PATCHES * i + s
         total = patch_impulse_kg_m[entry]
@@ -671,9 +763,20 @@ def solve_static(
             patch_spread_m2[entry] = spread
             point = patch_moment_kg_m2[entry] / total
             n = wp.normalize(normal_sum)
+            slot = STATIC_PATCHES * i + matched[s]
+            stuck = anchors.stuck[slot]
+            pressing = total
+            if stuck == 1:
+                before = anchors.pressing_kg_m[slot]
+                pressing = before + (total - before) / ANCHOR_MEAN
+                anchors.pressing_kg_m[slot] = pressing
             arm = point - x
             # Where the body's material point now at `point` was when the substep began.
             slip = point - (x0 + wp.quat_rotate(undo, arm - wp.cross(spin, arm)))
+            if stuck == 1:  # how far the anchor's point on the body has gone from the solid's
+                offset = wp.quat_rotate(q, anchors.local_a_m[slot])
+                arm = offset + wp.cross(spin, offset)
+                slip = x + arm - anchors.local_b_m[slot]
             tangential = slip - wp.dot(slip, n) * n
             sliding = wp.length(tangential)
             if mu > 0.0 and sliding > 0.0:
@@ -681,13 +784,30 @@ def solve_static(
                 lever = wp.cross(arm, direction)
                 wide = _wide(spread, direction, wp.abs(wp.dot(arm, n)), mu)
                 weight = 1.0 / mass
-                if not wide:
+                if wide:  # what a shift can undo: the body's centre, not its rocking
+                    slip = x - x0
+                    if stuck == 1:
+                        slip = x + anchors.offset_a_m[slot] - anchors.local_b_m[slot]
+                    tangential = slip - wp.dot(slip, n) * n
+                    sliding = wp.length(tangential)
+                    if sliding > 0.0:
+                        direction = tangential / sliding
+                else:
                     weight = weight + wp.dot(lever, _inverse_inertia_world(q, inertia, lever))
-                held = sliding / weight
-                if held <= mu * total:
-                    x = x - held / mass * direction
-                    if not wide:
-                        spin = spin - _inverse_inertia_world(q, inertia, held * lever)
+                held, stuck = _static_impulse(sliding / weight, mu * pressing, stuck, weight)
+                if stuck == 1 and held < sliding / weight:  # held at its bound, not let go
+                    patch_clamped[entry] = 1
+                x = x - held / mass * direction
+                if not wide:
+                    spin = spin - _inverse_inertia_world(q, inertia, held * lever)
+            if stuck == 0 and mu > 0.0:  # the anchor, where the patch is now
+                arm = point - x
+                anchors.stuck[slot] = 1
+                anchors.local_a_m[slot] = wp.quat_rotate_inv(q, arm - wp.cross(spin, arm))
+                anchors.local_b_m[slot] = point
+                anchors.normal[slot] = n
+                anchors.pressing_kg_m[slot] = total
+                anchors.offset_a_m[slot] = arm
     if found > 0:
         correction = _rotation_quat(spin, 1.0)
         position_m[i] = x
@@ -712,6 +832,7 @@ def solve_static_velocities(
     patch_moment_kg_m2: wp.array(dtype=wp.vec3),
     patch_normal_kg_m: wp.array(dtype=wp.vec3),
     patch_spread_m2: wp.array(dtype=wp.mat33),
+    patch_clamped: wp.array(dtype=wp.int32),
     dynamic_friction: wp.array(dtype=float),
     restitution: wp.array(dtype=float),
     solids_dynamic_friction: float,
@@ -769,7 +890,7 @@ def solve_static_velocities(
             now = v + wp.cross(w, arm)
             tangential = now - wp.dot(now, n) * n
             sliding = wp.length(tangential)
-            if mu > 0.0 and sliding > 0.0:
+            if mu > 0.0 and sliding > 0.0 and patch_clamped[entry] == 0:
                 direction = tangential / sliding
                 lever = wp.cross(arm, direction)
                 wide = _wide(patch_spread_m2[entry], direction, wp.abs(wp.dot(arm, n)), mu)
@@ -797,7 +918,8 @@ def solve_static_velocities(
 # The pairs of bodies in contact in a substep (ADR 0031), one patch each: all the
 # contacts of one pair. Friction and the velocity pass act once per patch, at its centre
 # of pressure (ADR 0032); `upper` is the body resting on the other (or -1), for the
-# wide-patch rule.
+# wide-patch rule; `anchor` is the pair's entry in the friction anchors (or -1);
+# `clamped` is 1 when its static friction is at its bound this substep.
 @wp.struct
 class Patches:
     count: wp.array(dtype=wp.int32)
@@ -808,6 +930,8 @@ class Patches:
     normal: wp.array(dtype=wp.vec3)
     spread: wp.array(dtype=wp.mat33)
     upper: wp.array(dtype=wp.int32)
+    anchor: wp.array(dtype=wp.int32)
+    clamped: wp.array(dtype=wp.int32)
     per_body: wp.array(dtype=wp.int32)
 
 
@@ -898,14 +1022,27 @@ def detect(
     signs: wp.array(dtype=wp.vec3),
     overflows: wp.array(dtype=wp.int32),
     patches: Patches,
+    previous: Anchors,
+    anchors: Anchors,
+    pairs_per_body: int,
 ):
     """Body i's pairs: each neighbour j > i within reach (the hash grid) whose sample
     spheres and i's (as `_tested` says) touch gets a patch; each pair is met once. A pair
-    past the room is dropped and counted."""
+    past the room is dropped and counted.
+
+    Row i of the friction anchors, `pairs_per_body` entries, is written again: a pair
+    still in contact carries its anchor over from the last substep (`previous`), a pair
+    no longer in contact loses it. Past the row's room a pair has no anchor, and its
+    static friction undoes only each substep's sliding (ADR 0032)."""
     i = wp.tid()
     x = position_m[i]
     q = orientation[i]
     none = wp.vec3(0.0, 0.0, 0.0)
+    row = i * pairs_per_body
+    for r in range(pairs_per_body):
+        anchors.other[row + r] = -1
+        anchors.stuck[row + r] = 0
+    rows = int(0)  # noqa: UP018, RUF046 (a mutable int for Warp)
     query = wp.hash_grid_query(grid, x, bounds_m[i] + max_bound_m)
     j = int(0)  # noqa: UP018, RUF046 (Warp needs a mutable int)
     while wp.hash_grid_query_next(query, j):
@@ -937,6 +1074,22 @@ def detect(
                     patches.b[slot] = j
                     wp.atomic_add(patches.per_body, i, 1)
                     wp.atomic_add(patches.per_body, j, 1)
+                    entry = int(-1)  # noqa: UP018, RUF046 (a mutable int for Warp)
+                    if rows < pairs_per_body:
+                        entry = row + rows
+                        rows += 1
+                        anchors.other[entry] = j
+                        for r in range(pairs_per_body):
+                            old = row + r
+                            if previous.other[old] == j and previous.stuck[old] == 1:
+                                anchors.stuck[entry] = 1
+                                anchors.local_a_m[entry] = previous.local_a_m[old]
+                                anchors.local_b_m[entry] = previous.local_b_m[old]
+                                anchors.normal[entry] = previous.normal[old]
+                                anchors.pressing_kg_m[entry] = previous.pressing_kg_m[old]
+                                anchors.offset_a_m[entry] = previous.offset_a_m[old]
+                                anchors.offset_b_m[entry] = previous.offset_b_m[old]
+                    patches.anchor[slot] = entry
                 else:
                     wp.atomic_add(overflows, 0, 1)
 
@@ -958,6 +1111,7 @@ def solve_pairs(
     contact_count: wp.array(dtype=wp.int32),
     shift_m: wp.array(dtype=wp.vec3),
     spin_rad: wp.array(dtype=wp.vec3),
+    anchors: Anchors,
 ):
     """One pair of bodies, by its own thread: a Gauss-Seidel sweep of a's samples against
     b, then b's against a (in `_order`, as `solve_static` does), each correction applied
@@ -972,7 +1126,10 @@ def solve_pairs(
     `TOUCH_M`.
 
     Then the pair's static friction (ADR 0032), as `solve_static`'s, with μs the
-    geometric mean of the two. When one body rests on the other (the normal within 60°
+    geometric mean of the two: it brings a's anchor back over b's (`Anchors`, the entry
+    `detect` gave the pair), or, for a pair without one, undoes this substep's sliding;
+    the leftover of its Jacobi share is then undone in later substeps, as the normal
+    overlap's is, so a pair holds up to μs. When one body rests on the other (the normal within 60°
     of the vertical) and the patch is wide (`_wide`), the upper body moves without
     turning, and the lower one takes the torque that the shift of the normal forces
     would bring: (x_lower - x_upper) x P, so both momenta are kept."""
@@ -1066,6 +1223,7 @@ def solve_pairs(
             spin_b = ss
             spin_a = so
     upper = int(-1)  # noqa: UP018, RUF046 (a mutable int for Warp)
+    clamped = int(0)  # noqa: UP018, RUF046 (a mutable int for Warp)
     spread = wp.mat33()
     if found > 0:
         n = wp.normalize(normal)
@@ -1078,6 +1236,7 @@ def solve_pairs(
             elif wp.dot(n, -gravity_m_per_s2) < -0.5 * g:
                 upper = b
         mu = _mean(static_friction[a], static_friction[b])
+        entry = patches.anchor[p]
         if mu > 0.0:
             ra = point - place_a
             rb = point - place_b
@@ -1088,6 +1247,21 @@ def solve_pairs(
                 xb - displacement_m[b] + wp.quat_rotate_inv(turn[b], rb - wp.cross(spin_b, rb))
             )
             slip = start_b - start_a  # a's point moved by point - start_a, b's by point - start_b
+            stuck = int(0)  # noqa: UP018, RUF046 (a mutable int for Warp)
+            if entry >= 0:  # noqa: SIM102 (Warp's `and` does not short-circuit: no anchors[-1])
+                if anchors.stuck[entry] == 1 and wp.dot(anchors.normal[entry], n) >= ANCHOR_COS:
+                    stuck = 1
+            pressing = total
+            if stuck == 1:
+                before = anchors.pressing_kg_m[entry]
+                pressing = before + (total - before) / ANCHOR_MEAN
+                anchors.pressing_kg_m[entry] = pressing
+            if stuck == 1:  # how far a's anchor has gone from b's
+                offset_a = wp.quat_rotate(qa, anchors.local_a_m[entry])
+                offset_b = wp.quat_rotate(qb, anchors.local_b_m[entry])
+                ra = offset_a + wp.cross(spin_a, offset_a)
+                rb = offset_b + wp.cross(spin_b, offset_b)
+                slip = place_a + ra - (place_b + rb)
             tangential = slip - wp.dot(slip, n) * n
             sliding = wp.length(tangential)
             if sliding > 0.0:
@@ -1103,31 +1277,55 @@ def solve_pairs(
                     height = wp.abs(wp.dot(point - place_b, n))
                 wide = upper >= 0 and _wide(spread, t, height, mu)
                 weight = 1.0 / ma + 1.0 / mb
-                if not wide:
+                if wide:  # what a shift can undo: the upper body's centre, not its rocking
+                    if upper == a:
+                        slip = place_a - (xa - displacement_m[a]) - (point - start_b)
+                        if stuck == 1:
+                            slip = place_a + anchors.offset_a_m[entry] - (place_b + rb)
+                    else:
+                        slip = point - start_a - (place_b - (xb - displacement_m[b]))
+                        if stuck == 1:
+                            slip = place_a + ra - (place_b + anchors.offset_b_m[entry])
+                    tangential = slip - wp.dot(slip, n) * n
+                    sliding = wp.length(tangential)
+                    if sliding > 0.0:
+                        t = tangential / sliding
+                else:
                     la = wp.cross(ra, t)
                     lb = wp.cross(rb, t)
                     weight += wp.dot(la, _inverse_inertia_world(qa, inertia_kg_m2[a], la))
                     weight += wp.dot(lb, _inverse_inertia_world(qb, inertia_kg_m2[b], lb))
-                held = sliding / weight
-                if held <= mu * total:
-                    push = -held * t  # on a; b gets its opposite
-                    place_a = place_a + push / ma
-                    place_b = place_b - push / mb
-                    if not wide:
-                        spin_a = spin_a + _inverse_inertia_world(
-                            qa, inertia_kg_m2[a], wp.cross(ra, push)
-                        )
-                        spin_b = spin_b - _inverse_inertia_world(
-                            qb, inertia_kg_m2[b], wp.cross(rb, push)
-                        )
-                    elif upper == a:
-                        spin_b = spin_b + _inverse_inertia_world(
-                            qb, inertia_kg_m2[b], wp.cross(place_b - place_a, push)
-                        )
-                    else:
-                        spin_a = spin_a + _inverse_inertia_world(
-                            qa, inertia_kg_m2[a], wp.cross(place_a - place_b, -push)
-                        )
+                held, stuck = _static_impulse(sliding / weight, mu * pressing, stuck, weight)
+                if stuck == 1 and held < sliding / weight:  # held at its bound, not let go
+                    clamped = 1
+                push = -held * t  # on a; b gets its opposite
+                place_a = place_a + push / ma
+                place_b = place_b - push / mb
+                if not wide:
+                    spin_a = spin_a + _inverse_inertia_world(
+                        qa, inertia_kg_m2[a], wp.cross(ra, push)
+                    )
+                    spin_b = spin_b - _inverse_inertia_world(
+                        qb, inertia_kg_m2[b], wp.cross(rb, push)
+                    )
+                elif upper == a:
+                    spin_b = spin_b + _inverse_inertia_world(
+                        qb, inertia_kg_m2[b], wp.cross(place_b - place_a, push)
+                    )
+                else:
+                    spin_a = spin_a + _inverse_inertia_world(
+                        qa, inertia_kg_m2[a], wp.cross(place_a - place_b, -push)
+                    )
+            if entry >= 0 and stuck == 0:  # the anchors, where the patch is now
+                ra = point - place_a
+                rb = point - place_b
+                anchors.stuck[entry] = 1
+                anchors.local_a_m[entry] = wp.quat_rotate_inv(qa, ra - wp.cross(spin_a, ra))
+                anchors.local_b_m[entry] = wp.quat_rotate_inv(qb, rb - wp.cross(spin_b, rb))
+                anchors.normal[entry] = n
+                anchors.pressing_kg_m[entry] = total
+                anchors.offset_a_m[entry] = ra
+                anchors.offset_b_m[entry] = rb
     scale = 1.0 / float(wp.max(patches.per_body[a], patches.per_body[b]))
     wp.atomic_add(shift_m, a, scale * (place_a - xa))
     wp.atomic_add(spin_rad, a, scale * spin_a)
@@ -1138,6 +1336,7 @@ def solve_pairs(
     patches.normal[p] = normal
     patches.spread[p] = spread
     patches.upper[p] = upper
+    patches.clamped[p] = clamped
     wp.atomic_add(contact_count, 0, found)
 
 
@@ -1285,7 +1484,7 @@ def solve_velocities(
     pressing = wp.max(total / dt_s + normal_impulse, 0.0)
     tangential = v - vn * n
     sliding = wp.length(tangential)
-    if sliding > 0.0:
+    if sliding > 0.0 and patches.clamped[p] == 0:
         t = tangential / sliding
         upper = patches.upper[p]
         height = float(0.0)  # noqa: UP018 (a mutable float for Warp)

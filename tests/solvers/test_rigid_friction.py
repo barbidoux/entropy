@@ -207,3 +207,24 @@ def test_with_friction_a_box_on_a_box_holds_on_a_slope(device: str) -> None:
                        _box(tuple(0.3 * normal), orientation=tilt)])  # fmt: skip
 
     assert _drift(solver, 5.0) < 1e-3
+
+
+def test_a_checkpoint_keeps_the_friction_anchors() -> None:
+    """The friction anchors are state (ADR 0032): restored from a checkpoint, a stack
+    resting with friction on the floor moves on exactly as it did, bit for bit on the
+    CPU."""
+    solver = _solver("cpu", static_friction=0.5, dynamic_friction=0.5)
+    solver.add_bodies([_box((0.0, 0.0, 0.1)), _box((0.04, 0.0, 0.3))])
+    for _ in range(30):
+        solver.step(1.0 / 60.0)
+    saved = solver.checkpoint()
+    for _ in range(30):
+        solver.step(1.0 / 60.0)
+    expected = solver.body_positions(), solver.body_orientations()
+
+    solver.restore(saved)
+    for _ in range(30):
+        solver.step(1.0 / 60.0)
+
+    np.testing.assert_array_equal(solver.body_positions(), expected[0])
+    np.testing.assert_array_equal(solver.body_orientations(), expected[1])

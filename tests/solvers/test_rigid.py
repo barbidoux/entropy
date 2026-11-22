@@ -321,18 +321,20 @@ def test_a_non_finite_body_freezes_the_solver_and_dumps_its_frame(
 
 
 def test_a_dump_replays_its_frame(tmp_path) -> None:
-    """A dump holds the frame's starting state, the static solids and the room for pairs:
-    `RigidSolver.from_dump` rebuilds the solver at that state, and stepping the dump's
-    time step gives its result bit for bit on the CPU, contacts included (#101's review).
-    A dump is a regression test."""
+    """A dump holds the frame's starting state (the friction anchors included), the static
+    solids and the room for pairs: `RigidSolver.from_dump` rebuilds the solver at that
+    state, and stepping the dump's time step gives its result bit for bit on the CPU,
+    contacts and friction included (#101's review). A dump is a regression test."""
     floor = Solids((HalfSpace((0.0, 0.0, 0.0), (0.0, 0.0, 1.0)),)).to_device("cpu")
     setup = RigidSetup(gravity_m_per_s2=GRAVITY, max_bodies=64, dump_dir=tmp_path,
-                       solids=floor, max_pairs=7)  # fmt: skip
+                       solids=floor, max_pairs=7, static_friction=0.5,
+                       dynamic_friction=0.5)  # fmt: skip
     solver = RigidSolver.create(setup, "cpu")
+    mu = {"static_friction": 0.5, "dynamic_friction": 0.5}
     solver.add_bodies(
         [
-            _box(position_m=(0.0, 0.0, 0.1)),
-            _box(position_m=(0.02, 0.0, 0.3), angular_velocity_rad_per_s=(0.1, 0.2, 0.3)),
+            _box(position_m=(0.0, 0.0, 0.1), **mu),
+            _box(position_m=(0.02, 0.0, 0.3), angular_velocity_rad_per_s=(0.1, 0.2, 0.3), **mu),
             _box(position_m=(3.0, 0.0, 5.0)),
         ]
     )

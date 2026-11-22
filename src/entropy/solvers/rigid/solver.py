@@ -153,6 +153,26 @@ def _no_solids(device: str) -> DeviceSolids:
     )
 
 
+_ANCHOR_FIELDS = (
+    ("other", wp.int32),
+    ("stuck", wp.int32),
+    ("local_a_m", wp.vec3),
+    ("local_b_m", wp.vec3),
+    ("normal", wp.vec3),
+    ("pressing_kg_m", float),
+    ("offset_a_m", wp.vec3),
+    ("offset_b_m", wp.vec3),
+)
+
+
+def _anchors(size: int, device: str) -> _k.Anchors:
+    """`size` friction anchors, none set (ADR 0032)."""
+    anchors = _k.Anchors()
+    for name, dtype in _ANCHOR_FIELDS:
+        setattr(anchors, name, wp.zeros(size, dtype=dtype, device=device))  # pyright: ignore[reportArgumentType]
+    return anchors
+
+
 def load_dump(path: Path) -> dict[str, np.ndarray]:
     """The arrays of a NaN-guard dump, for a regression test (`RigidSolver.from_dump`):
     the frame's starting state (`before_*`), its result, its time step, the setup
@@ -201,7 +221,9 @@ class RigidSolver:
             }
         )
         solver = cls.create(RigidSetup(**values, solids=solids), device)
-        start = {name: dump[f"before_{name}"] for name, _ in _STATE}
+        start = {
+            key.removeprefix("before_"): v for key, v in dump.items() if key.startswith("before_")
+        }
         properties = {name: dump[name] for name, _ in _PROPERTIES}
         solver.restore({"count": int(dump["count"]), **start, **properties})
         return solver
@@ -240,13 +262,25 @@ class RigidSolver:
         patches.spread = wp.zeros(capacity, dtype=wp.mat33, device=device)
         patches.upper = wp.zeros(capacity, dtype=wp.int32, device=device)  # pyright: ignore[reportArgumentType]
         patches.per_body = wp.zeros(n, dtype=wp.int32, device=device)  # pyright: ignore[reportArgumentType]
+        patches.anchor = wp.zeros(capacity, dtype=wp.int32, device=device)  # pyright: ignore[reportArgumentType]
+        patches.clamped = wp.zeros(capacity, dtype=wp.int32, device=device)  # pyright: ignore[reportArgumentType]
         self._patches = patches
+        # Friction anchors (ADR 0032): the pairs' table is written again each substep from
+        # the last one's, so there are two; the static solids' are kept in place.
+        self._pair_anchors = _anchors(PAIRS_PER_BODY * n, device)
+        self._spare_anchors = _anchors(PAIRS_PER_BODY * n, device)
+        self._static_anchors = _anchors(_k.STATIC_PATCHES * n, device)
+        self._anchors_before = (
+            _anchors(PAIRS_PER_BODY * n, device),
+            _anchors(_k.STATIC_PATCHES * n, device),
+        )
         static = _k.STATIC_PATCHES * n
         self._static_patches = [
             wp.zeros(static, dtype=float, device=device),
             wp.zeros(static, dtype=wp.vec3, device=device),
             wp.zeros(static, dtype=wp.vec3, device=device),
             wp.zeros(static, dtype=wp.mat33, device=device),
+            wp.zeros(static, dtype=wp.int32, device=device),  # pyright: ignore[reportArgumentType]
         ]
         self._static_touch = wp.zeros(static, dtype=wp.vec4, device=device)
         self._static_contacts = wp.zeros(1, dtype=wp.int32, device=device)  # pyright: ignore[reportArgumentType]
@@ -287,6 +321,12 @@ class RigidSolver:
             for name, _ in _STATE:
                 if count:
                     wp.copy(self._before[name], self._state[name], count=count)
+            for (_, table, rows), before in zip(
+                self._anchor_tables(), self._anchors_before, strict=True
+            ):
+                for name, _ in _ANCHOR_FIELDS:
+                    if count:
+                        wp.copy(getattr(before, name), getattr(table, name), count=count * rows)
             self._overflows.zero_()  # the HUD shows the last step's
             if count:
                 for _ in range(n):
@@ -306,11 +346,13 @@ class RigidSolver:
         return {**self._state, **self._properties}
 
     def checkpoint(self) -> dict[str, Any]:
+        """Every body's state and properties, and the friction anchors (ADR 0032)."""
         n = self._count
         state: dict[str, Any] = {"count": n}
         for name, array in (*self._state.items(), *self._properties.items()):
             state[name] = array.numpy()[:n].copy()
-        return state
+        tables = [table for _, table, _ in self._anchor_tables()]
+        return state | self._anchor_state(tables, n)
 
     def restore(self, state: dict[str, Any]) -> None:
         """Return to a checkpoint; a frozen solver runs again, and a status not yet read
@@ -325,6 +367,17 @@ class RigidSolver:
             if n:
                 values = wp.array(state[name], dtype=array.dtype, device=self._device)
                 wp.copy(array, values, count=n)
+        for prefix, table, rows in self._anchor_tables():
+            for name, _ in _ANCHOR_FIELDS:
+                array = getattr(table, name)
+                key = f"{prefix}_{name}"
+                if key not in state:  # a checkpoint without anchors: none is set
+                    array.zero_()
+                elif n:
+                    values = np.asarray(state[key])  # (n, entries per body, ...)
+                    flat = values.reshape(n * rows, *values.shape[2:])
+                    wp.copy(array, wp.array(flat, dtype=array.dtype, device=self._device),
+                            count=n * rows)  # fmt: skip
         self._count = n
         self._max_bound_m = float(np.max(state["bounds_m"])) if n else 0.0
         self._diagnostics.update(bodies=n, contacts=0, pair_overflows=0)
@@ -372,6 +425,9 @@ class RigidSolver:
             values = np.asarray(rows[name], dtype=np.int32 if name == "shapes" else np.float32)
             source = wp.array(values, dtype=array.dtype, device=self._device)
             wp.copy(array, source, dest_offset=start, count=count)
+        for _, table, per_body in self._anchor_tables():  # none set for the new bodies
+            for name, _ in _ANCHOR_FIELDS:
+                getattr(table, name)[start * per_body : (start + count) * per_body].zero_()
         self._count += count
         self._max_bound_m = max(self._max_bound_m, *rows["bounds_m"])
         self._diagnostics["bodies"] = self._count
@@ -401,6 +457,24 @@ class RigidSolver:
         return self._head("angular_velocities_rad_per_s")
 
     # Internals ----------------------------------------------------------------------
+
+    def _anchor_tables(self) -> tuple[tuple[str, _k.Anchors, int], ...]:
+        """The friction anchors' tables, with their checkpoint names and entries per body:
+        the pairs' of the last substep, and the static solids'."""
+        return (
+            ("pair_anchor", self._pair_anchors, PAIRS_PER_BODY),
+            ("static_anchor", self._static_anchors, _k.STATIC_PATCHES),
+        )
+
+    def _anchor_state(self, tables: list[_k.Anchors], n: int) -> dict[str, np.ndarray]:
+        """The first `n` bodies' rows of the anchor `tables` (as `_anchor_tables` orders
+        them), one array per field and table, shaped (n, entries per body, ...)."""
+        state: dict[str, np.ndarray] = {}
+        for (prefix, _, rows), table in zip(self._anchor_tables(), tables, strict=True):
+            for name, _ in _ANCHOR_FIELDS:
+                values = getattr(table, name).numpy()[: n * rows]
+                state[f"{prefix}_{name}"] = values.reshape(n, rows, *values.shape[1:]).copy()
+        return state
 
     def _require_setup(self) -> RigidSetup:
         if self._setup is None:
@@ -443,11 +517,13 @@ class RigidSolver:
         patches.per_body.zero_()
         self._grid.build(positions[:count], max(2.0 * self._max_bound_m, 1e-3))
         shapes, sizes = properties["shapes"], properties["sizes_m"]
+        self._pair_anchors, self._spare_anchors = self._spare_anchors, self._pair_anchors
         wp.launch(
             _k.detect,
             dim=count,
             inputs=[self._grid.id, positions, orientations, shapes, sizes, properties["bounds_m"],
-                    self._max_bound_m, self._signs, self._overflows, patches],
+                    self._max_bound_m, self._signs, self._overflows, patches,
+                    self._spare_anchors, self._pair_anchors, PAIRS_PER_BODY],
             device=device,
         )  # fmt: skip
         corrections = [self._shift_m, self._spin_rad]
@@ -456,7 +532,7 @@ class RigidSolver:
             dim=patches.a.shape[0],
             inputs=[patches, positions, orientations, shapes, sizes, masses, inertia, self._signs,
                     self._displacement, self._turn, properties["static_friction"], gravity,
-                    self._contact_count, *corrections],
+                    self._contact_count, *corrections, self._pair_anchors],
             device=device,
         )  # fmt: skip
         wp.launch(_k.apply_corrections, dim=count,
@@ -465,7 +541,8 @@ class RigidSolver:
         static = [positions, orientations, *increments, properties["shapes"], properties["sizes_m"],
                   properties["bounds_m"], masses, inertia, self._signs, *self._solids.arrays(),
                   self._static_contacts, *self._static_patches, self._static_touch,
-                  properties["static_friction"], setup.static_friction]  # fmt: skip
+                  properties["static_friction"], setup.static_friction,
+                  self._static_anchors]  # fmt: skip
         wp.launch(_k.solve_static, dim=count, inputs=static, device=device)
         wp.launch(_k.recover, dim=count,
                   inputs=[self._displacement, self._rotated_rad, h, *velocities],
@@ -528,6 +605,8 @@ class RigidSolver:
         state = self.checkpoint()
         n = self._before_count
         before = {f"before_{name}": self._before[name].numpy()[:n].copy() for name, _ in _STATE}
+        anchors = self._anchor_state(list(self._anchors_before), n)
+        before |= {f"before_{key}": value for key, value in anchors.items()}
         arrays = {key: np.asarray(value) for key, value in state.items()}
         arrays["gravity_m_per_s2"] = np.asarray(setup.gravity_m_per_s2)
         for field in fields(setup):
