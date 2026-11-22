@@ -17,10 +17,19 @@ full and every action has run once (its kernels loaded). Growth after it means a
 It is measured on the process, ENTROPY's Warp pool and the whole GPU, with the same
 64 MiB limit and the same sampling as M0's soak.
 
+V-LIQ-02 over 10 minutes (SPEC 9.4, ADR 0019, ADR 0028): the last `QUIET_S` of every
+`QUIET_EVERY_S` start no action, so the water settles. In the last 2 s of each such
+window, with no tool held and no water in flight, the liquid's own measure of its
+water's volume (from the level set, as on the HUD) is averaged against its particles'
+volume.
+
 At the end:
 - the world is not frozen by the NaN guard;
 - every frame completed;
-- the particles are finite.
+- the particles are finite;
+- V-LIQ-02's two criteria: the first settled window's volume within 1 % of its
+  particles' volume, and every later one, as a share of its particles' volume, within
+  1 % of the first. (A 150 s trial read 0.9905 at first, then up to +0.4 % from it.)
 """
 
 import math
@@ -44,6 +53,8 @@ from tests.soak.test_m0_soak import LEAK_LIMIT_BYTES, SETTLE_S, _sample
 pytestmark = pytest.mark.soak
 
 LOW, HIGH = 480_000, 600_000
+QUIET_EVERY_S, QUIET_S = 30.0, 5.0
+VOLUME_TOLERANCE = 0.01  # V-LIQ-02's 1 %
 KINDS = {"hose", "flood", "bucket", "eraser", "time", "save", "load"}
 ABOVE_THE_RIM = CameraPose((0.0, -3.2, 3.4), math.radians(90.0), math.radians(-38.0))
 TIME_KEYS = (glfw.KEY_P, glfw.KEY_LEFT_BRACKET, glfw.KEY_RIGHT_BRACKET, glfw.KEY_PERIOD)
@@ -74,6 +85,8 @@ def test_the_water_tank_runs_for_minutes_without_nan_or_leak() -> None:
         next_action_s, release_at_s = 1.0, -1.0
         baseline = None
         frames = 0
+        quiet: list[float] = []  # volume over particles' volume, this quiet window
+        settled_volumes: list[float] = []
         try:
             while time.perf_counter() - start < duration_s:
                 now_s = time.perf_counter() - start
@@ -81,7 +94,8 @@ def test_the_water_tank_runs_for_minutes_without_nan_or_leak() -> None:
                 if release_at_s >= 0.0 and now_s >= release_at_s:
                     stages.mode.input.on_mouse_button(glfw.MOUSE_BUTTON_LEFT, glfw.RELEASE)
                     release_at_s = -1.0
-                if now_s >= next_action_s and release_at_s < 0.0:
+                into_quiet_s = now_s % QUIET_EVERY_S - (QUIET_EVERY_S - QUIET_S)
+                if now_s >= next_action_s and release_at_s < 0.0 and into_quiet_s < 0.0:
                     count = liquid.particle_count()
                     if stages.time_control.paused and rng.random() < 0.7:
                         name = "resume"
@@ -113,6 +127,14 @@ def test_the_water_tank_runs_for_minutes_without_nan_or_leak() -> None:
                     next_action_s = now_s + rng.uniform(1.0, 4.0)
                 loop.run_frame()
                 frames += 1
+                if into_quiet_s >= QUIET_S - 2.0 and release_at_s < 0.0 and not stages.toolbox.jet:
+                    d = liquid.diagnostics()
+                    quiet.append(
+                        d["water_volume_m3"] / (d["particles"] * stages.particle_volume_m3)
+                    )
+                elif into_quiet_s < 0.0 and quiet:
+                    settled_volumes.append(float(np.mean(quiet)))
+                    quiet = []
                 ring = stages.rewind.ring
                 settled = (
                     now_s >= min(SETTLE_S, duration_s / 2)
@@ -137,7 +159,8 @@ def test_the_water_tank_runs_for_minutes_without_nan_or_leak() -> None:
         f"\nM1 soak: {frames} frames in {elapsed_s:.0f} s ({frames / elapsed_s:.1f} fps), "
         f"{particles:,} particles at the end, actions {actions}, overflow {overflow_m3:.3f} m³, "
         f"world speed {summary.world_speed:.2f}; growth process {host / 2**20:.1f} MiB, Warp "
-        f"pool {warp / 2**20:.1f} MiB, GPU-wide {device / 2**20:.1f} MiB"
+        f"pool {warp / 2**20:.1f} MiB, GPU-wide {device / 2**20:.1f} MiB; settled volume "
+        f"over particles' volume {[round(v, 4) for v in settled_volumes]}"
     )
     assert frames > 0
     assert frozen is None, f"the NaN guard froze the world: {frozen}"
@@ -145,3 +168,7 @@ def test_the_water_tank_runs_for_minutes_without_nan_or_leak() -> None:
     assert host < LEAK_LIMIT_BYTES
     assert warp < LEAK_LIMIT_BYTES
     assert device < LEAK_LIMIT_BYTES
+    assert len(settled_volumes) >= int(duration_s // QUIET_EVERY_S) - 1
+    first = settled_volumes[0]
+    assert abs(first - 1.0) <= VOLUME_TOLERANCE
+    assert max(abs(v / first - 1.0) for v in settled_volumes) <= VOLUME_TOLERANCE
