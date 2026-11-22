@@ -84,7 +84,7 @@ vec3 sky(vec3 d) {
 }
 """
 
-_LIGHTING = """
+LIGHTING_GLSL = """
 uniform vec3 sun_direction;
 uniform vec3 sun_irradiance;
 uniform vec3 sky_irradiance;
@@ -143,7 +143,7 @@ void main() {
 }
 """,
     "#version 450 core\n"
-    + _LIGHTING
+    + LIGHTING_GLSL
     + GRID_GLSL
     + """
 uniform vec3 eye_m;
@@ -179,7 +179,7 @@ void main() {
 }
 """,
     "#version 450 core\n"
-    + _LIGHTING
+    + LIGHTING_GLSL
     + GRID_GLSL
     + """
 uniform vec3 albedo;

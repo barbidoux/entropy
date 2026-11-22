@@ -7,6 +7,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Rigid bodies drawn with the solids (#91): `entropy.render.bodies` sorts the bodies by
+  shape on the GPU into a buffer shared with OpenGL (zero copy on CUDA), writes one
+  indirect draw per mesh, and draws boxes, spheres and capsules lit like the static
+  boxes, before the water and the glass. 5,000 bodies at 1920 x 1080: 0.38 ms mixed,
+  0.02 ms all boxes (unofficial; `-m perf` benchmark). `WorldFrame` draws them, timed as
+  "bodies (OpenGL)", when given a `body_capacity`; the game wires them with the spawner
+  (#93).
 - Rigid bodies, first step (#86, ADR 0030): `entropy.solvers.rigid` with boxes, spheres
   and capsules, their mass and inertia from shape and density, XPBD substeps of at most
   1/480 s under gravity with the gyroscopic torque by the implicit midpoint rule (|L| and
