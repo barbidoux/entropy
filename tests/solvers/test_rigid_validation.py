@@ -73,10 +73,10 @@ def _angular_momentum(solver: RigidSolver) -> tuple[np.ndarray, float]:
 def test_v_rb_04_collisions_without_gravity_conserve_momentum(device: str) -> None:
     """V-RB-04: twelve bodies of every shape thrown at each other with no gravity and no
     solids; after 2 s of collisions the total momentum is unchanged within 1e-4 of the sum
-    of |momentum|. The angular momentum is kept within 1e-3 of the sum of its terms'
-    sizes (8.7e-4 measured), a provisional bound until the M2 physics audit: the depth
-    corrections turn the bodies about where they are in the substep, not where they
-    started it (ADR 0031)."""
+    of |momentum|. The angular momentum is kept within 2e-3 of the sum of its terms'
+    sizes (8.7e-4 in this scene, up to 1.35e-3 over seeds 0 to 9), a provisional bound
+    until the M2 physics audit: the depth corrections turn the bodies about where they
+    are in the substep, not where they started it (ADR 0031)."""
     rng = np.random.default_rng(4)
     shapes = [Shape.BOX, Shape.SPHERE, Shape.CAPSULE] * 4
     sizes = {
@@ -108,6 +108,6 @@ def test_v_rb_04_collisions_without_gravity_conserve_momentum(device: str) -> No
         (masses * after).sum(axis=0), (masses * before).sum(axis=0), atol=1e-4 * scale
     )
     turning_after, _ = _angular_momentum(solver)
-    assert np.linalg.norm(turning_after - turning_before) <= 1e-3 * turning_size
+    assert np.linalg.norm(turning_after - turning_before) <= 2e-3 * turning_size
     assert contacts > 0
     assert np.abs(after - before).max() > 0.5  # they did collide

@@ -23,14 +23,15 @@ Simplifications, named (CLAUDE.md rule 7):
   x₀ + vt (1.5 cm after 60 s at 1.26 m/s, 20 to 80 m out), its velocity stays exact;
 - checkpoints are synchronous: on CUDA, taking one waits for the queued GPU work (#99);
 - contacts (ADR 0031, which gives the numbers): edge-on-edge contacts between bodies
-  are sampled; a capsule's envelope sags by up to 0.13 r between samples; bodies pass
-  through each other when a substep's relative travel exceeds about half the smaller
-  body plus half the other's thickness; small boxes can leave the Test Tank through its
-  floor-to-wall edge at 30 m/s; without friction, bodies resting off-centre slide off;
-  pairs are Jacobi between them, so stacks sink under load (7.7 mm for 10 boxes of
-  20 cm) and a far heavier body sinks into the one under it; angular momentum is kept
-  within 8.7e-4 of its terms in V-RB-04's scene, the linear within 1e-5; a pair overflow
-  loses support; the tank's rims are not sampled as edges;
+  are sampled; a capsule's envelope sags by up to 0.13 r between samples; a fast body
+  can cross a thin one where it has no sample, from about 480 s⁻¹ times its thickness;
+  small boxes can leave the Test Tank at 30 m/s; without friction, bodies resting
+  off-centre slide off; pairs are Jacobi between them, so stacks sink under load
+  (7.7 mm for 10 boxes of 20 cm), a far heavier body sinks into the one under it, and
+  several bodies at once still pop and bounce (a spawned clump flies apart at up to
+  14 m/s); angular momentum is kept within 1.35e-3 of its terms in V-RB-04's scenes,
+  the linear within 1.4e-5; a pair overflow loses support; the tank's rims are not
+  sampled as edges;
 - no friction, restitution or sleeping yet (#88, #89).
 
 NaN guard (SPEC 5.9): after each step a kernel counts non-finite bodies into a small
@@ -217,8 +218,8 @@ class RigidSolver:
         }
         self._displacement = wp.zeros(n, dtype=wp.vec3, device=device)
         self._turn = wp.zeros(n, dtype=wp.quat, device=device)
-        self._shift = wp.zeros(n, dtype=wp.vec3, device=device)
-        self._spin = wp.zeros(n, dtype=wp.vec3, device=device)
+        self._shift_m = wp.zeros(n, dtype=wp.vec3, device=device)
+        self._spin_rad = wp.zeros(n, dtype=wp.vec3, device=device)
         capacity = setup.max_pairs or PAIRS_PER_BODY * n
         patches = _k.Patches()
         patches.count = wp.zeros(1, dtype=wp.int32, device=device)  # pyright: ignore[reportArgumentType]
@@ -236,11 +237,11 @@ class RigidSolver:
             wp.zeros(static, dtype=wp.vec3, device=device),
         ]
         self._static_contacts = wp.zeros(1, dtype=wp.int32, device=device)  # pyright: ignore[reportArgumentType]
-        self._rotated = wp.zeros(n, dtype=wp.vec3, device=device)
-        self._velocity_before = wp.zeros(n, dtype=wp.vec3, device=device)
-        self._angular_before = wp.zeros(n, dtype=wp.vec3, device=device)
-        self._kick = wp.zeros(n, dtype=wp.vec3, device=device)
-        self._twist = wp.zeros(n, dtype=wp.vec3, device=device)
+        self._rotated_rad = wp.zeros(n, dtype=wp.vec3, device=device)
+        self._velocity_before_m_per_s = wp.zeros(n, dtype=wp.vec3, device=device)
+        self._angular_before_rad_per_s = wp.zeros(n, dtype=wp.vec3, device=device)
+        self._kick_m_per_s = wp.zeros(n, dtype=wp.vec3, device=device)
+        self._twist_rad_per_s = wp.zeros(n, dtype=wp.vec3, device=device)
         self._contact_count = wp.zeros(1, dtype=wp.int32, device=device)  # pyright: ignore[reportArgumentType]
         self._overflows = wp.zeros(1, dtype=wp.int32, device=device)  # pyright: ignore[reportArgumentType]
         self._signs = wp.array(_BOX_SIGNS, dtype=wp.vec3, device=device)
@@ -408,10 +409,10 @@ class RigidSolver:
         state = [self._state[name] for name, _ in _STATE]
         positions, orientations = state[0], state[1]
         velocities = state[2:]
-        increments = [self._displacement, self._turn, self._rotated]
+        increments = [self._displacement, self._turn, self._rotated_rad]
         properties = self._properties
         masses, inertia = properties["masses_kg"], properties["inertia_kg_m2"]
-        before = [self._velocity_before, self._angular_before]
+        before = [self._velocity_before_m_per_s, self._angular_before_rad_per_s]
         wp.copy(before[0], velocities[0], count=count)
         wp.copy(before[1], velocities[1], count=count)
         wp.launch(_k.predict, dim=count, inputs=[*state, inertia, gravity, h, *increments],
@@ -430,7 +431,7 @@ class RigidSolver:
                     self._max_bound_m, self._signs, self._overflows, patches],
             device=device,
         )  # fmt: skip
-        corrections = [self._shift, self._spin]
+        corrections = [self._shift_m, self._spin_rad]
         wp.launch(
             _k.solve_pairs,
             dim=patches.a.shape[0],
@@ -445,13 +446,14 @@ class RigidSolver:
                   properties["bounds_m"], masses, inertia, self._signs, *self._solids.arrays(),
                   self._static_contacts, *self._static_patches]  # fmt: skip
         wp.launch(_k.solve_static, dim=count, inputs=static, device=device)
-        wp.launch(_k.recover, dim=count, inputs=[self._displacement, self._rotated, h, *velocities],
+        wp.launch(_k.recover, dim=count,
+                  inputs=[self._displacement, self._rotated_rad, h, *velocities],
                   device=device)  # fmt: skip
         wp.launch(_k.solve_static_velocities, dim=count,
                   inputs=[positions, orientations, *velocities, *before, masses, inertia,
                           *self._static_patches],
                   device=device)  # fmt: skip
-        kicks = [self._kick, self._twist]
+        kicks = [self._kick_m_per_s, self._twist_rad_per_s]
         wp.launch(_k.solve_velocities, dim=patches.a.shape[0],
                   inputs=[patches, positions, orientations, *velocities, *before, masses, inertia,
                           *kicks],

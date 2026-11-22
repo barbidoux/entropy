@@ -57,7 +57,7 @@ def predict(
     dt_s: float,
     displacement_m: wp.array(dtype=wp.vec3),
     turn: wp.array(dtype=wp.quat),
-    rotated: wp.array(dtype=wp.vec3),
+    rotated_rad: wp.array(dtype=wp.vec3),
 ):
     """The first half of an XPBD substep (Müller et al. 2020): move every body with
     gravity and the gyroscopic torque, and keep the motion as increments: a displacement,
@@ -80,13 +80,13 @@ def predict(
     orientation[i] = _unit(rotation * q0)
     displacement_m[i] = displacement
     turn[i] = rotation
-    rotated[i] = w * dt_s
+    rotated_rad[i] = w * dt_s
 
 
 @wp.kernel
 def recover(
     displacement_m: wp.array(dtype=wp.vec3),
-    rotated: wp.array(dtype=wp.vec3),
+    rotated_rad: wp.array(dtype=wp.vec3),
     dt_s: float,
     velocity_m_per_s: wp.array(dtype=wp.vec3),
     angular_velocity_rad_per_s: wp.array(dtype=wp.vec3),
@@ -97,7 +97,7 @@ def recover(
     keep the angular momentum as they keep the linear one (#101's review)."""
     i = wp.tid()
     velocity_m_per_s[i] = displacement_m[i] / dt_s
-    angular_velocity_rad_per_s[i] = rotated[i] / dt_s
+    angular_velocity_rad_per_s[i] = rotated_rad[i] / dt_s
 
 
 # Contacts (ADR 0031) ----------------------------------------------------------------
@@ -208,9 +208,43 @@ def _inverse_inertia_world(q: wp.quat, inertia: wp.vec3, v: wp.vec3) -> wp.vec3:
 
 
 @wp.func
-def _plane(
-    c: int,
+def _column(m: wp.mat33, k: int) -> wp.vec3:
+    return wp.vec3(m[0, k], m[1, k], m[2, k])
+
+
+@wp.func
+def _box_radius(axes: wp.mat33, half: wp.vec3, direction: wp.vec3) -> float:
+    """How far a box reaches along a unit `direction` from its centre (m)."""
+    reach = float(0.0)  # noqa: UP018 (a mutable float for Warp)
+    for k in range(3):
+        reach += half[k] * wp.abs(wp.dot(_column(axes, k), direction))
+    return reach
+
+
+@wp.func
+def _crosses(a: wp.vec3, b: wp.vec3, lo: wp.vec3, hi: wp.vec3) -> bool:
+    """Whether the segment from a to b meets the box [lo, hi] (slab test)."""
+    t0 = float(0.0)  # noqa: UP018 (a mutable float for Warp)
+    t1 = float(1.0)  # noqa: UP018 (a mutable float for Warp)
+    hit = int(1)  # noqa: UP018, RUF046 (a mutable int for Warp)
+    for k in range(3):
+        d = b[k] - a[k]
+        if wp.abs(d) < 1.0e-12:
+            if a[k] < lo[k] or a[k] > hi[k]:
+                hit = 0
+        else:
+            ta = (lo[k] - a[k]) / d
+            tb = (hi[k] - a[k]) / d
+            t0 = wp.max(t0, wp.min(ta, tb))
+            t1 = wp.min(t1, wp.max(ta, tb))
+    return hit == 1 and t0 <= t1
+
+
+@wp.func
+def _box_surface(
     start: wp.vec3,
+    lo: wp.vec3,
+    hi: wp.vec3,
     box_centres: wp.array(dtype=wp.vec3),
     box_halves: wp.array(dtype=wp.vec3),
     tank_lows: wp.array(dtype=wp.vec3),
@@ -219,10 +253,79 @@ def _plane(
     plane_points: wp.array(dtype=wp.vec3),
     plane_normals: wp.array(dtype=wp.vec3),
 ) -> wp.vec4:
-    """The c-th static plane a sample starting the substep at `start` may sink past:
-    (outward normal n, offset d) of the plane n·p = d, or a zero normal when there is
-    none. Each half-space is its plane. Each box gives the tangent plane of its surface
-    nearest to `start`. Each open box (tank) gives six candidates: from inside its
+    """(outward normal, signed distance) of the static box [lo, hi]'s surface nearest to
+    `start`, leaving out its faces that another static solid covers: a face whose
+    outside, just past it, lies inside another solid is an inner face (two flush slabs,
+    a wall of two boxes). Outside the box, the covered faces drop out of the nearest
+    feature's normal, so the shared top edge of two slabs gives the top's normal; inside
+    it, the nearest uncovered face counts. A zero normal when every face is covered. As
+    Jolt's and Bullet's internal-edge removal and Box2D's ghost vertices do (#101's third
+    review: a box sliding across a seam bounced back)."""
+    q = _solid._box_q(start, lo, hi)
+    s = _solid._box_s(start, lo, hi)
+    eps = 1.0e-4
+    if wp.max(q[0], wp.max(q[1], q[2])) <= 0.0:
+        best = float(-1.0e30)  # noqa: UP018 (a mutable float for Warp)
+        axis = int(-1)  # noqa: UP018, RUF046 (a mutable int for Warp)
+        for a in range(3):
+            if q[a] > best:
+                face = start
+                face[a] = face[a] + (-q[a] + eps) * s[a]
+                past = _solid.nearest(face, box_centres, box_halves, tank_lows, tank_highs,
+                                      tank_walls, plane_points, plane_normals)  # fmt: skip
+                if past[3] >= 0.0:
+                    best = q[a]
+                    axis = a
+        if axis < 0:
+            return wp.vec4(0.0, 0.0, 0.0, 0.0)
+        n = wp.vec3(0.0, 0.0, 0.0)
+        n[axis] = s[axis]
+        return wp.vec4(n[0], n[1], n[2], best)
+    closest = wp.vec3(wp.clamp(start[0], lo[0], hi[0]), wp.clamp(start[1], lo[1], hi[1]),
+                      wp.clamp(start[2], lo[2], hi[2]))  # fmt: skip
+    kept = q
+    for a in range(3):
+        if q[a] > 0.0:
+            test = closest
+            for b in range(3):
+                if b == a:
+                    test[b] = test[b] + eps * s[b]
+                elif q[b] > -eps:  # on or past the box's side: step just inside it
+                    test[b] = test[b] - eps * s[b]
+            past = _solid.nearest(test, box_centres, box_halves, tank_lows, tank_highs,
+                                  tank_walls, plane_points, plane_normals)  # fmt: skip
+            if past[3] < 0.0:
+                kept[a] = 0.0
+    outside = wp.vec3(wp.max(kept[0], 0.0) * s[0], wp.max(kept[1], 0.0) * s[1],
+                      wp.max(kept[2], 0.0) * s[2])  # fmt: skip
+    distance = wp.length(outside)
+    if distance <= 0.0:
+        return wp.vec4(0.0, 0.0, 0.0, 0.0)
+    n = outside / distance
+    return wp.vec4(n[0], n[1], n[2], distance)
+
+
+@wp.func
+def _plane(
+    c: int,
+    start: wp.vec3,
+    centre: wp.vec3,
+    radius: float,
+    box_centres: wp.array(dtype=wp.vec3),
+    box_halves: wp.array(dtype=wp.vec3),
+    tank_lows: wp.array(dtype=wp.vec3),
+    tank_highs: wp.array(dtype=wp.vec3),
+    tank_walls: wp.array(dtype=float),
+    plane_points: wp.array(dtype=wp.vec3),
+    plane_normals: wp.array(dtype=wp.vec3),
+) -> wp.vec4:
+    """The c-th static plane a sample starting the substep at `start`, now at `centre`,
+    may sink past: (outward normal n, offset d) of the plane n·p = d, or a zero normal
+    when there is none. Each half-space is its plane. Each box gives the tangent plane of
+    its surface nearest to `start`, but only when the sample's path this substep meets
+    the box grown by the sample's radius (near an edge, the diagonal tangent plane would
+    stop a sample passing beside the box, #101's third review), and without its inner
+    faces (`_box_surface`). Each open box (tank) gives six candidates: from inside its
     cavity's column, its floor's and its four walls' inner planes (the walls up to their
     top), each on its own, so a sample near an inner edge or corner meets both or all
     three (#101's review: small boxes left the tank there); from outside, the tangent
@@ -235,9 +338,12 @@ def _plane(
     if c < planes + boxes:
         lo = box_centres[c - planes] - box_halves[c - planes]
         hi = box_centres[c - planes] + box_halves[c - planes]
-        q = _solid._box_q(start, lo, hi)
-        n = _solid._normal_from_q(q, _solid._box_s(start, lo, hi))
-        surface = start - _solid._from_q(q) * n
+        if not _crosses(start, centre, lo - wp.vec3(radius), hi + wp.vec3(radius)):
+            return wp.vec4(0.0, 0.0, 0.0, 0.0)
+        hit = _box_surface(start, lo, hi, box_centres, box_halves, tank_lows, tank_highs,
+                           tank_walls, plane_points, plane_normals)  # fmt: skip
+        n = wp.vec3(hit[0], hit[1], hit[2])
+        surface = start - hit[3] * n
         return wp.vec4(n[0], n[1], n[2], wp.dot(surface, n))
     t = (c - planes - boxes) // 6
     f = (c - planes - boxes) % 6
@@ -331,7 +437,7 @@ def solve_static(
     orientation: wp.array(dtype=wp.quat),
     displacement_m: wp.array(dtype=wp.vec3),
     turn: wp.array(dtype=wp.quat),
-    rotated: wp.array(dtype=wp.vec3),
+    rotated_rad: wp.array(dtype=wp.vec3),
     shapes: wp.array(dtype=wp.int32),
     sizes_m: wp.array(dtype=wp.vec3),
     bounds_m: wp.array(dtype=float),
@@ -346,9 +452,9 @@ def solve_static(
     plane_points: wp.array(dtype=wp.vec3),
     plane_normals: wp.array(dtype=wp.vec3),
     static_contacts: wp.array(dtype=wp.int32),
-    patch_impulse: wp.array(dtype=float),
-    patch_moment: wp.array(dtype=wp.vec3),
-    patch_normal: wp.array(dtype=wp.vec3),
+    patch_impulse_kg_m: wp.array(dtype=float),
+    patch_moment_kg_m2: wp.array(dtype=wp.vec3),
+    patch_normal_kg_m: wp.array(dtype=wp.vec3),
 ):
     """Body i against the static solids, by its own thread: one Gauss-Seidel sweep, each
     correction applied before the next is tested, compliance 0.
@@ -385,9 +491,9 @@ def solve_static(
     n1 = wp.vec3(0.0, 0.0, 0.0)
     n2 = wp.vec3(0.0, 0.0, 0.0)
     for s in range(STATIC_PATCHES):
-        patch_impulse[STATIC_PATCHES * i + s] = 0.0
-        patch_moment[STATIC_PATCHES * i + s] = wp.vec3(0.0, 0.0, 0.0)
-        patch_normal[STATIC_PATCHES * i + s] = wp.vec3(0.0, 0.0, 0.0)
+        patch_impulse_kg_m[STATIC_PATCHES * i + s] = 0.0
+        patch_moment_kg_m2[STATIC_PATCHES * i + s] = wp.vec3(0.0, 0.0, 0.0)
+        patch_normal_kg_m[STATIC_PATCHES * i + s] = wp.vec3(0.0, 0.0, 0.0)
     candidates = plane_points.shape[0] + box_centres.shape[0] + 6 * tank_lows.shape[0]
     count = _samples(shape, size)
     for step in range(count):
@@ -395,25 +501,27 @@ def solve_static(
         local = wp.vec3(sample[0], sample[1], sample[2])
         start = x0 + wp.quat_rotate(q0, local)
         for c in range(candidates):
-            plane = _plane(c, start, box_centres, box_halves, tank_lows, tank_highs,
-                           tank_walls, plane_points, plane_normals)  # fmt: skip
+            offset = wp.quat_rotate(q, local)
+            centre = x + offset + wp.cross(spin, offset)
+            plane = _plane(c, start, centre, sample[3], box_centres, box_halves, tank_lows,
+                           tank_highs, tank_walls, plane_points, plane_normals)  # fmt: skip
             n = wp.vec3(plane[0], plane[1], plane[2])
             if wp.length(n) > 0.0:
-                offset = wp.quat_rotate(q, local)
-                centre = x + offset + wp.cross(spin, offset)
                 depth = sample[3] + plane[3] - wp.dot(centre, n)
                 if depth > 0.0:
                     point = centre - sample[3] * n
                     x, spin, impulse = _lift(x, spin, q, mass, inertia, point, n, depth)
                     slot, used, n0, n1, n2 = _slot(n, used, n0, n1, n2)
                     entry = STATIC_PATCHES * i + slot
-                    patch_impulse[entry] = patch_impulse[entry] + impulse
-                    patch_moment[entry] = patch_moment[entry] + impulse * point
-                    patch_normal[entry] = patch_normal[entry] + impulse * n
+                    patch_impulse_kg_m[entry] = patch_impulse_kg_m[entry] + impulse
+                    patch_moment_kg_m2[entry] = patch_moment_kg_m2[entry] + impulse * point
+                    patch_normal_kg_m[entry] = patch_normal_kg_m[entry] + impulse * n
                     found += 1
-    # The static boxes' edges against the body (spheres need none: their sample is exact).
+    # The static boxes' edges against the body (spheres need none: their sample is exact),
+    # along the body's own extent, at points no farther apart than half its smallest size.
     reach = bounds_m[i]
     spacing = 0.5 * size[0]
+    turn_axes = wp.quat_to_matrix(q)
     if shape == 0:
         spacing = 0.5 * wp.min(size[0], wp.min(size[1], size[2]))
     if shape != 1:
@@ -433,8 +541,13 @@ def solve_static(
                 across = rel - wp.dot(rel, along) * along
                 if wp.length(across) < reach:
                     middle = wp.dot(rel, along)
-                    lo = wp.max(middle - reach, -half[axis])
-                    hi = wp.min(middle + reach, half[axis])
+                    extent = size[0]  # a capsule: its radius, plus its axis's part below
+                    if shape == 0:
+                        extent = _box_radius(turn_axes, size, along)
+                    else:
+                        extent += size[1] * wp.abs(wp.dot(_column(turn_axes, 2), along))
+                    lo = wp.max(middle - extent, -half[axis])
+                    hi = wp.min(middle + extent, half[axis])
                     if hi > lo:
                         points = wp.clamp(int(wp.ceil((hi - lo) / spacing)) + 1, 2, EDGE_POINTS)
                         for j in range(points):
@@ -450,9 +563,9 @@ def solve_static(
                                 x, spin, impulse = _lift(x, spin, q, mass, inertia, p, n, -hit[3])
                                 slot, used, n0, n1, n2 = _slot(n, used, n0, n1, n2)
                                 entry = STATIC_PATCHES * i + slot
-                                patch_impulse[entry] = patch_impulse[entry] + impulse
-                                patch_moment[entry] = patch_moment[entry] + impulse * p
-                                patch_normal[entry] = patch_normal[entry] + impulse * n
+                                patch_impulse_kg_m[entry] = patch_impulse_kg_m[entry] + impulse
+                                patch_moment_kg_m2[entry] = patch_moment_kg_m2[entry] + impulse * p
+                                patch_normal_kg_m[entry] = patch_normal_kg_m[entry] + impulse * n
                                 found += 1
     if found > 0:
         correction = _rotation_quat(spin, 1.0)
@@ -460,7 +573,7 @@ def solve_static(
         orientation[i] = _unit(correction * q)
         displacement_m[i] = displacement_m[i] + (x - origin)
         turn[i] = _unit(correction * turn[i])  # the substep's whole turn, for later passes
-        rotated[i] = rotated[i] + spin
+        rotated_rad[i] = rotated_rad[i] + spin
         wp.atomic_add(static_contacts, 0, found)
 
 
@@ -470,13 +583,13 @@ def solve_static_velocities(
     orientation: wp.array(dtype=wp.quat),
     velocity_m_per_s: wp.array(dtype=wp.vec3),
     angular_velocity_rad_per_s: wp.array(dtype=wp.vec3),
-    velocity_before: wp.array(dtype=wp.vec3),
-    angular_before: wp.array(dtype=wp.vec3),
+    velocity_before_m_per_s: wp.array(dtype=wp.vec3),
+    angular_before_rad_per_s: wp.array(dtype=wp.vec3),
     masses_kg: wp.array(dtype=float),
     inertia_kg_m2: wp.array(dtype=wp.vec3),
-    patch_impulse: wp.array(dtype=float),
-    patch_moment: wp.array(dtype=wp.vec3),
-    patch_normal: wp.array(dtype=wp.vec3),
+    patch_impulse_kg_m: wp.array(dtype=float),
+    patch_moment_kg_m2: wp.array(dtype=wp.vec3),
+    patch_normal_kg_m: wp.array(dtype=wp.vec3),
 ):
     """The velocity pass of body i's static patches (Müller et al. 2020, §3.6), by its
     own thread, one after the other, at each patch's centre of pressure: the separating
@@ -493,14 +606,14 @@ def solve_static_velocities(
     changed = int(0)  # noqa: UP018, RUF046 (a mutable int for Warp)
     for s in range(STATIC_PATCHES):
         entry = STATIC_PATCHES * i + s
-        total = patch_impulse[entry]
-        normal_sum = patch_normal[entry]
+        total = patch_impulse_kg_m[entry]
+        normal_sum = patch_normal_kg_m[entry]
         if total > 0.0 and wp.length(normal_sum) > 0.0:
             changed = 1
-            point = patch_moment[entry] / total
+            point = patch_moment_kg_m2[entry] / total
             n = wp.normalize(normal_sum)
             arm = point - x
-            before = velocity_before[i] + wp.cross(angular_before[i], arm)
+            before = velocity_before_m_per_s[i] + wp.cross(angular_before_rad_per_s[i], arm)
             now = v + wp.cross(w, arm)
             t = wp.cross(arm, n)
             weight = 1.0 / mass + wp.dot(t, _inverse_inertia_world(q, inertia, t))
@@ -527,20 +640,6 @@ class Patches:
     moment: wp.array(dtype=wp.vec3)
     normal: wp.array(dtype=wp.vec3)
     per_body: wp.array(dtype=wp.int32)
-
-
-@wp.func
-def _column(m: wp.mat33, k: int) -> wp.vec3:
-    return wp.vec3(m[0, k], m[1, k], m[2, k])
-
-
-@wp.func
-def _box_radius(axes: wp.mat33, half: wp.vec3, direction: wp.vec3) -> float:
-    """How far a box reaches along a unit `direction` from its centre (m)."""
-    reach = float(0.0)  # noqa: UP018 (a mutable float for Warp)
-    for k in range(3):
-        reach += half[k] * wp.abs(wp.dot(_column(axes, k), direction))
-    return reach
 
 
 @wp.func
@@ -844,7 +943,7 @@ def apply_corrections(
     orientation: wp.array(dtype=wp.quat),
     displacement_m: wp.array(dtype=wp.vec3),
     turn: wp.array(dtype=wp.quat),
-    rotated: wp.array(dtype=wp.vec3),
+    rotated_rad: wp.array(dtype=wp.vec3),
 ):
     """Move every body by its corrections, into its position and its increments (the
     rotation by the exact exponential of the rotation vector), then clear them."""
@@ -856,7 +955,7 @@ def apply_corrections(
     correction = _rotation_quat(s, 1.0)
     orientation[i] = _unit(correction * orientation[i])
     turn[i] = _unit(correction * turn[i])
-    rotated[i] = rotated[i] + s
+    rotated_rad[i] = rotated_rad[i] + s
     shift_m[i] = wp.vec3(0.0, 0.0, 0.0)
     spin_rad[i] = wp.vec3(0.0, 0.0, 0.0)
 
@@ -879,8 +978,8 @@ def solve_velocities(
     orientation: wp.array(dtype=wp.quat),
     velocity_m_per_s: wp.array(dtype=wp.vec3),
     angular_velocity_rad_per_s: wp.array(dtype=wp.vec3),
-    velocity_before: wp.array(dtype=wp.vec3),
-    angular_before: wp.array(dtype=wp.vec3),
+    velocity_before_m_per_s: wp.array(dtype=wp.vec3),
+    angular_before_rad_per_s: wp.array(dtype=wp.vec3),
     masses_kg: wp.array(dtype=float),
     inertia_kg_m2: wp.array(dtype=wp.vec3),
     kick_m_per_s: wp.array(dtype=wp.vec3),
@@ -903,8 +1002,12 @@ def solve_velocities(
     count = wp.max(patches.per_body[a], patches.per_body[b])
     v = _point_velocity(a, point, position_m, velocity_m_per_s, angular_velocity_rad_per_s)
     v = v - _point_velocity(b, point, position_m, velocity_m_per_s, angular_velocity_rad_per_s)
-    before = _point_velocity(a, point, position_m, velocity_before, angular_before)
-    before = before - _point_velocity(b, point, position_m, velocity_before, angular_before)
+    before = _point_velocity(
+        a, point, position_m, velocity_before_m_per_s, angular_before_rad_per_s
+    )
+    before = before - _point_velocity(
+        b, point, position_m, velocity_before_m_per_s, angular_before_rad_per_s
+    )
     target = wp.max(wp.dot(before, n), 0.0)
     weight = _weight(a, b, point, n, position_m, orientation, masses_kg, inertia_kg_m2)
     impulse = (target - wp.dot(v, n)) / weight / float(count) * n
