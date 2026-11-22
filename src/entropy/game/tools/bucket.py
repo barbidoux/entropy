@@ -95,11 +95,15 @@ class Bucket(ToolBase):
             return
         count = round(self.values["volume_m3"] / ctx.particle_volume_m3)
         spacing = ctx.particle_volume_m3 ** (1.0 / 3.0)
+        fits = min(count, max(int(ctx.liquid.room_particles()), 0))
+        dropped = f"{fits * ctx.particle_volume_m3:.3g} m³"
+        full = f" (cuve pleine : {dropped} sur {count * ctx.particle_volume_m3:.3g})"
+        note = full if fits < count else ""
         if self.shape == "barrage":
             low, high = np.asarray(ctx.domain.low_m), np.asarray(ctx.domain.high_m)
             points = dam_of(count, spacing, low, high, np.asarray(ctx.aim.direction))
             ctx.liquid.add_particles(points.astype(np.float32), velocities=np.zeros_like(points))
-            self.status = f"barrage de {count * ctx.particle_volume_m3:.3g} m³ lâché"
+            self.status = f"barrage de {dropped} lâché{note}"
             return
         points = block_of(count, spacing, target[:2], ctx.domain.high_m[2] - 0.5 * spacing)
         low = np.asarray(ctx.domain.low_m) + 0.5 * spacing
@@ -110,4 +114,4 @@ class Bucket(ToolBase):
         )
         points = points + shift
         ctx.liquid.add_particles(points.astype(np.float32), velocities=np.zeros_like(points))
-        self.status = f"{count * ctx.particle_volume_m3:.3g} m³ lâchés"
+        self.status = f"{dropped} lâchés{note}"

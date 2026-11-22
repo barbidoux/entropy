@@ -39,6 +39,7 @@ class Toolbox:
         self._pressed = False
         self._released = False
         self._let_go: Tool | None = None  # a tool switched away from with the button held
+        self._engaged: Tool | None = None  # the tool that got `on_press` and no release yet
 
     @classmethod
     def standard(
@@ -72,7 +73,7 @@ class Toolbox:
         for number, action in enumerate(TOOL_ACTIONS):
             if action in frame.pressed and number < len(self.tools) and number != self.index:
                 if self._held:  # the old tool lets go, the new one starts as if clicked
-                    self._let_go = self._let_go or self.current
+                    self._let_go = self._let_go or self._engaged
                     self._pressed = True
                 self.index = number
         if frame.wheel_steps:
@@ -95,24 +96,25 @@ class Toolbox:
         )
         if self._let_go is not None:
             self._let_go.on_release(ctx)
-            self._let_go = None
+            self._engaged = self._let_go = None
         tool = self.current
         if self._pressed:
             tool.on_press(ctx)
+            self._engaged = tool
         if self._held or self._pressed:
             tool.on_hold(ctx, dt_s)
-        if self._released:
+        if self._released and self._engaged is tool:
             tool.on_release(ctx)
+            self._engaged = None
         self._pressed = self._released = False
         if self.domain is not None and dt_s > 0.0:
             self.jet.advance(dt_s, self.domain, self.liquid)
 
     def forget_clicks(self) -> None:
         """While the world stands still (paused or frozen) no tool acts: a click then is
-        dropped, not kept for when the world runs again, maybe with another tool."""
-        if self._let_go is not None:
-            self._let_go = None
-        self._pressed = self._released = False
+        dropped, not kept for when the world runs again, maybe with another tool. A tool
+        already in use keeps its release, delivered when the world runs again."""
+        self._pressed = False
 
     def palette(self) -> list[str]:
         """HUD lines: the tool in hand and its settings in SI units (SPEC 4.7)."""

@@ -242,3 +242,61 @@ def test_a_click_while_the_world_stands_still_is_forgotten() -> None:
     box.apply(AIM, 1.0 / 60.0)
 
     assert log == []
+
+
+def test_a_tool_held_into_a_pause_and_let_go_there_is_released_afterwards() -> None:
+    """Clicks during a pause are dropped, but a tool already in use still gets its
+    release, so a tool that holds something lets go of it (#74's review)."""
+    box, log = _recording_toolbox()
+    box.handle(_frame(tool_pressed=True, tool_held=True))
+    box.apply(AIM, 1.0 / 60.0)
+    box.handle(_frame(tool_released=True))  # paused: no apply
+
+    box.forget_clicks()
+    box.apply(AIM, 1.0 / 60.0)
+
+    assert log == [("A", "press"), ("A", "hold"), ("A", "release")]
+
+
+def test_the_eraser_works_through_the_toolbox_on_the_cpu() -> None:
+    """The toolbox hands tools its `Inflow`; the eraser must reach the liquid behind it
+    (#74's review: this was caught only by a GPU test)."""
+    from entropy.fields.mac import GridSpec
+    from entropy.solvers.liquid.solver import LiquidSetup, LiquidSolver, fill_box
+
+    setup = LiquidSetup(
+        spec=GridSpec(shape=(16, 16, 16), dx_m=0.0625),
+        density_kg_per_m3=998.21,  # its value does not matter to the eraser
+        gravity_m_per_s2=(0.0, 0.0, -9.81),
+    )
+    liquid = LiquidSolver.create(setup, "cpu")
+    liquid.add_particles(fill_box((0.0, 0.0, 0.0), (1.0, 1.0, 0.25), 0.0625, 8, seed=1))
+    liquid.step(1e-5)  # builds the level set
+    pool = Domain(low_m=(0.0, 0.0, 0.0), high_m=(1.0, 1.0, 1.0), rim_z_m=0.75, ground_z_m=-0.1)
+    box = Toolbox.standard(
+        gravity_m_per_s2=(0.0, 0.0, -9.81),
+        domain=pool,
+        liquid=liquid,
+        particle_volume_m3=setup.particle_volume_m3,
+    )
+    before = liquid.particle_count()
+    box.handle(_frame(pressed=frozenset({Action.TOOL_4})))
+    box.handle(_frame(tool_pressed=True, tool_held=True))
+
+    box.apply(Aim(origin_m=(0.5, 0.5, 0.9), direction=(0.0, 0.0, -1.0)), 1.0 / 60.0)
+
+    assert liquid.particle_count() < before
+
+
+def test_the_bucket_says_how_much_it_could_drop_into_a_full_tank() -> None:
+    liquid = _SmallTank(room=100)
+    toolbox = _toolbox(liquid)
+    toolbox.handle(_frame(pressed=frozenset({Action.TOOL_2})))
+    toolbox.handle(_frame(tool_pressed=True))
+    aim = Aim(origin_m=(0.0, -3.0, 3.0), direction=(0.0, 0.8, -0.6))
+
+    toolbox.apply(aim, 1.0 / 60.0)
+
+    status = toolbox.current.status  # pyright: ignore[reportAttributeAccessIssue]
+    assert liquid.added == 100
+    assert "pleine" in status and f"{100 * PARTICLE_M3:.3g}" in status
