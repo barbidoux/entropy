@@ -647,6 +647,8 @@ def test_each_frame_starts_with_the_particles_sorted_by_cell(device: str) -> Non
     keys = (cells[:, 0] * shape[1] + cells[:, 1]) * shape[2] + cells[:, 2]
     assert np.all(np.diff(keys) >= 0)
     assert len(keys) == len(points)
+
+
 def test_the_grid_holds_at_most_its_volume_of_water(device: str) -> None:
     """Room for particles: the open cells times the particles per cell, at most the
     particle capacity; what is added takes room (#74's review, B1)."""

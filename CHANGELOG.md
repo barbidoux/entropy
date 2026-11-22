@@ -7,6 +7,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- The liquid sorts its particles by cell at the start of every frame (#65, ADR 0025): a
+  stable radix sort gathered into the second particle buffer, which then becomes the
+  live one, so the NaN guard's dump keeps the frame's starting state at no extra copy.
+  Measured at 1 M particles (unofficial): particles to grid 3.42 to 2.34 ms per substep,
+  grid to particles 0.87 to 0.14 ms, for 0.76 ms of sorting per frame; a `-m perf`
+  benchmark of the transfers in both orders. Particles to grid in shared memory (Gao et
+  al. 2018) was tried and not adopted (within noise, three times the code).
 - The bucket, the flood source and the eraser (#54):
   - the bucket drops exactly its volume (0.01–2 m³) where the aim meets the rim over
     the tank; right click turns it into a dam, Martin & Moyce's column 2a high across

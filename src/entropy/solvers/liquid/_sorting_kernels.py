@@ -1,12 +1,12 @@
 """Warp kernels of `entropy.solvers.liquid.sorting`.
 
 pyright cannot type Warp's kernel maths: its stubs give vector components union
-types. This file holds kernels only, so the rules below are relaxed here and nowhere
+and index types. This file holds kernels only, so the rules below are relaxed here and nowhere
 else; the host code in `sorting.py` stays fully checked.
 """
 
 # pyright: reportOperatorIssue=false, reportCallIssue=false, reportArgumentType=false
-# pyright: reportGeneralTypeIssues=false, reportAssignmentType=false
+# pyright: reportGeneralTypeIssues=false, reportAssignmentType=false, reportIndexIssue=false
 
 import warp as wp
 

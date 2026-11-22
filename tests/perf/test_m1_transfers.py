@@ -37,17 +37,21 @@ def test_transfers_at_one_million_particles(bench_session: BenchSession) -> None
     ordered = LiquidParticles.from_numpy(points, device=DEVICE)
     sort = CellSort(SPEC, capacity=len(points), device=DEVICE)
     sort.sort(shuffled, ordered)
-    scratch = LiquidParticles.from_numpy(points, device=DEVICE)
+    # Grid-to-particles writes its particles' velocities: in random order, into a copy,
+    # so `shuffled` keeps feeding particles-to-grid the same state; the sort's own output
+    # goes to a buffer no timed transfer reads.
+    random_g2p = LiquidParticles.from_numpy(points, device=DEVICE)
+    sort_out = LiquidParticles.from_numpy(points, device=DEVICE)
     velocity, mass = MacVelocity.zeros(SPEC, DEVICE), MacVelocity.zeros(SPEC, DEVICE)
 
     bench_session.start("transfers_1m")
     timed = time_interleaved(
         {
             "p2g_random": lambda: particles_to_grid(shuffled, MASS_KG, velocity, mass),
-            "g2p_random": lambda: grid_to_particles(velocity, scratch),
+            "g2p_random": lambda: grid_to_particles(velocity, random_g2p),
             "p2g_sorted": lambda: particles_to_grid(ordered, MASS_KG, velocity, mass),
             "g2p_sorted": lambda: grid_to_particles(velocity, ordered),
-            "sort": lambda: sort.sort(shuffled, scratch),
+            "sort": lambda: sort.sort(shuffled, sort_out),
         },
         rounds=50,
         device=DEVICE,
