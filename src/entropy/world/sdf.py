@@ -23,8 +23,8 @@ Ties (a point equally near two faces of a box) resolve x first, then y, then z,
 and towards + on a mid-plane. Between primitives the first kind wins (boxes,
 then open boxes, then half-spaces), then the first of that kind.
 
-This module knows grids only as plain numbers (origin, cell size): `world` sits
-beside `fields`, not above it (SPEC 8.1).
+The distance maths, on the device, is in `entropy.fields.solids`, which the rigid
+bodies share (ADR 0031); this module defines the shapes and puts them on the device.
 """
 
 from __future__ import annotations
@@ -36,9 +36,20 @@ from dataclasses import dataclass
 import numpy as np
 import warp as wp
 
-from entropy.world import _sdf_kernels as _k
+from entropy.fields.solids import DeviceSolids, sample_on_grid, signed_distance
 
 Vec3 = tuple[float, float, float]
+
+__all__ = [
+    "Box",
+    "DeviceSolids",
+    "HalfSpace",
+    "OpenBox",
+    "Shape",
+    "Solids",
+    "sample_on_grid",
+    "signed_distance",
+]
 
 
 def _finite(v: Sequence[float]) -> bool:
@@ -95,31 +106,6 @@ Shape = Box | OpenBox | HalfSpace
 
 
 @dataclass(frozen=True)
-class DeviceSolids:
-    """The primitives of a `Solids` as device arrays (vec3 and float, m), one set per kind."""
-
-    box_centres_m: wp.array
-    box_halves_m: wp.array
-    tank_lows_m: wp.array
-    tank_highs_m: wp.array
-    tank_walls_m: wp.array
-    plane_points_m: wp.array
-    plane_normals: wp.array
-
-    def arrays(self) -> list[wp.array]:
-        """The arrays in the order the kernels take them."""
-        return [
-            self.box_centres_m,
-            self.box_halves_m,
-            self.tank_lows_m,
-            self.tank_highs_m,
-            self.tank_walls_m,
-            self.plane_points_m,
-            self.plane_normals,
-        ]
-
-
-@dataclass(frozen=True)
 class Solids:
     """A union of boxes, open boxes and half-spaces."""
 
@@ -149,40 +135,3 @@ class Solids:
                 [np.asarray(p.normal) / np.linalg.norm(p.normal) for p in planes]
             ),
         )
-
-
-def signed_distance(
-    solids: DeviceSolids, points_m: wp.array, distance_m: wp.array, normals: wp.array
-) -> None:
-    """Signed distance (m) and outward unit normal of the union at each point."""
-    if not points_m.shape == distance_m.shape == normals.shape:
-        raise ValueError("points, distances and normals must have one shape")
-    device = solids.box_centres_m.device
-    if not points_m.device == distance_m.device == normals.device == device:
-        raise ValueError("solids, points and outputs must be on one device")
-    wp.launch(
-        _k.distance_kernel,
-        dim=points_m.shape[0],
-        inputs=[*solids.arrays(), points_m, distance_m, normals],
-        device=device,
-    )
-
-
-def sample_on_grid(solids: DeviceSolids, origin_m: Vec3, dx_m: float, out: wp.array) -> None:
-    """Signed distance (m) at the cell centres of a grid of `out.shape` cells of `dx_m`.
-
-    Cell (i, j, k) is centred at origin + (i + ½, j + ½, k + ½)·dx (ADR 0015).
-    Named limit: a solid thinner than a cell can miss every cell centre, so
-    its samples may all be positive. A solver must then use point queries,
-    face fractions or thicker walls.
-    """
-    if not (math.isfinite(dx_m) and dx_m > 0) or not _finite(origin_m):
-        raise ValueError(f"need a finite origin and a positive cell size, got {origin_m}, {dx_m}")
-    if out.device != solids.box_centres_m.device:
-        raise ValueError("solids and the grid must be on one device")
-    wp.launch(
-        _k.grid_kernel,
-        dim=out.shape,
-        inputs=[*solids.arrays(), wp.vec3(*origin_m), dx_m, out],
-        device=out.device,
-    )
