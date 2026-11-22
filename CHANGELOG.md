@@ -7,6 +7,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Rigid contacts (#87, ADR 0031): bodies against the static solids and against each
+  other. A hash grid finds the pairs; each body's sample spheres (a box's corners, edge
+  midpoints and face centres, a sphere's centre, points along a capsule) are tested
+  against the other body's exact signed distance and the solids'; the contacts are
+  solved in parallel as XPBD position constraints, scaled to keep momentum. V-RB-04
+  (momentum within 1e-4 in collisions without gravity); bodies rest on the floor and on
+  each other sunk by under 1 mm, never pass through, and stay in the tank. Contacts past
+  the capacity are counted. The static solids' distance maths moves to
+  `entropy.fields.solids`, shared by `world` and the solvers (SPEC 8.1). Unofficial cost:
+  15.4 ms a frame at 5,000 bodies against SPEC 3's 3 ms, for #90.
 - Rigid bodies drawn with the solids (#91): `entropy.render.bodies` sorts the bodies by
   shape on the GPU into a buffer shared with OpenGL (zero copy on CUDA), writes one
   indirect draw per mesh, and draws boxes, spheres and capsules lit like the static

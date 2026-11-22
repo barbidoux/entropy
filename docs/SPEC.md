@@ -295,7 +295,7 @@ Air is an incompressible gas on a grid that follows the active region, carrying 
 Rigid bodies use extended position-based dynamics (XPBD) with substepping: the advance is split into ⌈advance / (1/480 s)⌉ equal substeps (16 per 1/30 s frame), one constraint iteration each. A substep is at most 1/480 s, and at least 1/960 s when the advance is longer than 1/480 s, so stiffness and joint forces vary within a factor of 2 with the frame rate, not 20 (ADR 0013). This scheme stays stable with large stacks and many contacts, which matters when a house comes down.
 
 - **Shapes:** box, sphere, capsule and convex hull (fragments). Static map geometry is an SDF.
-- **Contacts:** a GPU broad phase (hash grid or BVH), then convex narrow phase. The exact narrow-phase method is decided in an architecture decision record (ADR) in M2.
+- **Contacts:** a GPU broad phase (hash grid or BVH), then convex narrow phase. Decided in ADR 0031: a hash grid of the bodies' centres, then sample spheres of each body (a box's corners, edge midpoints and face centres; a sphere's centre; points along a capsule's axis) against the exact signed distance of the other body and of the static solids, solved in parallel with a scaling that keeps momentum. Named simplification: edge-on-edge contacts are found at the samples only.
 - **Friction:** Coulomb, static and dynamic, plus restitution, all from the material files.
 - **Sleeping:** bodies at rest sleep in islands and wake on contact, to save time.
 - **Player:** in Walk mode, the player is a capsule rigid body with a character controller on top.
