@@ -299,6 +299,8 @@ Rigid bodies use extended position-based dynamics (XPBD) with substepping: the a
 - **Friction:** Coulomb, static and dynamic, plus restitution, all from the material files.
 - **Sleeping:** bodies at rest sleep in islands and wake on contact, to save time.
 - **Player:** in Walk mode, the player is a capsule rigid body with a character controller on top.
+- **State and precision (ADR 0030):** bodies are a structure of arrays on the device; a substep keeps its motion as increments (a displacement and a small rotation) and recovers velocities from them, which float32 differences of positions would not keep exact.
+- Simplifications, named: symplectic Euler per substep (a free fall drops ½ght more than ½gt², 0.21 % after 1 s at 1/480 s); the gyroscopic torque integrated explicitly once per substep (a tumbling body's angular momentum drifts slowly).
 
 ### 5.5 Fracture and structures
 
