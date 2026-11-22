@@ -1,0 +1,133 @@
+{
+  "name": "bandwidth",
+  "timestamp": "2026-11-22T12:22:25",
+  "metrics": {
+    "buffer_mib": 512.0,
+    "peak_gb_per_s": 576.0,
+    "copy_float": {
+      "median_ms": 2.1176319122314453,
+      "p10_ms": 2.1094400882720947,
+      "p90_ms": 2.2609920263290406,
+      "min_ms": 2.1002240180969243,
+      "max_ms": 2.337791919708252,
+      "n": 50,
+      "gb_per_s": 507.04837691482896,
+      "fraction_of_peak": 0.8802923210326892
+    },
+    "copy_vec4": {
+      "median_ms": 2.110976099967956,
+      "p10_ms": 2.1031936407089233,
+      "p90_ms": 2.2471679210662843,
+      "min_ms": 2.1002240180969243,
+      "max_ms": 2.327552080154419,
+      "n": 50,
+      "gb_per_s": 508.6470775374003,
+      "fraction_of_peak": 0.8830678429468756
+    },
+    "memcpy": {
+      "median_ms": 2.1319680213928223,
+      "p10_ms": 2.124799966812134,
+      "p90_ms": 2.2567935943603517,
+      "min_ms": 2.115583896636963,
+      "max_ms": 2.348031997680664,
+      "n": 50,
+      "gb_per_s": 503.63880378398954,
+      "fraction_of_peak": 0.874372923236093
+    },
+    "read_vec4": {
+      "median_ms": 0.9553920030593873,
+      "p10_ms": 0.954367995262146,
+      "p90_ms": 0.9711296021938324,
+      "min_ms": 0.954367995262146,
+      "max_ms": 1.005568027496338,
+      "n": 50,
+      "gb_per_s": 561.9378331415949,
+      "fraction_of_peak": 0.9755865158708245
+    },
+    "peak_from_clock_gb_per_s": 576.064
+  },
+  "conditions": {
+    "on_ac": true,
+    "power_mode": "best_performance",
+    "energy_saver": false,
+    "warmup_s": 300.01622489999863,
+    "official": true,
+    "reasons_not_official": []
+  },
+  "telemetry": {
+    "before": {
+      "gpu": "NVIDIA GeForce RTX 4090 Laptop GPU",
+      "driver": "596.71",
+      "sm_clock_mhz": 1425.0,
+      "memory_clock_mhz": 9001.0,
+      "temperature_c": 83.0,
+      "power_w": 102.73,
+      "power_limit_w": 110.49,
+      "pstate": "P0",
+      "clock_event_reasons": "0x0000000000000020"
+    },
+    "during": {
+      "samples": 5,
+      "clock_event_reasons": {
+        "0x0000000000000020": 5
+      },
+      "driver": {
+        "596.71": 5
+      },
+      "gpu": {
+        "NVIDIA GeForce RTX 4090 Laptop GPU": 5
+      },
+      "memory_clock_mhz": {
+        "min": 9001.0,
+        "median": 9001.0,
+        "max": 9001.0,
+        "count": 5
+      },
+      "power_limit_w": {
+        "min": 111.16,
+        "median": 111.16,
+        "max": 111.16,
+        "count": 5
+      },
+      "power_w": {
+        "min": 97.06,
+        "median": 97.06,
+        "max": 97.06,
+        "count": 5
+      },
+      "pstate": {
+        "P0": 5
+      },
+      "sm_clock_mhz": {
+        "min": 1935.0,
+        "median": 1935.0,
+        "max": 1935.0,
+        "count": 5
+      },
+      "temperature_c": {
+        "min": 82.0,
+        "median": 82.0,
+        "max": 82.0,
+        "count": 5
+      }
+    },
+    "after": {
+      "gpu": "NVIDIA GeForce RTX 4090 Laptop GPU",
+      "driver": "596.71",
+      "sm_clock_mhz": 1935.0,
+      "memory_clock_mhz": 9001.0,
+      "temperature_c": 82.0,
+      "power_w": 97.06,
+      "power_limit_w": 111.16,
+      "pstate": "P0",
+      "clock_event_reasons": "0x0000000000000020"
+    }
+  },
+  "environment": {
+    "python": "3.12.12",
+    "warp": "1.19.0",
+    "numpy": "2.5.5",
+    "platform": "Windows-11-10.0.26200-SP0",
+    "git": "ca086f6"
+  }
+}

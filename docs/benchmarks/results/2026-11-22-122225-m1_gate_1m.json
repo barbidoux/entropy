@@ -1,0 +1,167 @@
+{
+  "name": "m1_gate_1m",
+  "timestamp": "2026-11-22T12:22:25",
+  "metrics": {
+    "particles": 1048576,
+    "size": [
+      1600,
+      900
+    ],
+    "gate_fps": 30.0,
+    "dam_break": {
+      "frames": 540,
+      "fps_median": 60.04599557629863,
+      "fps_p10": 58.671983229542924,
+      "frames_below_gate": 0,
+      "frame_ms_median": 16.65389999106992,
+      "frame_ms_p90": 17.043909977655858,
+      "frame_ms_max": 20.029200008139014,
+      "substeps_median": 1.0,
+      "pressure_iterations_median": 8.0,
+      "pressure_iterations_max": 12.0,
+      "gpu_ms_median": {
+        "HUD (OpenGL)": 0.003072,
+        "glass (OpenGL)": 0.0020480000000000003,
+        "liquid (OpenGL)": 0.575488,
+        "liquid motion (CUDA)": 0.11366400122642517,
+        "liquid pressure (CUDA)": 3.371519923210144,
+        "liquid transfers (CUDA)": 1.69302399456501,
+        "scene (OpenGL)": 0.037888,
+        "simulation (CUDA)": 6.820751905441284,
+        "tone map (OpenGL)": 0.016384000000000003
+      },
+      "gpu_ms_p90": {
+        "HUD (OpenGL)": 0.00512,
+        "glass (OpenGL)": 0.0020480000000000003,
+        "liquid (OpenGL)": 0.5836800000000001,
+        "liquid motion (CUDA)": 0.21401599794626236,
+        "liquid pressure (CUDA)": 5.620950436592102,
+        "liquid transfers (CUDA)": 3.6113952383399006,
+        "scene (OpenGL)": 0.038912,
+        "simulation (CUDA)": 11.745625591278076,
+        "tone map (OpenGL)": 0.016384000000000003
+      }
+    },
+    "hose": {
+      "frames": 540,
+      "fps_median": 39.42994757779498,
+      "fps_p10": 34.96268783541595,
+      "frames_below_gate": 1,
+      "frame_ms_median": 25.361449996125884,
+      "frame_ms_p90": 28.60192000225652,
+      "frame_ms_max": 34.10469999653287,
+      "substeps_median": 4.0,
+      "pressure_iterations_median": 8.0,
+      "pressure_iterations_max": 12.0,
+      "gpu_ms_median": {
+        "HUD (OpenGL)": 0.003072,
+        "glass (OpenGL)": 0.011264,
+        "liquid (OpenGL)": 1.7940479999999999,
+        "liquid motion (CUDA)": 0.4280319958925247,
+        "liquid pressure (CUDA)": 9.795168042182922,
+        "liquid transfers (CUDA)": 7.656831946223974,
+        "scene (OpenGL)": 0.045056,
+        "simulation (CUDA)": 23.085999488830566,
+        "tone map (OpenGL)": 0.016384000000000003
+      },
+      "gpu_ms_p90": {
+        "HUD (OpenGL)": 0.00512,
+        "glass (OpenGL)": 0.012288,
+        "liquid (OpenGL)": 1.8288639999999998,
+        "liquid motion (CUDA)": 0.49049599543213845,
+        "liquid pressure (CUDA)": 13.197619080543518,
+        "liquid transfers (CUDA)": 8.2087232619524,
+        "scene (OpenGL)": 0.046079999999999996,
+        "simulation (CUDA)": 26.04973487854004,
+        "tone map (OpenGL)": 0.017408
+      }
+    },
+    "hose_particles_added": 9348
+  },
+  "conditions": {
+    "on_ac": true,
+    "power_mode": "best_performance",
+    "energy_saver": false,
+    "warmup_s": 300.01622489999863,
+    "official": true,
+    "reasons_not_official": []
+  },
+  "telemetry": {
+    "before": {
+      "gpu": "NVIDIA GeForce RTX 4090 Laptop GPU",
+      "driver": "596.71",
+      "sm_clock_mhz": 2310.0,
+      "memory_clock_mhz": 9001.0,
+      "temperature_c": 80.0,
+      "power_w": 117.65,
+      "power_limit_w": 130.0,
+      "pstate": "P0",
+      "clock_event_reasons": "0x0000000000000000"
+    },
+    "during": {
+      "samples": 234,
+      "clock_event_reasons": {
+        "0x0000000000000000": 117,
+        "0x0000000000000001": 9,
+        "0x0000000000000004": 108
+      },
+      "driver": {
+        "596.71": 234
+      },
+      "gpu": {
+        "NVIDIA GeForce RTX 4090 Laptop GPU": 234
+      },
+      "memory_clock_mhz": {
+        "min": 9001.0,
+        "median": 9001.0,
+        "max": 9001.0,
+        "count": 234
+      },
+      "power_limit_w": {
+        "min": 110.0,
+        "median": 110.0,
+        "max": 130.0,
+        "count": 234
+      },
+      "power_w": {
+        "min": 75.43,
+        "median": 107.0,
+        "max": 117.65,
+        "count": 234
+      },
+      "pstate": {
+        "P0": 234
+      },
+      "sm_clock_mhz": {
+        "min": 2235.0,
+        "median": 2310.0,
+        "max": 2310.0,
+        "count": 234
+      },
+      "temperature_c": {
+        "min": 80.0,
+        "median": 85.0,
+        "max": 87.0,
+        "count": 234
+      }
+    },
+    "after": {
+      "gpu": "NVIDIA GeForce RTX 4090 Laptop GPU",
+      "driver": "596.71",
+      "sm_clock_mhz": 2250.0,
+      "memory_clock_mhz": 9001.0,
+      "temperature_c": 87.0,
+      "power_w": 109.67,
+      "power_limit_w": 110.0,
+      "pstate": "P0",
+      "clock_event_reasons": "0x0000000000000004"
+    }
+  },
+  "environment": {
+    "python": "3.12.12",
+    "warp": "1.19.0",
+    "numpy": "2.5.5",
+    "platform": "Windows-11-10.0.26200-SP0",
+    "git": "ca086f6"
+  }
+}

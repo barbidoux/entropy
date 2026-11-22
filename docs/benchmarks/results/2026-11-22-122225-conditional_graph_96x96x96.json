@@ -1,0 +1,170 @@
+{
+  "name": "conditional_graph_96x96x96",
+  "timestamp": "2026-11-22T12:22:25",
+  "metrics": {
+    "shape": [
+      96,
+      96,
+      96
+    ],
+    "iterations": 40,
+    "batch": 4,
+    "kernels_per_solve": 120,
+    "host": {
+      "batched": {
+        "median_ms": 2.2578499920200557,
+        "p10_ms": 2.148980015772395,
+        "p90_ms": 2.621219985303469,
+        "min_ms": 1.9651000038720667,
+        "max_ms": 2.9267000209074467,
+        "n": 50
+      },
+      "conditional": {
+        "median_ms": 1.929949998157099,
+        "p10_ms": 1.8784399901051074,
+        "p90_ms": 2.3472200002288446,
+        "min_ms": 1.8604999931994826,
+        "max_ms": 2.4111999955493957,
+        "n": 50
+      },
+      "unrolled": {
+        "median_ms": 1.7426500126020983,
+        "p10_ms": 1.7071099922759458,
+        "p90_ms": 2.1168499923078343,
+        "min_ms": 1.6903000068850815,
+        "max_ms": 2.1692000154871494,
+        "n": 50
+      }
+    },
+    "gpu": {
+      "batched": {
+        "median_ms": 2.2636959552764893,
+        "p10_ms": 2.153839945793152,
+        "p90_ms": 2.6263776063919066,
+        "min_ms": 1.9696320295333865,
+        "max_ms": 2.932447910308838,
+        "n": 50
+      },
+      "conditional": {
+        "median_ms": 1.9366399645805359,
+        "p10_ms": 1.8849567651748658,
+        "p90_ms": 2.354179286956787,
+        "min_ms": 1.8688640594482422,
+        "max_ms": 2.41923189163208,
+        "n": 50
+      },
+      "unrolled": {
+        "median_ms": 1.749023973941803,
+        "p10_ms": 1.712447953224182,
+        "p90_ms": 2.125846314430237,
+        "min_ms": 1.6958400011062622,
+        "max_ms": 2.1759679317474365,
+        "n": 50
+      }
+    },
+    "enqueue": {
+      "conditional": {
+        "median_ms": 0.06765002035535872,
+        "p10_ms": 0.035390007542446256,
+        "p90_ms": 0.09489999210927635,
+        "min_ms": 0.032400013878941536,
+        "max_ms": 0.1351000100839883,
+        "n": 50
+      },
+      "unrolled": {
+        "median_ms": 0.07695000385865569,
+        "p10_ms": 0.04866999224759638,
+        "p90_ms": 0.09436001419089736,
+        "min_ms": 0.04600000102072954,
+        "max_ms": 0.17320000915788114,
+        "n": 50
+      }
+    },
+    "conditional_overhead_per_iteration_us": 4.690399765968321,
+    "read_backs_saved": 9
+  },
+  "conditions": {
+    "on_ac": true,
+    "power_mode": "best_performance",
+    "energy_saver": false,
+    "warmup_s": 300.01622489999863,
+    "official": true,
+    "reasons_not_official": []
+  },
+  "telemetry": {
+    "before": {
+      "gpu": "NVIDIA GeForce RTX 4090 Laptop GPU",
+      "driver": "596.71",
+      "sm_clock_mhz": 1425.0,
+      "memory_clock_mhz": 9001.0,
+      "temperature_c": 83.0,
+      "power_w": 101.47,
+      "power_limit_w": 111.9,
+      "pstate": "P0",
+      "clock_event_reasons": "0x0000000000000020"
+    },
+    "during": {
+      "samples": 3,
+      "clock_event_reasons": {
+        "0x0000000000000020": 3
+      },
+      "driver": {
+        "596.71": 3
+      },
+      "gpu": {
+        "NVIDIA GeForce RTX 4090 Laptop GPU": 3
+      },
+      "memory_clock_mhz": {
+        "min": 9001.0,
+        "median": 9001.0,
+        "max": 9001.0,
+        "count": 3
+      },
+      "power_limit_w": {
+        "min": 113.01,
+        "median": 113.01,
+        "max": 113.01,
+        "count": 3
+      },
+      "power_w": {
+        "min": 47.71,
+        "median": 47.71,
+        "max": 47.71,
+        "count": 3
+      },
+      "pstate": {
+        "P0": 3
+      },
+      "sm_clock_mhz": {
+        "min": 1845.0,
+        "median": 1845.0,
+        "max": 1845.0,
+        "count": 3
+      },
+      "temperature_c": {
+        "min": 82.0,
+        "median": 82.0,
+        "max": 82.0,
+        "count": 3
+      }
+    },
+    "after": {
+      "gpu": "NVIDIA GeForce RTX 4090 Laptop GPU",
+      "driver": "596.71",
+      "sm_clock_mhz": 1845.0,
+      "memory_clock_mhz": 9001.0,
+      "temperature_c": 82.0,
+      "power_w": 47.71,
+      "power_limit_w": 113.01,
+      "pstate": "P0",
+      "clock_event_reasons": "0x0000000000000020"
+    }
+  },
+  "environment": {
+    "python": "3.12.12",
+    "warp": "1.19.0",
+    "numpy": "2.5.5",
+    "platform": "Windows-11-10.0.26200-SP0",
+    "git": "ca086f6"
+  }
+}

@@ -1,0 +1,102 @@
+{
+  "name": "liquid_pass_1m_start",
+  "timestamp": "2026-11-22T12:22:25",
+  "metrics": {
+    "particles": 1048576,
+    "size": [
+      1600,
+      900
+    ],
+    "median_ms": {
+      "scene (OpenGL)": 0.035840000000000004,
+      "liquid (OpenGL)": 0.575488,
+      "glass (OpenGL)": 0.0020480000000000003,
+      "tone map (OpenGL)": 0.01024
+    },
+    "budget_ms": 2.5
+  },
+  "conditions": {
+    "on_ac": true,
+    "power_mode": "best_performance",
+    "energy_saver": false,
+    "warmup_s": 300.01622489999863,
+    "official": true,
+    "reasons_not_official": []
+  },
+  "telemetry": {
+    "before": {
+      "gpu": "NVIDIA GeForce RTX 4090 Laptop GPU",
+      "driver": "596.71",
+      "sm_clock_mhz": 2310.0,
+      "memory_clock_mhz": 9001.0,
+      "temperature_c": 84.0,
+      "power_w": 128.37,
+      "power_limit_w": 130.0,
+      "pstate": "P0",
+      "clock_event_reasons": "0x0000000000000004"
+    },
+    "during": {
+      "samples": 1,
+      "clock_event_reasons": {
+        "0x0000000000000004": 1
+      },
+      "driver": {
+        "596.71": 1
+      },
+      "gpu": {
+        "NVIDIA GeForce RTX 4090 Laptop GPU": 1
+      },
+      "memory_clock_mhz": {
+        "min": 9001.0,
+        "median": 9001.0,
+        "max": 9001.0,
+        "count": 1
+      },
+      "power_limit_w": {
+        "min": 130.0,
+        "median": 130.0,
+        "max": 130.0,
+        "count": 1
+      },
+      "power_w": {
+        "min": 128.37,
+        "median": 128.37,
+        "max": 128.37,
+        "count": 1
+      },
+      "pstate": {
+        "P0": 1
+      },
+      "sm_clock_mhz": {
+        "min": 2310.0,
+        "median": 2310.0,
+        "max": 2310.0,
+        "count": 1
+      },
+      "temperature_c": {
+        "min": 84.0,
+        "median": 84.0,
+        "max": 84.0,
+        "count": 1
+      }
+    },
+    "after": {
+      "gpu": "NVIDIA GeForce RTX 4090 Laptop GPU",
+      "driver": "596.71",
+      "sm_clock_mhz": 2310.0,
+      "memory_clock_mhz": 9001.0,
+      "temperature_c": 84.0,
+      "power_w": 128.37,
+      "power_limit_w": 130.0,
+      "pstate": "P0",
+      "clock_event_reasons": "0x0000000000000004"
+    }
+  },
+  "environment": {
+    "python": "3.12.12",
+    "warp": "1.19.0",
+    "numpy": "2.5.5",
+    "platform": "Windows-11-10.0.26200-SP0",
+    "git": "ca086f6"
+  }
+}
