@@ -19,6 +19,35 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
     4 %; measured 2.6 %);
   - the liquid counts pressure solves that did not converge
     (`diagnostics()["unconverged_solves"]`), and the HUD shows them when there are some.
+- The liquid sorts its particles by half-cell at the start of every frame (#65, ADR
+  0025): a stable radix sort gathered into the second particle buffer, which then
+  becomes the live one, so the NaN guard's dump keeps the frame's starting state at no
+  extra copy. Measured at 1 M particles by the independent review (unofficial): particles
+  to grid 3.55 to 0.98 ms per substep, grid to particles 0.90 to 0.16 ms, for about
+  0.2 ms of sorting per frame net of the copy it replaces. Sorting by whole cell piled
+  the atomics on the same nodes (2.38 ms). A `-m perf` benchmark times the transfers in
+  random, bucket, lattice and half-cell order, and the sort. Particles to grid in
+  shared memory (Gao et al. 2018) was tried and not adopted (2.06 ms, three times the
+  code).
+- Frame pacing, the slowest time scale and solver loops on the GPU (#36, ADR 0026):
+  - 0.1x is the slowest time scale (`MIN_TIME_SCALE`): float32 positions still move
+    water at 1 cm/s within 256 m of the origin at 60 fps; the loop refuses a slower
+    one; far from the origin slow speeds are quantised (a named limit);
+  - `-m perf` benchmark of frame pacing with vsync (CPU and GPU work, the display
+    recorded): one long frame never leaves the loop a refresh behind, so no hysteresis
+    is added; judder at just over a refresh is a named limit;
+  - `-m perf` benchmark of a solver loop as a conditional graph node: about 4-5 µs of
+    GPU per iteration, against batches with read-backs (unofficial); the pressure solve
+    keeps its batches for now.
+- Follow-ups of #74's review: the bucket says how much it dropped into a full tank, in
+  either shape; a tool held into a pause still gets its release, even after a switch;
+  only a tool that was pressed is held and released, and a switch starts the new tool
+  only if one was in use and the button is still held (no phantom click when the key
+  and the release come in one frame); a release left from a pause no longer stops the
+  tool a switch starts, and a button let go and pressed again within one frame keeps
+  the tool going; a tool's key (`order`) must be 1 to 9; tests for
+  hosing from inside the tank and for the eraser through the toolbox on CPU; the flood
+  gameplay test checks the water is not squeezed (#76 has the solver's lag).
 - The bucket, the flood source and the eraser (#54):
   - the bucket drops exactly its volume (0.01–2 m³) where the aim meets the rim over
     the tank; right click turns it into a dam, Martin & Moyce's column 2a high across
@@ -29,7 +58,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
     4 s stood at half its depth);
   - the eraser removes the water within its radius (0.1–5 m) of where the aim meets
     it; the liquid removes particles on the GPU (prefix sum), keeping their order, and
-    the eraser reads back only its level-set samples and two counts;
+    the eraser reads back only its level-set samples and two counts.
 - Time controls and checkpoints (#55, ADR 0024): P pauses, [ and ] cycle 1x, 0.5x,
   0.25x and 0.1x, the period steps one frame while paused (the HUD names these keys as
   the keyboard prints them: ^ $ : on AZERTY); F5 saves and F9 restores, again to go
@@ -40,8 +69,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   F5 does nothing while frozen. Clicks while paused or frozen are dropped. US-03: a dam
   break at 0.1x and at 1x both meet V-LIQ-03 and keep their volume within 1 %.
 - The HUD counts the water (#56): particles, litres (the particles' own volume),
-  cells of water, substeps, pressure iterations and overruns; the liquid's GPU time per phase (transfers, pressure,
-  motion) through the step's context.
+  cells of water, substeps, pressure iterations and overruns; the liquid's GPU time per
+  phase (transfers, pressure, motion) through the step's context.
 - Tools and the hose (#53, #35, ADR 0020):
   - tool plug-ins with their parameters, limits and defaults in `content/tools/`;
     keys 1–9 choose, the mouse wheel sets the power, the left button (mouse
@@ -270,6 +299,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - V-LIQ-03's delay of 0.25 against Table 2 has its true cause in the spec, the test and
   the data file: Table 2's clock is a normalisation, not the heater current, which is
   Table 6's clock (ADR 0028, superseding ADR 0019 on this point).
+- The liquid pass draws its spheres at half resolution (#57, ADR 0027): depth,
+  thickness and smoothing in half-size targets; the composite at full resolution, its
+  depth and normals interpolated between the four nearest half-size pixels on one
+  surface, and water behind each output pixel's solid left out. At 1 M particles and
+  1600 x 900 (unofficial): 0.58, 1.13 and 1.62 ms from the start camera, above the rim
+  and up close, against 1.46, 3.58 and 4.64 ms before (budget 2.5 ms). The liquid pass
+  benchmark covers the three views; the still pool's reference image is re-recorded.
 - The HUD drops a GPU stage that has not been timed for a whole window of frames, such
   as a solver switched off (#43).
 - CI runs actions/checkout 7.0.1 and astral-sh/setup-uv 10.3.3, both on node24, pinned
@@ -305,6 +341,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- A sphere smaller than a pixel adds its own volume to the water's thickness (its
+  chords weighted by d², ADR 0027): far water no longer reads too thick (+48 % to
+  +484 % before, once spheres were a third to a half of a pixel across).
 - Water sealed from air (#69, ADR 0021): when no cell is air, the pressure solve
   (MGPCG) drops the right-hand side's part along the constant, removes the constant from
   its preconditioned residual every iteration, and sets the pressure's mean to 0. A grid

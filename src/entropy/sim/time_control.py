@@ -8,7 +8,14 @@ time whatever the scale, so the camera stays free while the world is frozen.
 
 from __future__ import annotations
 
-SCALES = (1.0, 0.5, 0.25, 0.1)
+MIN_TIME_SCALE = 0.1
+"""The slowest time scale (#36). Positions are float32, whose spacing is 1e-6 m at 8 m
+from the origin and 1.5e-5 m at 128 m. At 0.1x a 60 fps frame advances 1/600 s, and water
+at 1 cm/s moves 1.7e-5 m: still above the spacing at 128 m, the largest map extent
+planned. Slower, slow water far from the origin would stop moving, its steps rounded
+away, so no scale below this is offered or accepted."""
+
+SCALES = (1.0, 0.5, 0.25, MIN_TIME_SCALE)
 """Time scales the player cycles through (SPEC 4.5)."""
 
 
