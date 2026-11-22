@@ -171,7 +171,7 @@ def test_a_body_spinning_about_a_principal_axis_turns_steadily(device: str) -> N
 def test_free_rotation_keeps_the_angular_momentum(device: str) -> None:
     """No gravity, no torque: a box spinning about no principal axis tumbles, and its
     angular momentum in world space, R I Rᵀ ω, stays within 1 % over 2 s (the gyroscopic
-    term is integrated explicitly per substep, SPEC 5.4)."""
+    term by the implicit midpoint rule, ADR 0030)."""
     solver = _solver(device, gravity=(0.0, 0.0, 0.0))
     solver.add_bodies([_box(angular_velocity_rad_per_s=(1.0, 3.0, 0.5))])
     _, inertia = mass_properties(Shape.BOX, (0.3, 0.2, 0.1), TEST_DENSITY_KG_PER_M3)
