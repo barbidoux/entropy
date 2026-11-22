@@ -7,6 +7,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- The M1 physics audit of the liquid's validation (#58, ADR 0028):
+  - V-LIQ-01 at a surface between cell centres (0.71 m), and through the full step:
+    still water 1 m deep for 1 s, seeded as the game seeds it;
+  - V-LIQ-03 adds the column's top at the wall against Martin & Moyce's Table 6 on
+    their heater clock, with no delay (within 6 %; measured -4.1 to +0.2 %): it catches
+    gravity off by 10 %, which the front alone does not at 32 cells;
+  - V-LIQ-05 adds a sphere cutting the grid anywhere, its surface placed by θ per face
+    (order 1.95; one θ = 1/2 would give 0.55);
+  - US-03 compares the fronts at 0.1x and 1x at the same simulated instants (within
+    4 %; measured 2.6 %);
+  - the liquid counts pressure solves that did not converge
+    (`diagnostics()["unconverged_solves"]`), and the HUD shows them when there are some.
 - The bucket, the flood source and the eraser (#54):
   - the bucket drops exactly its volume (0.01–2 m³) where the aim meets the rim over
     the tank; right click turns it into a dam, Martin & Moyce's column 2a high across
@@ -255,6 +267,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- V-LIQ-03's delay of 0.25 against Table 2 has its true cause in the spec, the test and
+  the data file: Table 2's clock is a normalisation, not the heater current, which is
+  Table 6's clock (ADR 0028, superseding ADR 0019 on this point).
 - The HUD drops a GPU stage that has not been timed for a whole window of frames, such
   as a solver switched off (#43).
 - CI runs actions/checkout 7.0.1 and astral-sh/setup-uv 10.3.3, both on node24, pinned

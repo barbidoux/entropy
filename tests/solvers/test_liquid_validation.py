@@ -1,5 +1,7 @@
-"""Validation of the liquid's full step: V-LIQ-02 and V-LIQ-03 (SPEC 9.4, ADR 0019)."""
+"""Validation of the liquid's full step: V-LIQ-01 to V-LIQ-03 (SPEC 9.4, ADR 0019,
+ADR 0028)."""
 
+import functools
 import math
 import tomllib
 
@@ -85,8 +87,11 @@ def test_v_liq_02_a_sloshing_tank_keeps_its_volume(device: str) -> None:
 
 
 CLOCK_DELAY = 0.25
-"""V-LIQ-03's fixed delay of the simulated clock, in T (ADR 0019): Martin & Moyce's
-clock starts from the heater current, before the water moved. Never fitted per run."""
+"""V-LIQ-03's fixed delay of the simulated clock against Table 2, in T (ADR 0019, ADR
+0028). Table 2's clock is a normalisation (T = 1.19 at Z = 1.44, "of the order of
+magnitude" of the time since the heater current); solvers that release the column at
+once reach Z = 1.44 about 0.25 earlier (Landet et al. 2018: 0.21-0.27; ENTROPY converged:
+0.255). Never fitted per run. Table 6's column top, on the heater clock, needs none."""
 
 
 def _martin_moyce() -> tuple[np.ndarray, np.ndarray]:
@@ -108,20 +113,44 @@ def _floor_front_m(liquid: LiquidSolver, dx_m: float) -> float:
     return (i + 0.5) * dx_m + dx_m * phi[i] / (phi[i] - phi[i + 1])
 
 
-def _dam_break(a_m: float, cells_per_a: int, device: str) -> tuple[np.ndarray, np.ndarray]:
-    """A column a wide and 2a high released against the wall at x = 0; the front's Z = z/a
-    after each frame, against T = t sqrt(2g/a)."""
+def _martin_moyce_column_top() -> tuple[np.ndarray, np.ndarray]:
+    """(tau, H): the means of Table 6's records, n² = 2, a = 2¼ in, on the heater clock."""
+    text = (content_dir() / "validation" / "martin_moyce_1952.toml").read_text("utf-8")
+    column = tomllib.loads(text)["column_top_2_25_in"]
+    return np.asarray(column["time_heater_dimensionless"]), np.asarray(
+        column["height_dimensionless"]
+    )
+
+
+def _wall_height_m(liquid: LiquidSolver, dx_m: float) -> float:
+    """Where the level set crosses zero up the column of cells against the wall behind
+    the column (m above the floor), averaged across the tank's width."""
+    phi = liquid.fields()["phi_m"].numpy()[0, :, :].mean(axis=0)
+    k = int(np.nonzero(phi < 0.0)[0].max())
+    if k + 1 == len(phi):
+        return len(phi) * dx_m
+    return (k + 0.5) * dx_m + dx_m * phi[k] / (phi[k] - phi[k + 1])
+
+
+@functools.cache
+def _dam_break(
+    a_m: float, cells_per_a: int, device: str
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """A column a wide and 2a high released against the wall at x = 0; after each frame,
+    the front's Z = z/a and the column's top at the wall, H = h/2a, against
+    T = t sqrt(2g/a). Run once per device for both V-LIQ-03 tests."""
     dx_m = a_m / cells_per_a
     shape = (math.ceil(4.5 * cells_per_a), 4, math.ceil(2.5 * cells_per_a))
     liquid = _liquid(shape, dx_m, device)
     liquid.add_particles(fill_box((0.0, 0.0, 0.0), (a_m, 4 * dx_m, 2 * a_m), dx_m, 8, seed=10))
     scale = math.sqrt(2.0 * abs(GRAVITY[2]) / a_m)
-    times, fronts = [0.0], [1.0]
+    times, fronts, heights = [0.0], [1.0], [1.0]
     while times[-1] < 3.2:
         liquid.step(FRAME_S)
         times.append(times[-1] + FRAME_S * scale)
         fronts.append(_floor_front_m(liquid, dx_m) / a_m)
-    return np.asarray(times), np.asarray(fronts)
+        heights.append(_wall_height_m(liquid, dx_m) / (2.0 * a_m))
+    return np.asarray(times), np.asarray(fronts), np.asarray(heights)
 
 
 @pytest.mark.slow
@@ -130,7 +159,7 @@ def test_v_liq_03_a_released_column_advances_like_martin_and_moyce(device: str) 
     released at once. With the simulated clock delayed by `CLOCK_DELAY`, every mean of
     Table 2 with 1.19 <= T <= 3 is within 7 %. (Measured: -3 to +1.5 %. Gravity off by
     20 % either way misses by 2 points or more.)"""
-    times, fronts = _dam_break(1.0, 16, device)
+    times, fronts, _ = _dam_break(1.0, 16, device)
     t_ref, z_ref = _martin_moyce()
     window = (t_ref >= 1.19) & (t_ref <= 3.0)
 
@@ -138,3 +167,51 @@ def test_v_liq_03_a_released_column_advances_like_martin_and_moyce(device: str) 
 
     assert window.sum() == 11
     np.testing.assert_allclose(simulated, z_ref[window], rtol=0.07)
+
+
+@pytest.mark.slow
+def test_v_liq_03_the_column_s_top_falls_like_martin_and_moyce_on_their_clock(
+    device: str,
+) -> None:
+    """V-LIQ-03, the column's top (ADR 0028): the water's height at the wall behind the
+    column, H = h/2a, against the means of Table 6 on the paper's heater clock,
+    tau = t sqrt(g/a) = T/sqrt(2), with no delay: every mean with 0.56 <= tau <= 2.21
+    within 6 %. (Measured by the M1 physics audit: -4.1 to +0.2 %; gravity off by 10 %
+    either way misses by 0.9 points or more.)"""
+    times, _, heights = _dam_break(1.0, 16, device)
+    tau_ref, h_ref = _martin_moyce_column_top()
+    window = (tau_ref >= 0.56) & (tau_ref <= 2.21)
+
+    simulated = np.interp(tau_ref[window], times / math.sqrt(2.0), heights)
+
+    assert window.sum() == 10
+    np.testing.assert_allclose(simulated, h_ref[window], rtol=0.06)
+
+
+@pytest.mark.slow
+def test_v_liq_01_still_water_keeps_hydrostatic_pressure_through_the_full_step(
+    device: str,
+) -> None:
+    """V-LIQ-01 through the full step (the M1 physics audit): still water 1 m deep, seeded
+    as the game seeds it, after 1 s, within 2 % of rho g d at every depth below the top
+    layer. The top layer's pressure is small (306 Pa) and the particles' surface sits
+    within about 1.5 mm of 1 m, so there the allowance is rho g x 1.5 mm (4.8 %)."""
+    dx_m, shape, depth_m = 1.0 / 16.0, (8, 8, 24), 1.0
+    liquid = _liquid(shape, dx_m, device)
+    liquid.add_particles(fill_box((0.0, 0.0, 0.0), (8 * dx_m, 8 * dx_m, depth_m), dx_m, 8, seed=3))
+    for _ in range(60):
+        liquid.step(FRAME_S)
+
+    fields = liquid.fields()
+    pressure, phi = fields["pressure_pa"].numpy(), fields["phi_m"].numpy()
+    rho_g = WATER.density_kg_per_m3 * abs(GRAVITY[2])
+    z = (np.arange(shape[2]) + 0.5) * dx_m
+    expected = np.broadcast_to(rho_g * (depth_m - z), shape)
+    top = int((z < depth_m).sum()) - 1
+    water = phi < 0.0
+    below = water[:, :, :top]
+    assert below.all()
+    np.testing.assert_allclose(pressure[:, :, :top], expected[:, :, :top], rtol=0.02)
+    error = np.abs(pressure[:, :, top] - expected[:, :, top])
+    assert water[:, :, top].all()
+    assert error.max() <= max(0.02 * expected[0, 0, top], rho_g * 1.5e-3), error.max()

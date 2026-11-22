@@ -277,7 +277,12 @@ class LiquidSolver:
         self._frozen: NonFiniteStateError | None = None
         self._speed_m_per_s = 0.0
         self._last_frame: tuple[float, int] | None = None  # (dt_s, substeps) of the last step
-        self._diagnostics = {"substeps": 0, "pressure_iterations": 0, "overruns": 0}
+        self._diagnostics = {
+            "substeps": 0,
+            "pressure_iterations": 0,
+            "overruns": 0,
+            "unconverged_solves": 0,
+        }
         self._density = wp.zeros(spec.shape, dtype=float, device=device)
         self._rest_mass = self._mass_at_rest()
         self._volume_slots = wp.zeros(int(_k.SLOTS), dtype=wp.float64, device=device)
@@ -745,6 +750,8 @@ class LiquidSolver:
         with self._stage("liquid pressure (CUDA)"):
             result = projection.project(self._velocity, dt_s)
         self._diagnostics["pressure_iterations"] = result.iterations
+        if not result.converged:  # divergence left behind: counted, not hidden (M1 audit)
+            self._diagnostics["unconverged_solves"] += 1
         self._extrapolate()
         projection.zero_solid_faces(self._velocity)
         if not n:

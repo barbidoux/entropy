@@ -196,7 +196,9 @@ class GameStages:
             f"{litres:,.0f} L, {int(d['water_cells']):,} cellules d'eau, "
             f"{int(d['substeps'])} sous-pas, {int(d['pressure_iterations'])} itérations de "
             f"pression, {int(d['overruns'])} dépassements"
-        )
+            + (f", {int(d['unconverged_solves'])} pressions non résolues"
+               if d.get("unconverged_solves") else "")
+        )  # fmt: skip
 
     def hud_notes(self) -> list[str]:
         """Extra HUD lines: an alert if the world froze, the controls, the map and its

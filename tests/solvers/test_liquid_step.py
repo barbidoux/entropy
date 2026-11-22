@@ -729,3 +729,23 @@ def test_the_test_tank_s_grid_full_of_water_never_caps_a_solve(
     assert len(iterations) >= 600
     assert max(iterations) <= 16
     assert np.abs(liquid.particle_velocities()).max() < 5e-3
+
+
+def test_a_pressure_solve_that_does_not_converge_is_counted(
+    device: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A solve stopped by its iteration cap leaves divergence behind: the liquid counts it
+    in its diagnostics instead of carrying on unflagged (the M1 physics audit)."""
+    liquid = LiquidSolver.create(_setup((8, 8, 8)), device)
+    liquid.add_particles(fill_box((0.0, 0.0, 0.0), (0.5, 0.25, 0.25), DX_M, 8, seed=13))
+    solve = Mgpcg.solve
+
+    def capped(self: Mgpcg, *args, **kwargs) -> SolveResult:
+        return solve(self, *args, **{**kwargs, "max_iterations": 1})
+
+    liquid.step(1.0 / 60.0)
+    assert liquid.diagnostics()["unconverged_solves"] == 0
+    monkeypatch.setattr(Mgpcg, "solve", capped)
+    liquid.step(1.0 / 60.0)
+
+    assert liquid.diagnostics()["unconverged_solves"] == liquid.diagnostics()["substeps"] >= 1
