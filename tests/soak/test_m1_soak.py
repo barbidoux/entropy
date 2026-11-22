@@ -22,7 +22,8 @@ of host memory for about 3 s, which a sample right after it would count (#80's r
 pool and the whole GPU, with the same 64 MiB limit and the same sampling as M0's soak.
 The checkpoint ring's pinned host buffers are counted at both samples and taken out of
 the process's growth: F9 drops the checkpoints after the one it restores, and the ring
-refills at the counts of the moment.
+refills at the counts of the moment. A trial run needs `ENTROPY_SOAK_S` of about 125 s
+or more to get both samples.
 
 V-LIQ-02 over 10 minutes (SPEC 9.4, ADR 0019, ADR 0028): the last `QUIET_S` of every
 `QUIET_EVERY_S` start no action, and the world is resumed and set back to 1x, one key
