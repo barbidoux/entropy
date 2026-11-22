@@ -15,7 +15,10 @@ mass and momentum. Its cost depends on the order of the particles in memory:
 - **By cell.** The 8 particles of a cell sit in consecutive threads of a warp. They add
   to nearly the same 27 nodes at the same moment, and same-address atomics serialise.
 - **By half-cell** (each cell split in two along each axis). Neighbouring threads touch
-  neighbouring nodes, but rarely the same ones at once.
+  neighbouring nodes, but rarely the same ones at once. In x-major order, consecutive
+  threads also run along z, the grid's contiguous axis.
+- **In the bucket's layers** (bottom first, then x, y fastest). Neighbouring threads
+  share no nodes, but run along y, across the grid's memory.
 
 The independent review of #75 measured this, interleaved over 30 rounds with the L2
 cache flushed before each pass:
@@ -25,10 +28,12 @@ cache flushed before each pass:
 | Random | 3.55 ms | 0.90 ms |
 | By cell | 2.38 ms | 0.171 ms |
 | By half-cell | 0.979 ms | 0.156 ms |
-| As `fill_box` and the bucket pour it (a lattice) | 0.977 ms | 0.157 ms |
+| As the bucket and the dam pour it (layers, y or x fastest) | 3.38 ms | 0.169 ms |
+| As `fill_box` lays it out (a lattice, already in half-cell order) | 0.977 ms | 0.157 ms |
 
-The flood source and the hose add particles in random order. Mixing during a flow
-drifts any order towards random.
+Every tool adds water in an order the sort improves: the bucket and the dam in layers,
+the flood source and the hose at random. Mixing during a flow drifts any order towards
+random.
 
 ## Decision
 
@@ -54,9 +59,9 @@ The cost of the sort, per frame:
 - so about 0.2 ms net in steady state.
 
 The `-m perf` benchmark (`tests/perf/test_m1_transfers.py`) times all of these, together
-with the transfers in random, poured and half-cell order. It requires the half-cell
-order to cost no more than the poured order, and the sort to pay for itself at one
-substep.
+with the transfers in random, bucket, lattice and half-cell order. It requires the
+half-cell order to cost no more than the lattice, and the sort to pay for itself at one
+substep against the bucket's order and random order.
 
 Consequences:
 - **CPU views.** On the CPU, `particle_positions()` is a view. Since the swap, it is
@@ -67,8 +72,8 @@ Consequences:
 ## Alternatives considered
 
 - **Sort by cell.** This was the first version of this ADR. It costs 2.38 ms of
-  particles-to-grid, 2.4 times the half-cell order. It also made water poured by the
-  bucket 2 ms per frame slower than not sorting at all.
+  particles-to-grid, 2.4 times the half-cell order. It also made water seeded by
+  `fill_box` (already in half-cell order) about 2 ms per frame slower than not sorting.
 - **A counting sort** (histogram, scan, scatter). It took 1.07 ms against 0.80 ms for
   the radix sort, and its order within a bin is not reproducible on the GPU.
 - **Cells grouped in 4 × 4 × 4 bricks.** Particles-to-grid is slower in that order

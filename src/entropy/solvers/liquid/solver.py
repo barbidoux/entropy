@@ -509,9 +509,12 @@ class LiquidSolver:
         return max(self._water_capacity - self._count, 0)
 
     def particle_positions(self) -> np.ndarray:
+        """The particles' positions (m), copied from the GPU. On the CPU this is a view,
+        valid until the next step only: the sort swaps the particle buffers (ADR 0025)."""
         return self._active().position_m.numpy()
 
     def particle_velocities(self) -> np.ndarray:
+        """The particles' velocities (m/s); on the CPU a view, as `particle_positions`."""
         return self._active().velocity_m_per_s.numpy()
 
     # Internals --------------------------------------------------------------------------

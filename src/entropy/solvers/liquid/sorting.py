@@ -66,7 +66,7 @@ class CellSort:
                 particles.position_m,
                 wp.vec3(*spec.origin_m),
                 spec.dx_m / SUBDIVISION,
-                wp.vec3i(*(SUBDIVISION * n for n in spec.shape)),
+                wp.vec3i(*(SUBDIVISION * cells for cells in spec.shape)),
                 self._keys,
                 self._order,
             ],
