@@ -1,5 +1,7 @@
 """The toolbox (`entropy.game.toolbox`): choosing a tool, its power, using it (SPEC 4.5)."""
 
+import re
+
 import glfw
 import pytest
 
@@ -300,3 +302,79 @@ def test_the_bucket_says_how_much_it_could_drop_into_a_full_tank() -> None:
     status = toolbox.current.status  # pyright: ignore[reportAttributeAccessIssue]
     assert liquid.added == 100
     assert "pleine" in status and f"{100 * PARTICLE_M3:.3g}" in status
+
+
+def test_a_tool_let_go_during_a_pause_is_released_even_after_a_switch() -> None:
+    """Held into a pause, let go there, then another tool chosen: the first still gets its
+    release when the world runs again (#77's review, S1)."""
+    box, log = _recording_toolbox()
+    box.handle(_frame(tool_pressed=True, tool_held=True))
+    box.apply(AIM, 1.0 / 60.0)
+    box.handle(_frame(tool_released=True))  # paused
+    box.forget_clicks()
+    box.handle(_frame(pressed=frozenset({Action.TOOL_2})))
+    box.forget_clicks()
+
+    box.apply(AIM, 1.0 / 60.0)
+
+    assert log == [("A", "press"), ("A", "hold"), ("A", "release")]
+
+
+def test_a_switch_releases_only_a_tool_that_was_pressed() -> None:
+    """A click dropped during a pause, the button still held, then a switch: the old tool
+    was never pressed, so it gets no release, and neither tool acts on that held button
+    until a new press (#77's review, S2 and N5)."""
+    box, log = _recording_toolbox()
+    box.handle(_frame(tool_pressed=True, tool_held=True))  # paused: dropped
+    box.forget_clicks()
+    box.handle(_frame(tool_held=True))
+    box.apply(AIM, 1.0 / 60.0)
+    box.handle(_frame(pressed=frozenset({Action.TOOL_2}), tool_held=True))
+    box.apply(AIM, 1.0 / 60.0)
+
+    assert log == []
+
+
+def test_a_switch_in_the_frame_the_button_is_let_go_is_no_click_for_the_new_tool() -> None:
+    """Key 2 and the button's release in one frame: the old tool lets go, and the new one
+    is not pressed, held and released, which would drop a bucket for nothing (N5)."""
+    box, log = _recording_toolbox()
+    box.handle(_frame(tool_pressed=True, tool_held=True))
+    box.apply(AIM, 1.0 / 60.0)
+
+    box.handle(_frame(pressed=frozenset({Action.TOOL_2}), tool_released=True))
+    box.apply(AIM, 1.0 / 60.0)
+
+    assert log == [("A", "press"), ("A", "hold"), ("A", "release")]
+
+
+def test_a_switch_while_held_in_a_pause_starts_the_new_tool_when_the_world_runs() -> None:
+    """Held through a pause, another tool chosen there: at resume the new tool is pressed
+    before it is held (N5)."""
+    box, log = _recording_toolbox()
+    box.handle(_frame(tool_pressed=True, tool_held=True))
+    box.apply(AIM, 1.0 / 60.0)
+    box.handle(_frame(pressed=frozenset({Action.TOOL_2}), tool_held=True))  # paused
+    box.forget_clicks()
+    box.handle(_frame(tool_held=True))
+
+    box.apply(AIM, 1.0 / 60.0)
+
+    assert log[2:] == [("A", "release"), ("B", "press"), ("B", "hold")]
+
+
+def test_the_dam_says_how_much_it_could_drop_into_a_full_tank() -> None:
+    """The bucket's other shape reports a full tank too, with its units (#77's review)."""
+    liquid = _SmallTank(room=100)
+    toolbox = _toolbox(liquid)
+    toolbox.handle(_frame(pressed=frozenset({Action.TOOL_2})))
+    toolbox.handle(_frame(alternate_pressed=True))
+    toolbox.handle(_frame(tool_pressed=True))
+    aim = Aim(origin_m=(0.0, -3.0, 3.0), direction=(0.0, 0.8, -0.6))
+
+    toolbox.apply(aim, 1.0 / 60.0)
+
+    status = toolbox.current.status  # pyright: ignore[reportAttributeAccessIssue]
+    assert liquid.added == 100
+    assert "barrage" in status and "pleine" in status
+    assert re.search(r"sur [0-9.e+-]+ m³", status), status

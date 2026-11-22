@@ -97,7 +97,7 @@ class Bucket(ToolBase):
         spacing = ctx.particle_volume_m3 ** (1.0 / 3.0)
         fits = min(count, max(int(ctx.liquid.room_particles()), 0))
         dropped = f"{fits * ctx.particle_volume_m3:.3g} m³"
-        full = f" (cuve pleine : {dropped} sur {count * ctx.particle_volume_m3:.3g})"
+        full = f" (cuve pleine : {dropped} sur {count * ctx.particle_volume_m3:.3g} m³)"
         note = full if fits < count else ""
         if self.shape == "barrage":
             low, high = np.asarray(ctx.domain.low_m), np.asarray(ctx.domain.high_m)

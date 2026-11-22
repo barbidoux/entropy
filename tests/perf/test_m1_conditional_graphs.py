@@ -126,7 +126,7 @@ def test_a_solver_loop_as_a_conditional_graph_node(bench_session: BenchSession) 
             stream.record_event(end)
             wp.synchronize_event(end)
             gpu_s[key].append(wp.get_event_elapsed_time(start, end) / 1e3)
-        assert int(left_host.numpy()[0]) == 0
+            assert int(left_host.numpy()[0]) == 0, f"{key} did not run its {ITERATIONS}"
 
     host = {k: summarize(v) for k, v in host_s.items()}
     gpu = {k: summarize(v) for k, v in gpu_s.items()}

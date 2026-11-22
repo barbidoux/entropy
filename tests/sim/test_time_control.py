@@ -110,8 +110,8 @@ def test_pausing_or_resuming_forgets_a_requested_step() -> None:
 
 def test_the_slowest_scale_still_moves_slow_water_at_the_edge_of_a_large_map() -> None:
     """#36: positions are float32, whose spacing is 1.5e-5 m at 128 m from the origin.
-    At the slowest scale, one 60 fps frame still moves water at 1 cm/s there; at half of
-    it, the step would be rounded away half the time."""
+    At the slowest scale, one 60 fps frame still moves water at 1 cm/s there; at 0.04x the
+    step is rounded away (the threshold is 0.046x, ADR 0026)."""
     import numpy as np
 
     from entropy.sim.time_control import MIN_TIME_SCALE

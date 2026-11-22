@@ -9,16 +9,21 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Frame pacing, the slowest time scale and solver loops on the GPU (#36, ADR 0026):
   - 0.1x is the slowest time scale (`MIN_TIME_SCALE`): float32 positions still move
-    water at 1 cm/s 128 m from the origin; the loop refuses a slower one;
-  - `-m perf` benchmark of frame pacing with vsync on the 60 Hz panel: one hitch leaves
-    no frame over 25 ms after it, so no hysteresis is added;
-  - `-m perf` benchmark of a solver loop as a conditional graph node: about 4-5 us of
+    water at 1 cm/s within 256 m of the origin at 60 fps; the loop refuses a slower
+    one; far from the origin slow speeds are quantised (a named limit);
+  - `-m perf` benchmark of frame pacing with vsync (CPU and GPU work, the display
+    recorded): one long frame never leaves the loop a refresh behind, so no hysteresis
+    is added; judder at just over a refresh is a named limit;
+  - `-m perf` benchmark of a solver loop as a conditional graph node: about 4-5 µs of
     GPU per iteration, against batches with read-backs (unofficial); the pressure solve
     keeps its batches for now.
-- Follow-ups of #74's review: the bucket says how much it dropped into a full tank; a
-  tool held into a pause still gets its release; a tool's key (`order`) must be 1 to 9;
-  tests for hosing from inside the tank and for the eraser through the toolbox on CPU;
-  the flood gameplay test checks the water is not squeezed (#76 has the solver's lag).
+- Follow-ups of #74's review: the bucket says how much it dropped into a full tank, in
+  either shape; a tool held into a pause still gets its release, even after a switch;
+  only a tool that was pressed is held and released, and a switch starts the new tool
+  only if one was in use and the button is still held (no phantom click when the key
+  and the release come in one frame); a tool's key (`order`) must be 1 to 9; tests for
+  hosing from inside the tank and for the eraser through the toolbox on CPU; the flood
+  gameplay test checks the water is not squeezed (#76 has the solver's lag).
 - The bucket, the flood source and the eraser (#54):
   - the bucket drops exactly its volume (0.01–2 m³) where the aim meets the rim over
     the tank; right click turns it into a dam, Martin & Moyce's column 2a high across

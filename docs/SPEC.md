@@ -353,7 +353,7 @@ Each frame advances the world once by the measured frame time multiplied by the 
   - Rigid bodies: substeps of at most 1/480 s.
   - The CPU fixes the advance from the previous frame's maximum speeds, read back without a synchronisation point. When the cap would be exceeded, the advance shrinks before any solver steps, the time scale drops automatically and the HUD says so. The world slows down rather than blowing up numerically.
   - Simplification: if speed grows faster within one frame than that estimate allowed, the fluid substeps stay at the cap and move more than one cell for that frame. The HUD and the log count such frames, and the next advance shrinks.
-  - Simplification, until conditional graph nodes (#36): the CPU, not the GPU, counts the liquid's substeps, from the same previous-frame speed. A frame whose speed outgrew it is counted the same way.
+  - Simplification, kept by ADR 0026 (conditional graph nodes measured, not yet adopted): the CPU, not the GPU, counts the liquid's substeps, from the same previous-frame speed. A frame whose speed outgrew it is counted the same way.
   - With the cap and the 1/30 s clamp, flows faster than about 4 cells per advance slow the world down: about 6.7 m/s for water in 6.25 cm cells at 30 fps.
 - **Guards:** every solver checks for NaN and infinity after its step. On detection, the simulation freezes, dumps its state to disk and shows an alert, so every crash becomes a reproducible bug report.
 
