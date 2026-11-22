@@ -18,7 +18,8 @@ mass and momentum. Its cost depends on the order of the particles in memory:
   neighbouring nodes, but rarely the same ones at once. In x-major order, consecutive
   threads also run along z, the grid's contiguous axis.
 - **In the bucket's layers** (bottom first, then x, y fastest). Neighbouring threads
-  share no nodes, but run along y, across the grid's memory.
+  are half a cell apart, as in the half-cell order, but run along y, across the grid's
+  memory, so each warp's atomics spread over many cache lines instead of a few.
 
 The independent review of #75 measured this, interleaved over 30 rounds with the L2
 cache flushed before each pass:
@@ -28,7 +29,7 @@ cache flushed before each pass:
 | Random | 3.55 ms | 0.90 ms |
 | By cell | 2.38 ms | 0.171 ms |
 | By half-cell | 0.979 ms | 0.156 ms |
-| As the bucket and the dam pour it (layers, y or x fastest) | 3.38 ms | 0.169 ms |
+| As the bucket and the dam pour it (layers, y or x fastest) | 3.38 ms | 0.17–0.23 ms |
 | As `fill_box` lays it out (a lattice, already in half-cell order) | 0.977 ms | 0.157 ms |
 
 Every tool adds water in an order the sort improves: the bucket and the dam in layers,

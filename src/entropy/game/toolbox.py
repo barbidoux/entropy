@@ -39,6 +39,8 @@ class Toolbox:
         self._pressed = False
         self._released = False
         self._let_go: Tool | None = None  # a tool switched away from with the button held
+        self._engaged: Tool | None = None  # the tool that got `on_press` and no release yet
+        self._switch_press = False  # the new tool starts: chosen with the button held
 
     @classmethod
     def standard(
@@ -68,12 +70,23 @@ class Toolbox:
         return self.tools[self.index]
 
     def handle(self, frame: FrameInput) -> None:
-        """Choose and set the tool from this frame's input; remember its button."""
+        """Choose and set the tool from this frame's input; remember its button.
+
+        The rules (#74's and #77's reviews):
+        - only a tool that was pressed ("engaged") is held and released;
+        - choosing another tool releases the engaged one; the new one starts, as if
+          clicked, if the button is still held and a tool was in use;
+        - a release in the frame of a switch, or left from a pause, belongs to the old
+          tool, unless the new one was pressed and the button is up again;
+        - a release with the button down again at the end of the frame came before a new
+          press: the tool lets go and starts again (#77's re-review)."""
         for number, action in enumerate(TOOL_ACTIONS):
             if action in frame.pressed and number < len(self.tools) and number != self.index:
-                if self._held:  # the old tool lets go, the new one starts as if clicked
-                    self._let_go = self._let_go or self.current
-                    self._pressed = True
+                in_use = self._engaged is not None
+                if in_use:
+                    self._let_go = self._let_go or self._engaged
+                self._switch_press = frame.tool_held and in_use
+                self._pressed = False  # a click meant for the old tool
                 self.index = number
         if frame.wheel_steps:
             self.current.change_power(frame.wheel_steps)
@@ -81,6 +94,8 @@ class Toolbox:
             self.current.on_alternate()
         self._pressed = self._pressed or frame.tool_pressed
         self._released = self._released or frame.tool_released
+        if not frame.tool_held:
+            self._switch_press = False
         self._held = frame.tool_held
 
     def apply(self, aim: Aim, dt_s: float) -> None:
@@ -95,24 +110,35 @@ class Toolbox:
         )
         if self._let_go is not None:
             self._let_go.on_release(ctx)
+            if self._engaged is self._let_go:
+                self._engaged = None
             self._let_go = None
+            if self._held or not self._pressed:
+                self._released = False  # it was the old tool's
         tool = self.current
-        if self._pressed:
+        if self._released and self._held and self._engaged is tool:
+            tool.on_release(ctx)  # let go, then pressed again
+            self._engaged = None
+            self._released = False
+        pressed = self._pressed or self._switch_press
+        if pressed and self._engaged is not tool:
             tool.on_press(ctx)
-        if self._held or self._pressed:
+            self._engaged = tool
+        if self._engaged is tool and (self._held or pressed):
             tool.on_hold(ctx, dt_s)
-        if self._released:
+        if self._released and self._engaged is tool:
             tool.on_release(ctx)
-        self._pressed = self._released = False
+            self._engaged = None
+        self._pressed = self._released = self._switch_press = False
         if self.domain is not None and dt_s > 0.0:
             self.jet.advance(dt_s, self.domain, self.liquid)
 
     def forget_clicks(self) -> None:
         """While the world stands still (paused or frozen) no tool acts: a click then is
-        dropped, not kept for when the world runs again, maybe with another tool."""
-        if self._let_go is not None:
-            self._let_go = None
-        self._pressed = self._released = False
+        dropped, not kept for when the world runs again, maybe with another tool. A tool
+        already in use keeps its release, and a tool chosen while one was held still
+        starts, when the world runs again."""
+        self._pressed = False
 
     def palette(self) -> list[str]:
         """HUD lines: the tool in hand and its settings in SI units (SPEC 4.7)."""

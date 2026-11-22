@@ -65,10 +65,13 @@ def test_the_flood_source_fills_the_test_tank_at_its_rate() -> None:
 
     _run(simulation, toolbox, DOWN, 4.0, tool_held=True)
     toolbox.handle(_frame(tool_released=True))
-    _run(simulation, toolbox, DOWN, 1.0)
+    _run(simulation, toolbox, DOWN, 3.0)
 
     added_m3 = liquid.diagnostics()["particles"] * particle_m3
     assert added_m3 == pytest.approx(2.0, abs=particle_m3)
+    # Not squeezed: the water's own volume (its level set) is nearly all of it (#76 has
+    # the rest: the volume correction lags in shallow water).
+    assert liquid.diagnostics()["water_volume_m3"] >= 0.94 * added_m3
     heights = liquid.particle_positions()[:, 2]
     assert np.percentile(heights, 99) == pytest.approx(0.125, abs=0.03)
 

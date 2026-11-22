@@ -29,7 +29,8 @@ iterations, ADR 0016, so the step as a whole is not yet free of sync points.)
 
 Simplifications, named:
 - ADR 0013 lets the GPU count substeps from the current speed (conditional graph
-  nodes, #36). Until then the CPU fixes n from the previous frame's speed. When the
+  nodes, measured in ADR 0026, not yet adopted). Until then the CPU fixes n from the
+  previous frame's speed. When the
   frame's end speed shows it needed more substeps than it ran, the frame is counted
   in `diagnostics()["overruns"]`. A speed peak inside a frame that is gone by its
   end is not seen.
