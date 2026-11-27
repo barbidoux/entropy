@@ -400,6 +400,31 @@ def test_a_nan_orientation_is_caught(device: str, tmp_path) -> None:
         solver.step(1.0 / 60.0)
 
 
+def test_a_frozen_solver_is_freed_once_dropped(device: str, tmp_path) -> None:
+    """A solver frozen by the NaN guard holds no reference cycle: dropped, it is freed at
+    once, without the garbage collector. Keeping its error kept the error's traceback, and
+    with it the solver; the collector then freed it at a random moment, during another
+    test's memory measure (#101's fifth review)."""
+    import gc
+    import weakref
+
+    solver = _solver(device, tmp_path)
+    solver.add_bodies([_box()])
+    solver.set_body_velocity(0, (math.nan, 0.0, 0.0))
+    solver.step(1.0 / 60.0)
+    with pytest.raises(NonFiniteStateError):
+        solver.step(1.0 / 60.0)
+    with pytest.raises(NonFiniteStateError):
+        solver.max_advance_s()
+    alive = weakref.ref(solver)
+    gc.disable()
+    try:
+        del solver
+        assert alive() is None
+    finally:
+        gc.enable()
+
+
 def test_a_restore_drops_a_status_not_yet_read(device: str) -> None:
     """A step that went non-finite, then a restore before the next call: the old status
     must not freeze the restored state."""

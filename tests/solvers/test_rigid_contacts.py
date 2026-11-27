@@ -583,7 +583,7 @@ def _energy(solver: RigidSolver, body: Body) -> float:
 def test_thin_planks_thrown_hard_at_the_floor_never_gain_energy(device: str, half_m) -> None:
     """Planks thrown at the floor at 30 m/s from 20 random orientations, no restitution:
     none goes non-finite, and none ends a frame with more energy (kinetic and potential)
-    than it was thrown with, 2 % allowed for float32. The hit spins them up to some
+    than it was thrown with, 0.5 % allowed for float32. The hit spins them up to some
     thousand rad/s: the gyroscopic step froze the solver with a NaN in 11 of 20 throws,
     and one plank rebounded 13 m with 1.95 times its energy (#101's fourth review)."""
     floor = Solids((HalfSpace((0.0, 0.0, 0.0), (0.0, 0.0, 1.0)),)).to_device(device)
@@ -601,7 +601,7 @@ def test_thin_planks_thrown_hard_at_the_floor_never_gain_energy(device: str, hal
         thrown = _energy(solver, plank)
         for _ in range(90):
             solver.step(1.0 / 60.0)
-            assert _energy(solver, plank) <= 1.02 * thrown
+            assert _energy(solver, plank) <= 1.005 * thrown
         solver.max_advance_s()  # raises if the last step left a non-finite state
 
 
@@ -700,9 +700,9 @@ def test_a_sphere_resting_off_centre_on_a_box_stays(device: str) -> None:
 def test_a_box_thrown_into_a_corner_stops_there(device: str) -> None:
     """A box thrown down into the corner of the floor and a wall, at 4.8 m/s into the wall
     and 2.4 m/s down, meeting both in the same substep: it stops there, without climbing
-    the wall. The floor and the wall are two patches, each with its own normal; one patch
-    for both stops only the speed along their mean normal, and the box slid up the wall
-    (#101's fourth review)."""
+    the wall. (The floor and the wall are two patches, each with its own normal; the
+    position solve already stops this box, so the split is pinned by #88's friction,
+    which acts per patch, #101's fifth review.)"""
     room = Solids(
         (HalfSpace((0.0, 0.0, 0.0), (0.0, 0.0, 1.0)), HalfSpace((1.0, 0.0, 0.0), (-1.0, 0.0, 0.0)))
     )
@@ -718,3 +718,72 @@ def test_a_box_thrown_into_a_corner_stops_there(device: str) -> None:
     assert solver.body_positions()[0, 0] == pytest.approx(0.9, abs=1e-3)
     assert solver.body_positions()[0, 2] == pytest.approx(0.1, abs=1e-3)
     assert np.abs(solver.body_velocities()[0]).max() < 1e-2
+
+
+@pytest.mark.parametrize(
+    ("spawned", "neighbour"),
+    [((0.0, 0.0, 0.4), (0.0, 0.0, 0.9)), ((0.3, 0.0, 0.5), (0.3, 0.0, 0.69))],
+    ids=["50cm-into-the-top-under-a-box", "30cm-into-the-side-touching-a-box"],
+)
+def test_a_box_spawned_deep_in_a_table_beside_another_box_is_not_flung(
+    device: str, spawned, neighbour
+) -> None:
+    """As above, with a second box touching the first, so that it is in a pair too:
+    neither is flung (under 5 m/s and 60 rad/s for 3 s). Bodies in a pair had no energy
+    budget against the static solids, and the one touching the table's side flew at
+    135 m/s (#101's fifth review). Two boxes spawned into each other as well pop apart
+    (named in ADR 0031)."""
+    table = Solids(
+        (HalfSpace((0.0, 0.0, 0.0), (0.0, 0.0, 1.0)), Box((0.0, 0.0, 0.4), (0.5, 0.5, 0.4)))
+    ).to_device(device)
+    solver = RigidSolver.create(RigidSetup(gravity_m_per_s2=GRAVITY, max_bodies=4, solids=table),
+                                device)  # fmt: skip
+    solver.add_bodies([Body(Shape.BOX, (0.1, 0.1, 0.1), 600.0, position_m=spawned),
+                       Body(Shape.BOX, (0.1, 0.1, 0.1), 600.0, position_m=neighbour)])  # fmt: skip
+
+    fastest = spun = 0.0
+    for _ in range(180):
+        solver.step(1.0 / 60.0)
+        fastest = max(fastest, float(np.linalg.norm(solver.body_velocities(), axis=1).max()))
+        spun = max(spun, float(np.linalg.norm(solver.body_angular_velocities(), axis=1).max()))
+
+    assert fastest < 5.0
+    assert spun < 60.0
+
+
+def test_a_box_on_a_frictionless_slope_slides_at_g_sin_theta(device: str) -> None:
+    """A box resting flat on a frictionless 30° slope slides at g sin θ t: 4.905 m/s after
+    1 s, within 1 %. The static solids' energy budget includes gravity's work over the
+    substep; without it the box would not move (#101's fifth review)."""
+    theta = math.radians(30.0)
+    normal = (math.sin(theta), 0.0, math.cos(theta))
+    slope = Solids((HalfSpace((0.0, 0.0, 0.0), normal),))
+    solver = _solver(device, solids=slope)
+    tilt = (0.0, math.sin(theta / 2.0), 0.0, math.cos(theta / 2.0))
+    place = tuple(0.1 * np.asarray(normal))
+    solver.add_bodies([Body(Shape.BOX, (0.1, 0.1, 0.1), DENSITY_KG_PER_M3, position_m=place,
+                            orientation=tilt)])  # fmt: skip
+
+    _run(solver, 1.0)
+
+    speed = float(np.linalg.norm(solver.body_velocities()[0]))
+    assert speed == pytest.approx(-GRAVITY[2] * math.sin(theta) * 1.0, rel=0.01)
+
+
+def test_a_box_sliding_into_a_resting_one_shares_its_speed(device: str) -> None:
+    """A box sliding at 2 m/s along the frictionless floor into an equal one at rest: they
+    leave together at 1 m/s each (momentum kept, no restitution), within 5 %. Capping a
+    body in a pair at its energy without the contact would stop the struck box at
+    0.5 m/s (#101's fifth review)."""
+    solver = _solver(device)
+    solver.add_bodies(
+        [
+            Body(Shape.BOX, (0.1, 0.1, 0.1), DENSITY_KG_PER_M3, position_m=(0.0, 0.0, 0.1),
+                 velocity_m_per_s=(2.0, 0.0, 0.0)),
+            Body(Shape.BOX, (0.1, 0.1, 0.1), DENSITY_KG_PER_M3, position_m=(0.25, 0.0, 0.1)),
+        ]
+    )  # fmt: skip
+
+    _run(solver, 0.5)
+
+    np.testing.assert_allclose(solver.body_velocities()[:, 0], [1.0, 1.0], rtol=0.05)
