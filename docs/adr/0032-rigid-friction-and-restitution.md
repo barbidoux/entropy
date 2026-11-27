@@ -142,13 +142,13 @@ On CUDA, 2026-11-27, except where noted.
 | V-RB-02: a sphere or a box dropped flat from 1 m, e = 0.5 | rises 0.246 m (−1.7 %) | e² = 0.25 m |
 | V-RB-02: the same, e = 0.8 | rises 0.632 m (−1.3 %) | e² = 0.64 m |
 | V-RB-03: a block, μ = 0.5, 1° below atan μ | does not move in 1 s | holds |
-| V-RB-03: the same, 1° above | accelerates at 0.1911 m/s² | 0.1914 m/s² |
-| V-RB-03: the same, 3° above | accelerates at 0.5731 m/s² | 0.5740 m/s² |
+| V-RB-03: the same, 1° above | accelerates at 0.1915 m/s² | 0.1914 m/s² |
+| V-RB-03: the same, 3° above | accelerates at 0.5740 m/s² | 0.5740 m/s² |
 | A sphere on a 20° slope, μ = 0.6 | rolls at 2.397 m/s after 1 s, spin = v/r | (5/7) g sin θ t = 2.397 m/s |
 | A box spun flat at 10 rad/s, μ = 0.5 | stops in 0.25 s | 0.36 s under an even pressure |
 | μ = 0.5, each body's largest move over 10 s after 1 s to settle: | | |
 | a box 1, 4 or 8 cm off-centre on an equal one | 0.000 mm | under 1 mm (the tests) |
-| a 4-3-2-1 pyramid | 0.05 mm | under 1 mm |
+| a 4-3-2-1 pyramid | 0.012 mm | under 1 mm |
 | a crate under a slab 64 times heavier | 0.37 mm | under 1 mm |
 | two boxes on a slope 3° under atan μ (5 s; 0.000 mm from 8 starts) | 0.000 mm | under 1 mm |
 
