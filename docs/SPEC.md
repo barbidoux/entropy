@@ -295,12 +295,12 @@ Air is an incompressible gas on a grid that follows the active region, carrying 
 Rigid bodies use extended position-based dynamics (XPBD) with substepping: the advance is split into ⌈advance / (1/480 s)⌉ equal substeps (16 per 1/30 s frame), one constraint iteration each. A substep is at most 1/480 s, and at least 1/960 s when the advance is longer than 1/480 s, so stiffness and joint forces vary within a factor of 2 with the frame rate, not 20 (ADR 0013). This scheme stays stable with large stacks and many contacts, which matters when a house comes down.
 
 - **Shapes:** box, sphere, capsule and convex hull (fragments). Static map geometry is an SDF.
-- **Contacts:** a GPU broad phase (hash grid or BVH), then convex narrow phase. The exact narrow-phase method is decided in an architecture decision record (ADR) in M2.
+- **Contacts:** a GPU broad phase (hash grid or BVH), then convex narrow phase. Decided in ADR 0031: a hash grid of the bodies' centres, then sample spheres of each body (a box's corners, edge midpoints and face centres; a sphere's centre; an odd number of points along a capsule's axis, at most a radius apart) against the exact signed distance of the other body and against every static plane their path this substep meets, the static boxes' inner faces left out. Each body's contacts with the static solids are solved by its own thread, one after the other, including the static boxes' edges against the body; each pair of bodies by its own thread, the pairs in parallel with a scaling that keeps momentum. Two boxes share their axis of least overlap as the normal. A velocity pass at each contact patch's centre of pressure keeps the depth corrections from turning into speed for a lone pair. Named simplifications (ADR 0031, with numbers): edge-on-edge contacts between bodies are found at the samples only; a capsule's envelope sags by up to 0.13 r between samples; a fast body can cross a thin one where it has no sample, from about 480 s⁻¹ × its thickness; small boxes can leave the Test Tank at 30 m/s; without friction, bodies resting off-centre slide off, and a stack is unstable: off the origin most centred stacks fall within a minute (float32 positions seed it); stacks sink under load (7.7 mm for 10 boxes of 20 cm), much more under a far heavier body; several bodies at once still pop and bounce (12 spheres of 10 cm spawned in a 30 cm clump fly apart at up to 19 m/s), and a pile never settles without friction; the static solids never give a body energy (its speed is scaled down to the kinetic energy it had before their corrections); angular momentum is kept within 1.35e-3 of its terms in V-RB-04's scenes; a pair overflow loses support; the tank's rims are not sampled as edges.
 - **Friction:** Coulomb, static and dynamic, plus restitution, all from the material files.
 - **Sleeping:** bodies at rest sleep in islands and wake on contact, to save time.
 - **Player:** in Walk mode, the player is a capsule rigid body with a character controller on top.
 - **State and precision (ADR 0030):** bodies are a structure of arrays on the device; a substep keeps its motion as increments (a displacement and a small rotation) and recovers velocities from them, which float32 differences of positions would not keep exact.
-- Simplifications, named: symplectic Euler per substep (a free fall drops ½ght more than ½gt², 0.21 % after 1 s at 1/480 s); the gyroscopic torque by the implicit midpoint rule, which holds to about 100 rad/s (faster spins lose energy, never gain it); positions accumulate in float32 far from the origin (ADR 0030).
+- Simplifications, named: symplectic Euler per substep (a free fall drops ½ght more than ½gt², 0.21 % after 1 s at 1/480 s); the gyroscopic torque by the implicit midpoint rule, over pieces of the substep short enough to converge (a thin plank keeps |L| and its energy within 4e-4 up to 12,000 rad/s; its energy is capped at its start, so a spin never gains energy); positions accumulate in float32 far from the origin (ADR 0030), and contacts there see them to float32's resolution, so only a body in free flight keeps an exact speed (ADR 0031).
 
 ### 5.5 Fracture and structures
 
@@ -468,11 +468,11 @@ Dependencies point downward only, and a test enforces the import rules. "May dep
 | Module | Responsibility | May depend on |
 | --- | --- | --- |
 | `core` | Units, configuration, logging, profiler | nothing |
-| `fields` | Grids (staggered, cell-centred, later sparse), interpolation, advection | `core` |
+| `fields` | Grids (staggered, cell-centred, later sparse), interpolation, advection; the static solids' signed distance on the device | `core` |
 | `linalg` | Poisson solvers: Jacobi, PCG, MGPCG | `fields` |
 | `solvers/*` | One solver per phenomenon, each implementing the solver interface of `solvers/interface.py`; a solver never imports another, so code shared by solvers lives in `fields`, `linalg` or the interface. The package root `solvers/__init__.py` only re-exports the interface | `fields`, `linalg`, `solvers/interface.py` |
 | `coupling` | Ordered exchanges between solvers, conservation checks | solver interfaces only (`solvers/interface.py`, or the package root that re-exports it) |
-| `world` | Entities, materials, prefabs, map loader and migrations, generators, SDF and spatial queries | `core` |
+| `world` | Entities, materials, prefabs, map loader and migrations, generators, SDF shapes and spatial queries | `core`, `fields` (the static solids' distance maths, which the rigid bodies share, ADR 0031) |
 | `sim` | Frame loop and frame order (stages behind a protocol, ADR 0010), substeps, time scale, checkpoints, recorder, NaN guard | `solvers`, `coupling`, `world` |
 | `game` | Modes, player controller, tools, input mapping | `sim`, `world` |
 | `editor` | Build mode | `world` |
@@ -618,7 +618,7 @@ The code lives in the private GitHub repository [barbidoux/entropy](https://gith
 entropy/
   src/entropy/
     core/        units, config, math helpers, logging, profiler
-    fields/      grids, interpolation, advection
+    fields/      grids, interpolation, advection, the static solids' signed distance
     linalg/      Poisson solvers (Jacobi, PCG, MGPCG)
     solvers/     interface (the solver interface), liquid, gas, rigid, fracture, granular, blast, swe
     coupling/    exchanges between solvers

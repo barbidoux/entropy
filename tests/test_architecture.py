@@ -50,7 +50,7 @@ ALLOWED: Mapping[str, frozenset[str]] = MappingProxyType(
         "linalg": frozenset({"fields"}),
         "solvers": frozenset({"fields", "linalg"}),
         "coupling": frozenset({"solvers"}),
-        "world": frozenset({"core"}),
+        "world": frozenset({"core", "fields"}),
         "sim": frozenset({"solvers", "coupling", "world"}),
         "game": frozenset({"sim", "world"}),
         "editor": frozenset({"world"}),

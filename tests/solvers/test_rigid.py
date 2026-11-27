@@ -18,6 +18,7 @@ from entropy.solvers.rigid import (
     mass_properties,
 )
 from entropy.world.maps import Environment
+from entropy.world.sdf import HalfSpace, Solids
 
 GRAVITY = Environment().gravity_m_per_s2
 TEST_DENSITY_KG_PER_M3 = 600.0  # any density will do; no material is meant
@@ -235,6 +236,33 @@ def test_a_fast_spinning_body_keeps_its_momentum_and_energy(device: str, omega) 
     assert abs(energy_after / energy - 1.0) <= 1e-3
 
 
+@pytest.mark.parametrize("speed", [600.0, 1500.0, 3000.0])
+def test_a_thin_plank_spinning_very_fast_keeps_its_momentum_and_energy(
+    device: str, speed: float
+) -> None:
+    """A plank 8 x 2 x 0.5 cm (its moments of inertia 16 to 1) spinning about a generic
+    axis at 600 to 3,000 rad/s, as a hard hit on the floor can spin it, no gravity, 1 s:
+    |L| and the rotational energy within 1e-3. Solved over the whole substep, the
+    gyroscopic step lost 41 % of the speed at 600 rad/s and went non-finite from about
+    1,500 rad/s (#101's fourth review)."""
+    solver = _solver(device, gravity=(0.0, 0.0, 0.0))
+    axis = np.array([0.6, 0.3, 0.74])
+    axis /= np.linalg.norm(axis)
+    size = (0.04, 0.01, 0.0025)
+    solver.add_bodies([Body(Shape.BOX, size, TEST_DENSITY_KG_PER_M3,
+                            angular_velocity_rad_per_s=tuple(speed * axis))])  # fmt: skip
+    _, inertia = mass_properties(Shape.BOX, size, TEST_DENSITY_KG_PER_M3)
+    momentum, energy = _momentum_and_energy(solver, inertia)
+
+    for _ in range(60):
+        solver.step(1.0 / 60.0)
+
+    solver.max_advance_s()  # raises if the last step left a non-finite state
+    momentum_after, energy_after = _momentum_and_energy(solver, inertia)
+    assert abs(np.linalg.norm(momentum_after) / np.linalg.norm(momentum) - 1.0) <= 1e-3
+    assert abs(energy_after / energy - 1.0) <= 1e-3
+
+
 def test_a_spin_faster_than_half_a_turn_per_substep_keeps_its_sense(device: str) -> None:
     """1,600 rad/s turns more than π in a substep of 1/480 s: the turn's quaternion has a
     negative w, which must not flip the spin when the velocity is recovered (#98)."""
@@ -320,31 +348,79 @@ def test_a_non_finite_body_freezes_the_solver_and_dumps_its_frame(
 
 
 def test_a_dump_replays_its_frame(tmp_path) -> None:
-    """Restoring a dump's starting state and stepping its time step gives its result, bit
-    for bit on the CPU: a dump is a regression test."""
-    solver = _solver("cpu", tmp_path)
+    """A dump holds the frame's starting state, the static solids and the room for pairs:
+    `RigidSolver.from_dump` rebuilds the solver at that state, and stepping the dump's
+    time step gives its result bit for bit on the CPU, contacts included (#101's review).
+    A dump is a regression test."""
+    floor = Solids((HalfSpace((0.0, 0.0, 0.0), (0.0, 0.0, 1.0)),)).to_device("cpu")
+    setup = RigidSetup(gravity_m_per_s2=GRAVITY, max_bodies=64, dump_dir=tmp_path,
+                       solids=floor, max_pairs=7)  # fmt: skip
+    solver = RigidSolver.create(setup, "cpu")
     solver.add_bodies(
-        [_box(angular_velocity_rad_per_s=(1.0, 2.0, 3.0)), _box(position_m=(1.0, 0.0, 5.0))]
+        [
+            _box(position_m=(0.0, 0.0, 0.1)),
+            _box(position_m=(0.02, 0.0, 0.3), angular_velocity_rad_per_s=(0.1, 0.2, 0.3)),
+            _box(position_m=(3.0, 0.0, 5.0)),
+        ]
     )
-    solver.step(1.0 / 60.0)
-    solver.set_body_velocity(1, (math.nan, 0.0, 0.0))
+    for _ in range(20):
+        solver.step(1.0 / 60.0)
+    solver.set_body_velocity(2, (math.nan, 0.0, 0.0))
     solver.step(1.0 / 30.0)
     with pytest.raises(NonFiniteStateError) as raised:
         solver.step(1.0 / 60.0)
     dump = load_dump(raised.value.dump_path)
 
-    replay = RigidSolver.create(
-        RigidSetup(gravity_m_per_s2=tuple(dump["gravity_m_per_s2"]), max_bodies=64), "cpu"
-    )
-    start = {
-        key[len("before_") :]: value for key, value in dump.items() if key.startswith("before_")
-    }
-    properties = {key: dump[key] for key in ("masses_kg", "inertia_kg_m2", "shapes", "sizes_m")}
-    replay.restore({"count": int(dump["count"]), **start, **properties})
+    replay = RigidSolver.from_dump(dump, "cpu")
     replay.step(float(dump["dt_s"]))
 
-    np.testing.assert_array_equal(replay.body_positions()[0], dump["positions_m"][0])
-    np.testing.assert_array_equal(replay.body_orientations()[0], dump["orientations"][0])
+    assert replay.setup.max_pairs == 7
+    np.testing.assert_array_equal(replay.body_positions()[:2], dump["positions_m"][:2])
+    np.testing.assert_array_equal(replay.body_orientations()[:2], dump["orientations"][:2])
+
+
+def test_a_nan_orientation_is_caught(device: str, tmp_path) -> None:
+    """A NaN orientation is caught by the NaN guard at the next call: it reaches the
+    angular velocity, recovered from the substep's rotation vectors, even where Warp's
+    normalize would turn the quaternion itself back into the identity."""
+    floor = Solids((HalfSpace((0.0, 0.0, 0.0), (0.0, 0.0, 1.0)),)).to_device(device)
+    solver = RigidSolver.create(
+        RigidSetup(gravity_m_per_s2=GRAVITY, max_bodies=4, dump_dir=tmp_path, solids=floor),
+        device,
+    )
+    solver.add_bodies([_box(position_m=(0.0, 0.0, 0.1))])
+    state = solver.checkpoint()
+    state["orientations"][0] = math.nan
+    solver.restore(state)
+    solver.step(1.0 / 60.0)
+
+    with pytest.raises(NonFiniteStateError):
+        solver.step(1.0 / 60.0)
+
+
+def test_a_frozen_solver_is_freed_once_dropped(device: str, tmp_path) -> None:
+    """A solver frozen by the NaN guard holds no reference cycle: dropped, it is freed at
+    once, without the garbage collector. Keeping its error kept the error's traceback, and
+    with it the solver; the collector then freed it at a random moment, during another
+    test's memory measure (#101's fifth review)."""
+    import gc
+    import weakref
+
+    solver = _solver(device, tmp_path)
+    solver.add_bodies([_box()])
+    solver.set_body_velocity(0, (math.nan, 0.0, 0.0))
+    solver.step(1.0 / 60.0)
+    with pytest.raises(NonFiniteStateError):
+        solver.step(1.0 / 60.0)
+    with pytest.raises(NonFiniteStateError):
+        solver.max_advance_s()
+    alive = weakref.ref(solver)
+    gc.disable()
+    try:
+        del solver
+        assert alive() is None
+    finally:
+        gc.enable()
 
 
 def test_a_restore_drops_a_status_not_yet_read(device: str) -> None:

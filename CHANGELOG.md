@@ -7,6 +7,45 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Rigid contacts (#87, ADR 0031): bodies against the static solids and against each
+  other.
+  - A hash grid finds the pairs. Each body's sample spheres (a box's corners, edge
+    midpoints and face centres, a sphere's centre, points along a capsule at most a
+    radius apart) are tested against the other body's exact signed distance and against
+    every static plane their path meets, the static boxes' inner faces left out. The
+    static boxes' edges are tested against the body. Two boxes share their axis of least
+    overlap as the normal.
+  - Each body's contacts with the static solids are solved by its own thread, and each
+    pair of bodies by its own, the pairs in parallel, scaled to keep momentum. A sweep
+    takes a box's face centres first and a capsule's middle first.
+  - A velocity pass at each contact patch stops the corrections turning into speed for a
+    lone pair.
+  - V-RB-04: linear momentum within 1e-4 in collisions without gravity; angular
+    momentum within 2e-3, provisional until the M2 physics audit.
+  - A body alone rests on the floor sunk by under 0.3 mm. A stack of 10 boxes of 20 cm
+    sinks 7.7 mm. A box with 45 % of it over a table's edge stays on.
+  - 10 and 20 cm boxes stay in the tank up to 30 m/s; smaller ones up to 20 m/s. A box
+    slides across the seam of two slabs and past a table's edge untouched.
+  - A long capsule stays on a thin beam.
+  - The static solids never give a body energy: a box spawned deep inside a table is
+    not flung, and a plank thrown at the floor at 30 m/s does not rebound higher than it
+    fell. Their corrections, and the pairs', enter the motion exactly: a box slides down
+    a frictionless slope at g sin θ t, and two boxes stacked on a frictionless slope,
+    with gravity along its normal, stay together for 10 s near the origin. A box falling beside the tank's outer glass is
+    untouched.
+  - Without friction a stack is unstable, and off the origin most centred stacks fall
+    within a minute (named in ADR 0031 with its numbers); friction (#88) holds them.
+  - The gyroscopic step is split for fast spins: a thin plank keeps |L| and its energy
+    within 4e-4 up to 12,000 rad/s, where it froze the solver with a NaN from about
+    1,500 rad/s.
+  - A NaN dump replays, contacts included (`RigidSolver.from_dump`).
+  - Pairs past the room are counted per step.
+  - The limits are named in ADR 0031, with their numbers. Without friction, bodies
+    resting off-centre slide off; several bodies at once still pop and bounce.
+  - The static solids' distance maths moves to `entropy.fields.solids`, shared by
+    `world` and the solvers (SPEC 8.1).
+  - Unofficial cost: 20.7 ms per 1/30 s frame at 5,000 bodies, against SPEC 3's 3 ms.
+    That is #90's.
 - Rigid bodies drawn with the solids (#91): `entropy.render.bodies` sorts the bodies by
   shape on the GPU into a buffer shared with OpenGL (zero copy on CUDA), writes one
   indirect draw per mesh, and draws boxes, spheres and capsules lit like the static

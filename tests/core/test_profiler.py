@@ -1,5 +1,6 @@
 """Frame statistics for the performance HUD (`entropy.core.profiler`)."""
 
+import gc
 import sys
 from types import SimpleNamespace
 
@@ -107,13 +108,21 @@ def test_no_gpu_memory_on_cpu() -> None:
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows process memory API")
 def test_host_memory_sees_a_new_allocation() -> None:
-    before = host_memory_bytes()
-    block = bytearray(64 * 2**20)  # committed and touched
-    after = host_memory_bytes()
+    """A 64 MB block shows in the process's committed memory. Measured three times, the
+    largest growth counts: other threads (the garbage collector, the CUDA driver giving
+    back earlier tests' pinned memory) can free memory during one measure, and did, by
+    up to 110 MB in a full suite (#101's reviews)."""
+    grown = 0
+    for _ in range(3):
+        gc.collect()
+        before = host_memory_bytes()
+        block = bytearray(64 * 2**20)  # committed and touched
+        after = host_memory_bytes()
+        assert before is not None and after is not None
+        grown = max(grown, after - before)
+        del block
 
-    assert before is not None and after is not None
-    assert after - before >= 60 * 2**20
-    del block
+    assert grown >= 60 * 2**20
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="other systems")

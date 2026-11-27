@@ -1,8 +1,9 @@
-"""Warp kernels of `entropy.world.sdf`: the distance maths (conventions are there).
+"""Warp kernels of `entropy.fields.solids`: the distance maths of the static solids
+(their conventions are in `entropy.world.sdf`).
 
 pyright cannot type Warp's kernel maths: its stubs give vector components and
 operators union types. This file holds kernels only, so the rules below are
-relaxed here and nowhere else; the host code in `sdf.py` stays fully checked.
+relaxed here and nowhere else; the host code in `solids.py` stays fully checked.
 """
 
 # pyright: reportOperatorIssue=false, reportCallIssue=false, reportArgumentType=false
