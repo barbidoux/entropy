@@ -13,6 +13,12 @@ from entropy.fields import _solid_kernels as _solid
 
 GYROSCOPIC_ITERATIONS = 4
 """Fixed-point iterations of the implicit midpoint rule for the gyroscopic torque."""
+GYROSCOPIC_PIECE_RAD = wp.constant(0.2)
+"""The gyroscopic step's pieces: |w| dt times the spread of the moments at most this
+much each (`_gyroscopic`)."""
+GYROSCOPIC_MAX_PIECES = wp.constant(256)
+"""The most pieces a substep's gyroscopic step is split into: 256 hold a thin plank
+(moments 15 to 1) to about 3,000 rad/s at 1/480 s."""
 
 
 @wp.func
@@ -36,14 +42,32 @@ def _gyroscopic(w_body: wp.vec3, inertia: wp.vec3, dt_s: float) -> wp.vec3:
     """The body-frame angular velocity after `dt_s` of torque-free rotation, by the
     implicit midpoint rule, I(w1 - w0)/dt = -wm x (I wm) with wm = (w0 + w1)/2, solved
     by fixed-point iteration. It keeps |L| and the energy where explicit Euler gains
-    both every substep (#98's review). It holds to about 100 rad/s at 1/480 s
-    (|w| dt about 0.2); faster spins lose energy, never gain it (a 2 m plank at 200 rad/s
-    lost 26 % in 10 s), which is safe for a game."""
-    w_next = w_body
-    for _k in range(GYROSCOPIC_ITERATIONS):
-        w_mid = 0.5 * (w_body + w_next)
-        w_next = w_body - dt_s * wp.cw_div(wp.cross(w_mid, wp.cw_mul(inertia, w_mid)), inertia)
-    return w_next
+    both every substep (#98's review).
+
+    The iteration converges while |w| dt times the spread of the moments (the largest
+    over the smallest) is small, so the substep is split into pieces of at most
+    `GYROSCOPIC_PIECE_RAD` of that, up to `GYROSCOPIC_MAX_PIECES`: whole, it lost 41 % of
+    a thin plank's 600 rad/s in 1 s and went non-finite from about 1,500 rad/s, speeds a
+    hard hit gives it (#101's fourth review). Past the last piece the energy is capped at
+    its start, so a spin never gains energy."""
+    spread = wp.max(inertia[0], wp.max(inertia[1], inertia[2])) / wp.min(
+        inertia[0], wp.min(inertia[1], inertia[2])
+    )
+    reach = wp.length(w_body) * dt_s * spread / GYROSCOPIC_PIECE_RAD
+    pieces = wp.clamp(int(wp.ceil(reach)), 1, GYROSCOPIC_MAX_PIECES)
+    h = dt_s / float(pieces)
+    w = w_body
+    for _piece in range(pieces):
+        w_next = w
+        for _k in range(GYROSCOPIC_ITERATIONS):
+            w_mid = 0.5 * (w + w_next)
+            w_next = w - h * wp.cw_div(wp.cross(w_mid, wp.cw_mul(inertia, w_mid)), inertia)
+        w = w_next
+    before = wp.dot(w_body, wp.cw_mul(inertia, w_body))
+    after = wp.dot(w, wp.cw_mul(inertia, w))
+    if after > before:
+        w = w * wp.sqrt(before / after)
+    return w
 
 
 @wp.kernel
@@ -381,7 +405,8 @@ def _plane(
     cavity's column, its floor's and its four walls' inner planes (the walls up to their
     top), each on its own, so a sample near an inner edge or corner meets both or all
     three (#101's review: small boxes left the tank there); from outside, the tangent
-    plane of its surface nearest to `start`."""
+    plane of its surface nearest to `start`, when the path meets its outer box grown by
+    the radius, as for a box."""
     planes = plane_points.shape[0]
     boxes = box_centres.shape[0]
     if c < planes:
@@ -421,6 +446,8 @@ def _plane(
         return none
     olo = _solid._outer_lo(lo, wall)
     ohi = _solid._outer_hi(hi, wall)
+    if not _crosses(start, centre, olo - wp.vec3(radius), ohi + wp.vec3(radius)):
+        return none  # as for a box: no diagonal plane beside the rim (#101's fourth review)
     outer = _solid._box_q(start, olo, ohi)
     cavity = _solid._cavity_q(start, lo, hi)
     d_outer = _solid._from_q(outer)
@@ -852,6 +879,9 @@ def solve_static_velocities(
     solids_restitution: float,
     slow_m_per_s: float,
     dt_s: float,
+    turn: wp.array(dtype=wp.quat),
+    pairs_per_body: wp.array(dtype=wp.int32),
+    gravity_m_per_s2: wp.vec3,
 ):
     """The velocity pass of body i's static patches (Müller et al. 2020, §3.6; ADR 0031,
     0032), by its own thread, one after the other, at each patch's centre of pressure.
@@ -859,15 +889,23 @@ def solve_static_velocities(
     Restitution: the separating speed there becomes e times the approaching speed it had
     before the substep, or the separating speed it had if it was separating; no bounce
     below `slow_m_per_s` (2|g|h), so resting bodies do not jitter. The depth corrections
-    then never turn into speed. The pair's e is the larger of the body's and the
-    solids'.
+    then do not turn into speed along the normal. The pair's e is the larger of the
+    body's and the solids'.
 
     Dynamic friction: an impulse against the sliding there, of at most μd times the
     patch's normal impulse in the substep (its depth corrections over h plus the
     restitution's impulse, so a contact met at its surface still rubs); on a wide patch
-    (`_wide`) it slows the body without turning it. Then the friction against turning
-    about the normal: at most μd times the normal impulse times the patch's torsion
-    radius. The pair's μd is the geometric mean of the body's and the solids'."""
+    (`_wide`) it slows the body without turning it; none on a patch whose static friction
+    is already at its bound (`patch_clamped`). Then the friction against turning about
+    the normal: at most μd times the normal impulse times the patch's torsion radius. The
+    pair's μd is the geometric mean of the body's and the solids'.
+
+    One point cannot take back the spin a deep correction at the body's edge gives it,
+    so a body touching only the static solids this substep (no pair) then has its speed
+    scaled down, if need be, to the kinetic energy it would have had without contact:
+    the static solids never give energy, restitution at most returns it. A box spawned
+    50 cm inside a table was flung at 121 m/s and 1,058 rad/s, and a plank thrown at the
+    floor at 30 m/s rebounded with up to 2.5 times its energy (#101's fourth review)."""
     i = wp.tid()
     x = position_m[i]
     q = orientation[i]
@@ -921,6 +959,16 @@ def solve_static_velocities(
                 torque = wp.min(mu * pressing * radius, wp.abs(twirl) / resist)
                 w = w - wp.sign(twirl) * torque * _inverse_inertia_world(q, inertia, n)
     if changed > 0:
+        if pairs_per_body[i] == 0:
+            free = velocity_before_m_per_s[i] + gravity_m_per_s2 * dt_s
+            spin = wp.quat_rotate_inv(wp.quat_inverse(turn[i]) * q, angular_before_rad_per_s[i])
+            allowed = mass * wp.dot(free, free) + wp.dot(spin, wp.cw_mul(inertia, spin))
+            spin = wp.quat_rotate_inv(q, w)
+            moving = mass * wp.dot(v, v) + wp.dot(spin, wp.cw_mul(inertia, spin))
+            if moving > allowed:
+                share = wp.sqrt(allowed / moving)
+                v = share * v
+                w = share * w
         velocity_m_per_s[i] = v
         angular_velocity_rad_per_s[i] = w
 

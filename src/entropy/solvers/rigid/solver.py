@@ -17,8 +17,10 @@ Simplifications, named (CLAUDE.md rule 7):
 - symplectic Euler per substep: a body in free fall drops ½gt² + ½ght, 0.21 % more
   than ½gt² after 1 s at h = 1/480 s (V-RB-01 allows 0.5 %);
 - the gyroscopic torque by the implicit midpoint rule, solved by four fixed-point
-  iterations: it keeps a tumbling body's |L| and energy (within 1e-3 over 10 s at 20 and
-  30 rad/s in the tests) to about 100 rad/s; faster spins lose energy, never gain it;
+  iterations over pieces of the substep short enough for them to converge: it keeps a
+  tumbling body's |L| and energy within 1e-3 in the tests (20 and 30 rad/s over 10 s, a
+  thin plank at 600 to 3,000 rad/s over 1 s); past 256 pieces its energy is capped, so
+  a spin never gains energy;
 - positions accumulate in float32: far from the origin a body's position drifts from
   x₀ + vt (1.5 cm after 60 s at 1.26 m/s, 20 to 80 m out), its velocity stays exact;
 - checkpoints are synchronous: on CUDA, taking one waits for the queued GPU work (#99);
@@ -557,7 +559,7 @@ class RigidSolver:
                   inputs=[positions, orientations, *velocities, *before, masses, inertia,
                           *self._static_patches, properties["dynamic_friction"],
                           properties["restitution"], setup.dynamic_friction, setup.restitution,
-                          slow, h],
+                          slow, h, self._turn, patches.per_body, gravity],
                   device=device)  # fmt: skip
         kicks = [self._kick_m_per_s, self._twist_rad_per_s]
         wp.launch(_k.solve_velocities, dim=patches.a.shape[0],

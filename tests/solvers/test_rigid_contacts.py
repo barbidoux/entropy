@@ -246,13 +246,19 @@ def test_a_long_capsule_does_not_fall_through_another(device: str) -> None:
     assert 0.15 - sag - 1e-3 <= solver.body_positions()[2, 2] <= 0.15 + 1e-3
 
 
-def test_the_tank_s_walls_keep_a_thrown_sphere_in(device: str) -> None:
+@pytest.mark.parametrize(
+    "throw",
+    [(6.0, 1.0, 0.0), (-6.0, -1.0, 0.0), (1.0, 6.0, 0.0), (-1.0, -6.0, 0.0)],
+    ids=["+x", "-x", "+y", "-y"],
+)
+def test_the_tank_s_walls_keep_a_thrown_sphere_in(device: str, throw) -> None:
     """The Test Tank's open box (the world's solids): a sphere thrown at 6 m/s along the
-    floor stays within the cavity."""
+    floor at each of its four walls stays within the cavity (each wall is its own plane,
+    #101's fourth review)."""
     tank = Solids((OpenBox((-2.0, -2.0, 0.0), (2.0, 2.0, 2.0), 0.02),))
     solver = _solver(device, solids=tank)
     solver.add_bodies([Body(Shape.SPHERE, (0.2, 0.0, 0.0), 600.0, position_m=(0.0, 0.0, 0.5),
-                            velocity_m_per_s=(6.0, 1.0, 0.0))])  # fmt: skip
+                            velocity_m_per_s=throw)])  # fmt: skip
 
     for _ in range(120):
         solver.step(1.0 / 60.0)
@@ -375,8 +381,10 @@ def test_a_curved_body_stays_put_on_a_box(device: str, name: str) -> None:
 
 
 def test_nine_boxes_rest_on_one_slab(device: str) -> None:
-    """Nine boxes resting on one slab: the slab is in nine pairs, each pair's correction
-    scaled by 1 / (the larger pair count), so the slab neither jitters nor sinks."""
+    """Nine boxes resting on one slab, the slab in nine pairs at once: it neither jitters
+    nor sinks, and each box rests on it. (Solved contact by contact in parallel, it
+    jittered and sank, ADR 0031. The pairs' 1 / n scale is not what holds it here:
+    unscaled, it holds too, #101's fourth review.)"""
     solver = _solver(device)
     small, density = (0.1, 0.1, 0.1), DENSITY_KG_PER_M3
     boxes = [Body(Shape.BOX, small, density, position_m=(0.25 * ix, 0.25 * iy, 0.3))
@@ -547,3 +555,166 @@ def test_a_box_at_rest_does_not_start_turning(device: str) -> None:
 def test_room_for_pairs_must_be_positive() -> None:
     with pytest.raises(ValueError, match="max_pairs"):
         RigidSetup(gravity_m_per_s2=GRAVITY, max_pairs=0)
+
+
+def _energy(solver: RigidSolver, body: Body) -> float:
+    """Body 0's kinetic and potential energy (J), in float64."""
+    from entropy.solvers.rigid import mass_properties
+
+    mass, inertia = mass_properties(body.shape, body.size_m, body.density_kg_per_m3)
+    x, y, z, w = solver.body_orientations()[0].astype(np.float64)
+    rotation = np.array(
+        [
+            [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+            [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+            [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)],
+        ]
+    )
+    v = solver.body_velocities()[0].astype(np.float64)
+    omega = solver.body_angular_velocities()[0].astype(np.float64)
+    height = float(solver.body_positions()[0, 2])
+    spin = 0.5 * omega @ rotation @ np.diag(inertia) @ rotation.T @ omega
+    return 0.5 * mass * float(v @ v) + float(spin) - mass * GRAVITY[2] * height
+
+
+@pytest.mark.parametrize(
+    "half_m", [(0.04, 0.01, 0.0025), (0.08, 0.02, 0.005)], ids=["plank-8cm", "plank-16cm"]
+)
+def test_thin_planks_thrown_hard_at_the_floor_never_gain_energy(device: str, half_m) -> None:
+    """Planks thrown at the floor at 30 m/s from 20 random orientations, no restitution:
+    none goes non-finite, and none ends a frame with more energy (kinetic and potential)
+    than it was thrown with, 2 % allowed for float32. The hit spins them up to some
+    thousand rad/s: the gyroscopic step froze the solver with a NaN in 11 of 20 throws,
+    and one plank rebounded 13 m with 1.95 times its energy (#101's fourth review)."""
+    floor = Solids((HalfSpace((0.0, 0.0, 0.0), (0.0, 0.0, 1.0)),)).to_device(device)
+    rng = np.random.default_rng(7)
+    for _ in range(20):
+        aim = np.array([rng.uniform(-0.4, 0.4), rng.uniform(-0.4, 0.4), -1.0])
+        turn = rng.normal(size=4)
+        plank = Body(Shape.BOX, half_m, 600.0, position_m=(0.0, 0.0, 0.5),
+                     velocity_m_per_s=tuple(30.0 * aim / np.linalg.norm(aim)),
+                     orientation=tuple(turn / np.linalg.norm(turn)))  # fmt: skip
+        solver = RigidSolver.create(
+            RigidSetup(gravity_m_per_s2=GRAVITY, max_bodies=2, solids=floor), device
+        )
+        solver.add_bodies([plank])
+        thrown = _energy(solver, plank)
+        for _ in range(90):
+            solver.step(1.0 / 60.0)
+            assert _energy(solver, plank) <= 1.02 * thrown
+        solver.max_advance_s()  # raises if the last step left a non-finite state
+
+
+@pytest.mark.parametrize(
+    ("place", "solid"),
+    [
+        ((0.0, 0.0, 0.4), "table"),  # 50 cm into the table's top
+        ((0.3, 0.0, 0.5), "table"),  # 30 cm into its side
+        ((0.1, 0.0, 0.5), "table"),  # 50 cm into its side
+        ((-0.1, 0.0, 1.0), "wall"),  # 50 cm into a wall's face
+    ],
+    ids=["table-top-50cm", "table-side-30cm", "table-side-50cm", "wall-50cm"],
+)
+def test_a_box_spawned_deep_inside_a_static_box_is_not_flung(device: str, place, solid) -> None:
+    """A 20 cm box whose centre starts 30 to 50 cm inside a static box comes out without
+    being flung: under 5 m/s and 60 rad/s for 3 s (it may then fall off). The depth
+    corrections pushed it out in one substep and the spin they gave it stayed: 57 to
+    211 m/s and up to 1,058 rad/s (#101's fourth review)."""
+    if solid == "table":
+        shapes = (
+            HalfSpace((0.0, 0.0, 0.0), (0.0, 0.0, 1.0)),
+            Box((0.0, 0.0, 0.4), (0.5, 0.5, 0.4)),
+        )
+    else:
+        shapes = (
+            HalfSpace((0.0, 0.0, 0.0), (0.0, 0.0, 1.0)),
+            Box((0.0, 0.0, 1.5), (0.3, 3.0, 1.5)),
+        )
+    solids = Solids(shapes).to_device(device)
+    solver = RigidSolver.create(RigidSetup(gravity_m_per_s2=GRAVITY, max_bodies=2, solids=solids),
+                                device)  # fmt: skip
+    solver.add_bodies([Body(Shape.BOX, (0.1, 0.1, 0.1), 600.0, position_m=place)])
+
+    fastest = spun = 0.0
+    for _ in range(180):
+        solver.step(1.0 / 60.0)
+        fastest = max(fastest, float(np.linalg.norm(solver.body_velocities()[0])))
+        spun = max(spun, float(np.linalg.norm(solver.body_angular_velocities()[0])))
+
+    assert fastest < 5.0
+    assert spun < 60.0
+
+
+@pytest.mark.parametrize(
+    ("half_m", "gap_m"),
+    [(0.05, 0.001), (0.05, 0.003), (0.1, 0.001)],
+    ids=["10cm-1mm", "10cm-3mm", "20cm-1mm"],
+)
+def test_a_box_falling_past_the_tank_s_outer_glass_is_untouched(device: str, half_m, gap_m) -> None:
+    """A box falling from 3 m beside the Test Tank's outer glass, 1 or 3 mm from it, past
+    its rim at 2 m: it falls freely, neither pushed nor turned. The rim's outer edge gave
+    it a diagonal plane: knocked sideways at up to 2.1 m/s and spun at 36 rad/s (#101's
+    fourth review; the same bug as beside a table, third review)."""
+    tank = Solids(
+        (
+            OpenBox((-2.0, -2.0, 0.0), (2.0, 2.0, 2.0), 0.02),
+            HalfSpace((0.0, 0.0, -0.02), (0.0, 0.0, 1.0)),
+        )
+    ).to_device(device)
+    solver = RigidSolver.create(
+        RigidSetup(gravity_m_per_s2=GRAVITY, max_bodies=2, solids=tank), device
+    )
+    solver.add_bodies(
+        [Body(Shape.BOX, (half_m,) * 3, 600.0, position_m=(2.02 + half_m + gap_m, 0.0, 3.0))]
+    )
+
+    for _ in range(140):
+        solver.step(1.0 / 240.0)
+
+    v = solver.body_velocities()[0]
+    assert np.linalg.norm(v[:2]) < 1e-3
+    assert v[2] == pytest.approx(GRAVITY[2] * 140 / 240, rel=1e-3)
+    assert np.linalg.norm(solver.body_angular_velocities()[0]) < 1e-2
+
+
+def test_a_sphere_resting_off_centre_on_a_box_stays(device: str) -> None:
+    """A sphere resting 1 mm off the centre of a box's top face (a box on the floor) stays
+    for 5 s, under 1 mm: the box's face centre, just off the sphere's lowest point, is
+    not tested against it, or it would push the sphere sideways and roll it off (#101's
+    fourth review: the centred case could not show it)."""
+    solver = _solver(device)
+    solver.add_bodies(
+        [
+            Body(Shape.BOX, (0.3, 0.3, 0.1), DENSITY_KG_PER_M3, position_m=(0.0, 0.0, 0.1)),
+            Body(Shape.SPHERE, (0.1, 0.0, 0.0), DENSITY_KG_PER_M3, position_m=(0.001, 0.0, 0.3)),
+        ]
+    )
+    _run(solver, 0.5)
+    settled = solver.body_positions()[1].copy()
+
+    _run(solver, 5.0)
+
+    assert np.linalg.norm(solver.body_positions()[1] - settled) < 1e-3
+
+
+def test_a_box_thrown_into_a_corner_stops_there(device: str) -> None:
+    """A box thrown down into the corner of the floor and a wall, at 4.8 m/s into the wall
+    and 2.4 m/s down, meeting both in the same substep: it stops there, without climbing
+    the wall. The floor and the wall are two patches, each with its own normal; one patch
+    for both stops only the speed along their mean normal, and the box slid up the wall
+    (#101's fourth review)."""
+    room = Solids(
+        (HalfSpace((0.0, 0.0, 0.0), (0.0, 0.0, 1.0)), HalfSpace((1.0, 0.0, 0.0), (-1.0, 0.0, 0.0)))
+    )
+    solver = _solver(device, solids=room)
+    box = Body(Shape.BOX, (0.1, 0.1, 0.1), DENSITY_KG_PER_M3, position_m=(0.89, 0.0, 0.105),
+               velocity_m_per_s=(4.8, 0.0, -2.4))  # fmt: skip
+    solver.add_bodies([box])
+
+    for _ in range(30):
+        solver.step(1.0 / 60.0)
+        assert solver.body_positions()[0, 2] < 0.105 + 1e-3  # it never climbs the wall
+
+    assert solver.body_positions()[0, 0] == pytest.approx(0.9, abs=1e-3)
+    assert solver.body_positions()[0, 2] == pytest.approx(0.1, abs=1e-3)
+    assert np.abs(solver.body_velocities()[0]).max() < 1e-2

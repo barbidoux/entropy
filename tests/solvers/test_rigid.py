@@ -236,6 +236,33 @@ def test_a_fast_spinning_body_keeps_its_momentum_and_energy(device: str, omega) 
     assert abs(energy_after / energy - 1.0) <= 1e-3
 
 
+@pytest.mark.parametrize("speed", [600.0, 1500.0, 3000.0])
+def test_a_thin_plank_spinning_very_fast_keeps_its_momentum_and_energy(
+    device: str, speed: float
+) -> None:
+    """A plank 8 x 2 x 0.5 cm (its moments of inertia 15 to 1) spinning about a generic
+    axis at 600 to 3,000 rad/s, as a hard hit on the floor can spin it, no gravity, 1 s:
+    |L| and the rotational energy within 1e-3. Solved over the whole substep, the
+    gyroscopic step lost 41 % of the speed at 600 rad/s and went non-finite from about
+    1,500 rad/s (#101's fourth review)."""
+    solver = _solver(device, gravity=(0.0, 0.0, 0.0))
+    axis = np.array([0.6, 0.3, 0.74])
+    axis /= np.linalg.norm(axis)
+    size = (0.04, 0.01, 0.0025)
+    solver.add_bodies([Body(Shape.BOX, size, TEST_DENSITY_KG_PER_M3,
+                            angular_velocity_rad_per_s=tuple(speed * axis))])  # fmt: skip
+    _, inertia = mass_properties(Shape.BOX, size, TEST_DENSITY_KG_PER_M3)
+    momentum, energy = _momentum_and_energy(solver, inertia)
+
+    for _ in range(60):
+        solver.step(1.0 / 60.0)
+
+    solver.max_advance_s()  # raises if the last step left a non-finite state
+    momentum_after, energy_after = _momentum_and_energy(solver, inertia)
+    assert abs(np.linalg.norm(momentum_after) / np.linalg.norm(momentum) - 1.0) <= 1e-3
+    assert abs(energy_after / energy - 1.0) <= 1e-3
+
+
 def test_a_spin_faster_than_half_a_turn_per_substep_keeps_its_sense(device: str) -> None:
     """1,600 rad/s turns more than π in a substep of 1/480 s: the turn's quaternion has a
     negative w, which must not flip the spin when the velocity is recovered (#98)."""
@@ -354,14 +381,14 @@ def test_a_dump_replays_its_frame(tmp_path) -> None:
     np.testing.assert_array_equal(replay.body_orientations()[:2], dump["orientations"][:2])
 
 
-def test_a_nan_orientation_is_caught(tmp_path) -> None:
+def test_a_nan_orientation_is_caught(device: str, tmp_path) -> None:
     """A NaN orientation is caught by the NaN guard at the next call: it reaches the
     angular velocity, recovered from the substep's rotation vectors, even where Warp's
     normalize would turn the quaternion itself back into the identity."""
-    floor = Solids((HalfSpace((0.0, 0.0, 0.0), (0.0, 0.0, 1.0)),)).to_device("cpu")
+    floor = Solids((HalfSpace((0.0, 0.0, 0.0), (0.0, 0.0, 1.0)),)).to_device(device)
     solver = RigidSolver.create(
         RigidSetup(gravity_m_per_s2=GRAVITY, max_bodies=4, dump_dir=tmp_path, solids=floor),
-        "cpu",
+        device,
     )
     solver.add_bodies([_box(position_m=(0.0, 0.0, 0.1))])
     state = solver.checkpoint()
