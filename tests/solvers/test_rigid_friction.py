@@ -315,3 +315,17 @@ def test_with_friction_centred_stacks_stand_at_any_yaw(device: str) -> None:
     x = solver.body_positions().reshape(4, 5, 3)
     offsets = np.linalg.norm(x[:, 1:, :2] - x[:, :-1, :2], axis=2)
     assert offsets.max() < 1e-3
+
+
+def test_with_friction_a_stack_set_off_by_10_um_stands(device: str) -> None:
+    """Five 20 cm boxes stacked at the origin, the top one set off by 10 µm, μ = 0.5: for
+    30 s no box moves 1 mm off the one under it. Without friction that offset brings the
+    stack down in 7 to 8 s, at the origin as away from it (#101's ninth review)."""
+    solver = _solver(device, static_friction=0.5, dynamic_friction=0.5)
+    solver.add_bodies([_box((1e-5 if k == 4 else 0.0, 0.0, 0.1 + 0.2 * k)) for k in range(5)])
+
+    for _ in range(30 * 60):
+        solver.step(1.0 / 60.0)
+
+    x = solver.body_positions()
+    assert np.linalg.norm(x[1:, :2] - x[:-1, :2], axis=1).max() < 1e-3
