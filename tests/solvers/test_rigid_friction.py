@@ -128,6 +128,18 @@ def test_friction_between_bodies_keeps_momentum(device: str) -> None:
     assert solver.body_angular_velocities()[0, 2] < 15.0  # and slowed the sphere's spin
 
 
+def _rotation(q) -> np.ndarray:
+    """The rotation matrix of a unit quaternion (x, y, z, w)."""
+    x, y, z, w = (float(c) for c in q)
+    return np.array(
+        [
+            [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+            [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+            [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)],
+        ]
+    )
+
+
 @pytest.mark.parametrize("value", [-0.1, 1.5, math.nan])
 def test_a_restitution_outside_0_to_1_is_refused(value: float) -> None:
     with pytest.raises(ValueError, match="restitution"):
@@ -196,11 +208,14 @@ def test_with_friction_a_crate_under_a_heavy_slab_stays(device: str) -> None:
     assert _drift(solver, 10.0) < 1e-3
 
 
-def test_with_friction_a_box_on_a_box_holds_on_a_slope(device: str) -> None:
-    """Two boxes stacked on an incline 3° below the friction angle (μ = 0.5): neither moves
-    by more than 1 mm in 5 s. The upper one rests on a wide patch: friction moves it
-    without turning it, and the lower one takes the torque."""
-    theta = math.atan(0.5) - math.radians(3.0)
+@pytest.mark.parametrize("margin_deg", [3.0, 1.0])
+def test_with_friction_a_box_on_a_box_holds_on_a_slope(device: str, margin_deg: float) -> None:
+    """Two boxes stacked on an incline 3° or 1° below the friction angle (μ = 0.5): neither
+    moves by more than 1 mm in 5 s. The upper one rests on a wide patch: friction moves
+    it without turning either body. The lower one's load from the pair varies from
+    substep to substep, and a substep past its bound is clamped to it: let go there, the
+    stack slid 64 mm at 1° (#102's review)."""
+    theta = math.atan(0.5) - math.radians(margin_deg)
     normal = np.array([0.0, -math.sin(theta), math.cos(theta)])
     slope = Solids((HalfSpace((0.0, 0.0, 0.0), tuple(normal)),))
     solver = _solver(device, solids=slope, static_friction=0.5, dynamic_friction=0.5)
@@ -209,6 +224,157 @@ def test_with_friction_a_box_on_a_box_holds_on_a_slope(device: str) -> None:
                        _box(tuple(0.3 * normal), orientation=tilt)])  # fmt: skip
 
     assert _drift(solver, 5.0) < 1e-3
+
+
+@pytest.mark.parametrize("plank", [0, 1], ids=["plank-first", "box-first"])
+def test_with_friction_a_box_rides_a_tilting_plank(device: str, plank: int) -> None:
+    """A 20 cm box resting on a plank that turns about its centre to 20° at 0.3 rad/s,
+    driven as a tool would hold it, μ = 0.6 (31°), no floor: the box rides the plank,
+    moving under 1 mm in the plank's frame, whichever of the two has the lower index.
+    Static friction holds the upper body's centre where the lower body carries it: held
+    above the anchor in the world instead, the box slid 35 mm uphill, its height times
+    the tilt (#102's review)."""
+    solver = _solver(device, solids=None, static_friction=0.6, dynamic_friction=0.6)
+    bodies = [
+        _box((0.0, 0.0, 0.0), half=(1.0, 0.5, 0.05), density=1.0e5,
+             static_friction=0.6, dynamic_friction=0.6),
+        _box((0.0, 0.0, 0.15), static_friction=0.6, dynamic_friction=0.6),
+    ]  # fmt: skip
+    solver.add_bodies(bodies if plank == 0 else bodies[::-1])
+    box = 1 - plank
+    h, rate, tilt = 1.0 / 480.0, 0.3, math.radians(20.0)
+    start, on_plank = None, np.zeros(3)
+    for k in range(round((0.5 + tilt / rate) / h)):
+        solver.step(h)
+        angle = rate * max(0.0, (k + 1) * h - 0.5)
+        state = solver.checkpoint()
+        state["positions_m"][plank] = 0.0
+        state["orientations"][plank] = (0.0, math.sin(angle / 2.0), 0.0, math.cos(angle / 2.0))
+        state["velocities_m_per_s"][plank] = 0.0
+        state["angular_velocities_rad_per_s"][plank] = (0.0, rate if angle > 0.0 else 0.0, 0.0)
+        solver.restore(state)
+        on_plank = _rotation(state["orientations"][plank]).T @ solver.body_positions()[box]
+        if start is None and angle > 0.0:
+            start = on_plank
+
+    assert start is not None
+    assert np.linalg.norm(on_plank - start) < 1e-3
+
+
+def test_a_block_breaking_free_slides_with_kinetic_friction(device: str) -> None:
+    """A block released on an incline 1° steeper than its static friction angle, μs = 0.6
+    and μd = 0.4: once it breaks free, friction is μd's, so after 1 s it slides at g (sin
+    θ - μd cos θ) t = 1.86 m/s, within 3 %. Clamped at μs while slow, it reached only
+    about 1 m/s (#102's review)."""
+    theta = math.atan(0.6) + math.radians(1.0)
+    normal = (0.0, -math.sin(theta), math.cos(theta))
+    slope = Solids((HalfSpace((0.0, 0.0, 0.0), normal),))
+    solver = _solver(device, solids=slope, static_friction=0.6, dynamic_friction=0.4)
+    tilt = (math.sin(theta / 2.0), 0.0, 0.0, math.cos(theta / 2.0))
+    solver.add_bodies([Body(Shape.BOX, (0.2, 0.2, 0.05), 600.0, orientation=tilt,
+                            position_m=tuple(0.05 * np.asarray(normal)),
+                            static_friction=0.6, dynamic_friction=0.4)])  # fmt: skip
+
+    for _ in range(60):
+        solver.step(1.0 / 60.0)
+
+    speed = float(np.linalg.norm(solver.body_velocities()[0]))
+    assert speed == pytest.approx(G * (math.sin(theta) - 0.4 * math.cos(theta)), rel=0.03)
+
+
+def test_a_box_spun_flat_on_the_floor_stops_turning(device: str) -> None:
+    """A 40 cm box spun flat at 10 rad/s on the floor, μ = 0.5: the friction against
+    turning about the normal stops it in 0.36 s under an even pressure; its samples weigh
+    the corners more, so it stops about 1.4 times sooner (ADR 0032). Without that friction
+    it would spin on: the centre of pressure does not slide."""
+    solver = _solver(device, static_friction=0.5, dynamic_friction=0.5)
+    solver.add_bodies([_box((0.0, 0.0, 0.1), half=(0.2, 0.2, 0.1),
+                            angular_velocity_rad_per_s=(0.0, 0.0, 10.0))])  # fmt: skip
+    stopped = None
+    for k in range(60):
+        solver.step(1.0 / 120.0)
+        if stopped is None and abs(solver.body_angular_velocities()[0, 2]) < 0.01:
+            stopped = (k + 1) / 120.0
+
+    assert stopped is not None
+    assert 0.2 <= stopped <= 0.45
+
+
+def test_a_box_slides_on_a_held_box_as_on_a_slope(device: str) -> None:
+    """A 20 cm box on a broad one held on an incline 1° above the pair's friction angle (μ
+    = 0.5 between them, 1.0 under the broad one): the upper box slides on the lower at g
+    (sin θ - μ cos θ) = 0.1914 m/s², within 5 %, and the lower one stays. A pair at its
+    static bound gets no dynamic friction: counted twice, it held the box (#102's
+    review)."""
+    theta = math.atan(0.5) + math.radians(1.0)
+    normal = np.array([0.0, -math.sin(theta), math.cos(theta)])
+    down = np.array([0.0, -math.cos(theta), -math.sin(theta)])
+    slope = Solids((HalfSpace((0.0, 0.0, 0.0), tuple(normal)),))
+    solver = _solver(device, solids=slope, static_friction=2.0, dynamic_friction=2.0)
+    tilt = (math.sin(theta / 2.0), 0.0, 0.0, math.cos(theta / 2.0))
+    solver.add_bodies(
+        [
+            _box(tuple(0.05 * normal), half=(0.3, 0.3, 0.05), orientation=tilt),
+            _box(tuple(0.15 * normal), half=(0.1, 0.1, 0.05), orientation=tilt),
+        ]
+    )
+    for _ in range(6):
+        solver.step(1.0 / 60.0)
+    lower = solver.body_positions()[0].copy()
+    start = solver.body_velocities()
+
+    for _ in range(60):
+        solver.step(1.0 / 60.0)
+
+    end = solver.body_velocities()
+    gained = float(np.dot((end[1] - end[0]) - (start[1] - start[0]), down))
+    assert gained == pytest.approx(G * (math.sin(theta) - 0.5 * math.cos(theta)), rel=0.05)
+    assert np.linalg.norm(solver.body_positions()[0] - lower) < 1e-3
+
+
+def _resting_pair() -> list[Body]:
+    return [_box((0.0, 0.0, 0.1)), _box((0.04, 0.0, 0.3))]
+
+
+def test_bodies_added_after_a_restore_start_without_anchors() -> None:
+    """Restored to an empty checkpoint, a solver whose bodies had friction anchors gets
+    new bodies 0.1 mm from the old ones: they start with none, and move as in a fresh
+    solver, bit for bit on the CPU (ADR 0032). An anchor left on the floor from the old
+    bodies would pull the new ones back to it."""
+    used = _solver("cpu", static_friction=0.5, dynamic_friction=0.5)
+    empty = used.checkpoint()
+    used.add_bodies(_resting_pair())
+    for _ in range(30):
+        used.step(1.0 / 60.0)
+    used.restore(empty)
+    fresh = _solver("cpu", static_friction=0.5, dynamic_friction=0.5)
+
+    for solver in (used, fresh):
+        solver.add_bodies([_box((1e-4, 0.0, 0.1)), _box((0.04 + 1e-4, 0.0, 0.3))])
+        for _ in range(30):
+            solver.step(1.0 / 60.0)
+
+    np.testing.assert_array_equal(used.body_positions(), fresh.body_positions())
+
+
+def test_a_checkpoint_without_anchors_restores_none() -> None:
+    """A checkpoint that carries no anchors (an older save) restores none: the stack moves
+    on as a fresh solver given the same state does, bit for bit on the CPU."""
+    used = _solver("cpu", static_friction=0.5, dynamic_friction=0.5)
+    used.add_bodies(_resting_pair())
+    for _ in range(30):
+        used.step(1.0 / 60.0)
+    state = {k: v for k, v in used.checkpoint().items() if "anchor" not in k}
+    for _ in range(30):
+        used.step(1.0 / 60.0)  # anchors that a restore must clear
+    fresh = _solver("cpu", static_friction=0.5, dynamic_friction=0.5)
+
+    for solver in (used, fresh):
+        solver.restore(state)
+        for _ in range(30):
+            solver.step(1.0 / 60.0)
+
+    np.testing.assert_array_equal(used.body_positions(), fresh.body_positions())
 
 
 def test_a_checkpoint_keeps_the_friction_anchors() -> None:
@@ -262,7 +428,8 @@ def test_with_friction_boxes_hold_on_a_slope_far_from_the_origin(
     down the slope, where a float32 position resolves only about 8 µm, half a substep's
     slip: neither moves by more than 1 mm in 5 s. Friction's corrections enter the motion
     exactly and its anchors are fixed points, so the rounding of each slip it measures is
-    not summed up (#101's sixth and seventh reviews found the sums biased)."""
+    not summed up (#101's sixth and seventh reviews found the sums biased). Without the
+    anchors on the slope, the stack crept 1.9 mm (#102's review)."""
     theta = math.atan(0.5) - math.radians(3.0)
     normal = np.array([0.0, -math.sin(theta), math.cos(theta)])
     down = np.array([0.0, -math.cos(theta), -math.sin(theta)])

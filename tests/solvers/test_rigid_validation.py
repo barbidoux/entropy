@@ -74,7 +74,7 @@ def test_v_rb_04_collisions_without_gravity_conserve_momentum(device: str) -> No
     """V-RB-04: twelve bodies of every shape thrown at each other with no gravity and no
     solids; after 2 s of collisions the total momentum is unchanged within 1e-4 of the sum
     of |momentum|. The angular momentum is kept within 2e-3 of the sum of its terms'
-    sizes (6.3e-4 in this scene, up to 1.2e-3 over seeds 0 to 9, on CUDA), a provisional bound
+    sizes (8.7e-4 in this scene, up to 1.35e-3 over seeds 0 to 9, on CUDA), a provisional bound
     until the M2 physics audit: the depth corrections turn the bodies about where they
     are in the substep, not where they started it (ADR 0031)."""
     rng = np.random.default_rng(4)

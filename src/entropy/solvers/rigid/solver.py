@@ -25,26 +25,28 @@ Simplifications, named (CLAUDE.md rule 7):
   x₀ + vt (1.5 cm after 60 s at 1.26 m/s, 20 to 80 m out), its velocity stays exact in
   free flight (contacts see positions to float32's resolution, ADR 0031);
 - checkpoints are synchronous: on CUDA, taking one waits for the queued GPU work (#99);
-- contacts (ADR 0031, which gives the numbers, and ADR 0032 for the pairs'
-  over-relaxation): edge-on-edge contacts between bodies are sampled; a capsule's
-  envelope sags by up to 0.13 r between samples; a fast body can cross a thin one where
-  it has no sample, from about 480 s⁻¹ times its thickness; small boxes can leave the
-  Test Tank at 30 m/s; without friction a stack is unstable (10 µm off brings five
-  boxes down in 7 s, and off the origin float32 positions seed it), which friction
-  holds; pairs are Jacobi between them, over-relaxed, so stacks sink under
-  load (4.3 mm for 10 boxes of 20 cm), a far heavier body sinks into the one under it,
-  and several bodies at once still pop and bounce (27 boxes spawned 5 cm into each other
-  fly apart at up to 16 m/s); the static solids never give a body energy (its speed is
+- contacts (ADR 0031, which gives the numbers): edge-on-edge contacts between bodies
+  are sampled; a capsule's envelope sags by up to 0.13 r between samples; a fast body
+  can cross a thin one where it has no sample, from about 480 s⁻¹ times its thickness;
+  small boxes can leave the Test Tank at 30 m/s; without friction a stack is unstable
+  (10 µm off brings five boxes down in 7 s, and off the origin float32 positions seed
+  it), which friction holds; pairs are Jacobi between them, so stacks sink under load
+  (7.7 mm for 10 boxes of 20 cm), a far heavier body sinks into the one under it, and
+  several bodies at once still pop and bounce (27 boxes spawned 5 cm into each other
+  fly apart at up to 12 m/s); the static solids never give a body energy (its speed is
   scaled down to the kinetic energy it had before their corrections); angular momentum
-  is kept within 1.2e-3 of its terms in V-RB-04's scenes, the linear within 1.6e-7; a
+  is kept within 1.35e-3 of its terms in V-RB-04's scenes, the linear within 1.6e-7; a
   pair overflow loses support; the tank's rims are not sampled as edges;
 - friction and restitution (ADR 0032, which gives the numbers): once per contact patch,
   at its centre of pressure; on a wide patch static friction holds the resting body at
-  the patch's anchor, at most μs times the patch's normal impulse averaged over about
-  8 substeps, so a body at its bound may creep 0.2 mm before it slides, and between
-  bodies it leaves the lower body's tipping torque to its support; one surface material
-  for all the static solids; torsion about 1.4 times too strong on box faces, and
-  dynamic only; bounces 1.3 to 1.7 % low;
+  the patch's anchor, at most μs times the patch's normal impulse, and between bodies,
+  static or dynamic, it leaves the lower body's tipping torque to its support, so a box
+  sliding onto another in free fall loses angular momentum; no anchor on a patch that
+  is not wide, so a plank leaning on a wall creeps; no rolling resistance; a round body
+  resting on another can keep a separating speed that does not move it; far from the
+  origin, contacts see float32's resolution, and a block just past its friction angle
+  may stick from about 20 m; one surface material for all the static solids; torsion
+  about 1.4 times too strong on box faces, and dynamic only; bounces 1.3 to 1.7 % low;
 - no sleeping yet (#89).
 
 NaN guard (SPEC 5.9): after each step a kernel counts non-finite bodies into a small
@@ -169,10 +171,7 @@ def _no_solids(device: str) -> DeviceSolids:
 _ANCHOR_FIELDS = (
     ("other", wp.int32),
     ("stuck", wp.int32),
-    ("local_a_m", wp.vec3),
-    ("local_b_m", wp.vec3),
     ("normal", wp.vec3),
-    ("pressing_kg_m", float),
     ("offset_a_m", wp.vec3),
     ("offset_b_m", wp.vec3),
 )
@@ -547,8 +546,9 @@ class RigidSolver:
             _k.solve_pairs,
             dim=patches.a.shape[0],
             inputs=[patches, positions, orientations, shapes, sizes, masses, inertia, self._signs,
-                    self._displacement, self._turn, properties["static_friction"], gravity,
-                    self._contact_count, *corrections, self._pair_anchors],
+                    self._displacement, self._turn, properties["static_friction"],
+                    properties["dynamic_friction"], gravity, self._contact_count, *corrections,
+                    self._pair_anchors],
             device=device,
         )  # fmt: skip
         wp.launch(_k.apply_corrections, dim=count,
@@ -559,6 +559,7 @@ class RigidSolver:
                   properties["bounds_m"], masses, inertia, self._signs, *self._solids.arrays(),
                   self._static_contacts, *self._static_patches, self._static_touch,
                   properties["static_friction"], setup.static_friction,
+                  properties["dynamic_friction"], setup.dynamic_friction,
                   self._static_anchors]  # fmt: skip
         wp.launch(_k.solve_static, dim=count, inputs=static, device=device)
         wp.launch(_k.recover, dim=count,
