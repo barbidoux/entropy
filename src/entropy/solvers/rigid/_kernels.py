@@ -795,9 +795,10 @@ def solve_static(
                 along = slip
             if mu > 0.0 and wp.length(along) > 0.0:
                 wide = _wide(spread, wp.normalize(along), wp.abs(wp.dot(arm, n)), mu)
-                if not wide:  # it can roll: hold the point touching now, which rolls on
+                hold = stuck
+                if not wide:  # it can roll: hold the point touching now; the anchor waits
                     shift = slip
-                    stuck = 0
+                    hold = 0
                     pressing = total
                 sliding = wp.length(shift)
                 if sliding > 0.0:
@@ -806,9 +807,11 @@ def solve_static(
                     weight = 1.0 / mass
                     if not wide:
                         weight = weight + wp.dot(lever, _inverse_inertia_world(q, inertia, lever))
-                    held, stuck = _static_impulse(sliding / weight, mu * pressing, stuck, weight)
-                    if stuck == 1 and held < sliding / weight:  # held at its bound, not let go
-                        patch_clamped[entry] = 1
+                    held, kept = _static_impulse(sliding / weight, mu * pressing, hold, weight)
+                    if wide:
+                        stuck = kept
+                        if kept == 1 and held < sliding / weight:  # at its bound, not let go
+                            patch_clamped[entry] = 1
                     x = x - held / mass * direction
                     if not wide:
                         spin = spin - _inverse_inertia_world(q, inertia, held * lever)
@@ -1140,10 +1143,13 @@ def solve_pairs(
     the vertical) and the patch is wide (`_wide`), it brings the upper body's centre back
     to where the pair's anchor on the lower one holds it (`Anchors`, the entry `detect`
     gave the pair), the leftover of its Jacobi share undone in later substeps as the
-    normal overlap's is, so a pair holds up to μs. The upper body moves without turning,
-    and the lower one takes the torque that the shift of the normal forces would bring,
-    (x_lower - x_upper) x P, so both momenta are kept. Otherwise it undoes this substep's
-    sliding at the centre of pressure and turns both. The scale is min(1, ω / n)
+    normal overlap's is, so a pair holds up to μs. Both bodies move without turning: the
+    torque the shifted normal forces would pass to the lower body is left to its own
+    support, as the static solids take a resting body's. Given as a turn each substep and
+    levelled by the next sweep, it moved the anchor on the lower body's face by about
+    60 µm a substep, against 17 µm of sliding, and a box resting on another on a slope 3°
+    under its friction angle crept up to 4.5 mm in 5 s (#88). Otherwise it undoes this
+    substep's sliding at the centre of pressure and turns both. The scale is min(1, ω / n)
     (`PAIR_RELAXATION`); `Patches.clamped` marks a pair held at its bound."""
     p = wp.tid()
     if p >= wp.min(patches.count[0], patches.a.shape[0]):
@@ -1297,9 +1303,10 @@ def solve_pairs(
                 along = slip
             if wp.length(along) > 0.0:
                 wide = upper >= 0 and _wide(spread, wp.normalize(along), height, mu)
-                if not wide:  # they can roll: hold the point touching now, which rolls on
+                hold = stuck
+                if not wide:  # they can roll: hold the point touching now; the anchor waits
                     shift = slip
-                    stuck = 0
+                    hold = 0
                     pressing = total
                 sliding = wp.length(shift)
                 if sliding > 0.0:
@@ -1310,9 +1317,11 @@ def solve_pairs(
                         lb = wp.cross(rb, t)
                         weight += wp.dot(la, _inverse_inertia_world(qa, inertia_kg_m2[a], la))
                         weight += wp.dot(lb, _inverse_inertia_world(qb, inertia_kg_m2[b], lb))
-                    held, stuck = _static_impulse(sliding / weight, mu * pressing, stuck, weight)
-                    if stuck == 1 and held < sliding / weight:  # held at its bound, not let go
-                        clamped = 1
+                    held, kept = _static_impulse(sliding / weight, mu * pressing, hold, weight)
+                    if wide:
+                        stuck = kept
+                        if kept == 1 and held < sliding / weight:  # at its bound, not let go
+                            clamped = 1
                     push = -held * t  # on a; b gets its opposite
                     place_a = place_a + push / ma
                     place_b = place_b - push / mb
@@ -1322,14 +1331,6 @@ def solve_pairs(
                         )
                         spin_b = spin_b - _inverse_inertia_world(
                             qb, inertia_kg_m2[b], wp.cross(rb, push)
-                        )
-                    elif upper == a:
-                        spin_b = spin_b + _inverse_inertia_world(
-                            qb, inertia_kg_m2[b], wp.cross(place_b - place_a, push)
-                        )
-                    else:
-                        spin_a = spin_a + _inverse_inertia_world(
-                            qa, inertia_kg_m2[a], wp.cross(place_a - place_b, -push)
                         )
             if entry >= 0 and stuck == 0:  # the anchors, where the patch is now
                 ra = point - place_a
