@@ -116,15 +116,19 @@ found the following, and they led to the decisions below:
     it. So every body touching the static solids then has its speed scaled down, if need
     be, to the kinetic energy its motion had before their corrections: free motion,
     gravity and the pairs' corrections (taken after `apply_corrections`). The static
-    solids never give energy. The rule acts only past 1e-5 over that budget, float32's
-    noise; trimming the noise slowed a box sliding down a frictionless 30° slope by
-    0.3 % in 3 s.
+    solids never give energy.
     - Without the rule, a box spawned 30 to 50 cm inside a table or a wall was flung at
       57 to 211 m/s and up to 1,058 rad/s, and a plank thrown at the floor at 30 m/s
       rebounded with up to 2.5 times its energy (#101's fourth review).
     - With a budget of the motion without contact, as first tried, a body in a pair had
       to be left out, or a box hitting a resting one stopped at half its speed; a box
       spawned in a table beside another then flew at 135 to 163 m/s (fifth review).
+  - The sweep's shift enters the body's displacement as the sum of its corrections,
+    exactly, as ADR 0030 keeps every increment. Taken as a float32 difference of
+    positions, it was biased on any tilted plane: a box sliding down a frictionless 30°
+    slope lost 0.7 % of its speed in 5 s, and a sphere sliding along a slope 100 m from
+    the origin gained 2.3 % in 10 s, which the energy rule did not stop (sixth
+    review).
   - A body's static patches are solved by its own thread, one after the other. The
     pairs' patches are solved in parallel, scaled by 1 / (the larger pair count).
   - #88 puts friction and restitution at the same patches.
@@ -200,9 +204,12 @@ These are named in SPEC 5.4 and in the module. The numbers were measured on CUDA
   one Jacobi sweep, so it leaves part of the speed the depth corrections make:
   - bodies spawned overlapping fly apart: 12 spheres of 10 cm radius in a 30 cm clump
     on the floor at up to 19 m/s, still 19 m/s after 2 s; 27 boxes in a 3 x 3 x 3
-    block, 5 cm into each other, at 9.8 m/s (two alone: none); two boxes 5 cm into each
-    other and 50 cm into a table at 35 m/s, since the static solids' budget holds the
-    pair's push apart;
+    block, 5 cm into each other, at 9.8 m/s (two alone: none); two boxes spawned 50 cm
+    into a table and into each other, at 4.6, 6.2, 12.7, 23.4 and 35 m/s for 1, 2, 5, 10
+    and 15 cm of overlap, since the static solids' budget holds the pair's push apart;
+  - a tumbling 20 cm box dropped 0.5 m onto an equal one resting on the floor: in 2 of
+    40 throws the two gain more than 5 % of their energy, up to 43 %, and the lower box
+    leaves at up to 1.8 m/s (the pair's corrections, with or without the energy rule);
   - a thin plank (8 × 2 × 0.5 cm) thrown at 20 to 30 m/s onto a small body lying on the
     floor gains up to 47 % of its energy in 1 to 5 throws of 40, from the pair's
     corrections, which the static solids' rule cannot tell from a real push;

@@ -240,7 +240,7 @@ def test_a_fast_spinning_body_keeps_its_momentum_and_energy(device: str, omega) 
 def test_a_thin_plank_spinning_very_fast_keeps_its_momentum_and_energy(
     device: str, speed: float
 ) -> None:
-    """A plank 8 x 2 x 0.5 cm (its moments of inertia 15 to 1) spinning about a generic
+    """A plank 8 x 2 x 0.5 cm (its moments of inertia 16 to 1) spinning about a generic
     axis at 600 to 3,000 rad/s, as a hard hit on the floor can spin it, no gravity, 1 s:
     |L| and the rotational energy within 1e-3. Solved over the whole substep, the
     gyroscopic step lost 41 % of the speed at 600 rad/s and went non-finite from about

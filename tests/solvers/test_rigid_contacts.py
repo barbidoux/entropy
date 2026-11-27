@@ -752,9 +752,11 @@ def test_a_box_spawned_deep_in_a_table_beside_another_box_is_not_flung(
 
 
 def test_a_box_on_a_frictionless_slope_slides_at_g_sin_theta(device: str) -> None:
-    """A box resting flat on a frictionless 30° slope slides at g sin θ t: 4.905 m/s after
-    1 s, within 1 %. The static solids' energy budget includes gravity's work over the
-    substep; without it the box would not move (#101's fifth review)."""
+    """A box resting flat on a frictionless 30° slope slides at g sin θ t: 24.5 m/s after
+    5 s, within 0.05 %. The static solids' energy budget includes gravity's work over the
+    substep (without it the box would not move, #101's fifth review), and their
+    corrections enter the motion exactly, as increments: taken as a float32 difference
+    of positions, the box lost 0.7 % of its speed in 5 s (sixth review)."""
     theta = math.radians(30.0)
     normal = (math.sin(theta), 0.0, math.cos(theta))
     slope = Solids((HalfSpace((0.0, 0.0, 0.0), normal),))
@@ -764,26 +766,71 @@ def test_a_box_on_a_frictionless_slope_slides_at_g_sin_theta(device: str) -> Non
     solver.add_bodies([Body(Shape.BOX, (0.1, 0.1, 0.1), DENSITY_KG_PER_M3, position_m=place,
                             orientation=tilt)])  # fmt: skip
 
-    _run(solver, 1.0)
+    _run(solver, 5.0)
 
     speed = float(np.linalg.norm(solver.body_velocities()[0]))
-    assert speed == pytest.approx(-GRAVITY[2] * math.sin(theta) * 1.0, rel=0.01)
+    assert speed == pytest.approx(-GRAVITY[2] * math.sin(theta) * 5.0, rel=5e-4)
 
 
 def test_a_box_sliding_into_a_resting_one_shares_its_speed(device: str) -> None:
     """A box sliding at 2 m/s along the frictionless floor into an equal one at rest: they
-    leave together at 1 m/s each (momentum kept, no restitution), within 5 %. Capping a
-    body in a pair at its energy without the contact would stop the struck box at
-    0.5 m/s (#101's fifth review)."""
+    leave together at 1 m/s each (momentum kept, no restitution), within 5 %. They meet
+    in the middle of a substep, so the pair's depth correction gives the struck box its
+    speed: capped at its energy without the contact, it left at 0.84 m/s (#101's fifth
+    and sixth reviews)."""
     solver = _solver(device)
     solver.add_bodies(
         [
             Body(Shape.BOX, (0.1, 0.1, 0.1), DENSITY_KG_PER_M3, position_m=(0.0, 0.0, 0.1),
                  velocity_m_per_s=(2.0, 0.0, 0.0)),
-            Body(Shape.BOX, (0.1, 0.1, 0.1), DENSITY_KG_PER_M3, position_m=(0.25, 0.0, 0.1)),
+            Body(Shape.BOX, (0.1, 0.1, 0.1), DENSITY_KG_PER_M3, position_m=(0.2611, 0.0, 0.1)),
         ]
     )  # fmt: skip
 
     _run(solver, 0.5)
 
     np.testing.assert_allclose(solver.body_velocities()[:, 0], [1.0, 1.0], rtol=0.05)
+
+
+@pytest.mark.parametrize("name", ["box", "sphere"])
+def test_a_body_sliding_far_from_the_origin_keeps_its_speed(device: str, name: str) -> None:
+    """A box or a sphere sliding at 5 m/s along a frictionless 30° slope's level line,
+    100 m from the origin, gravity pressing it onto the slope: after 10 s it still slides
+    at 5 m/s, within 0.1 %. The static solids' corrections enter its motion as
+    increments; as a float32 difference of positions, far out, they gave the sphere
+    2.3 % and, without the energy rule, a box 15 % (#101's sixth review)."""
+    theta = math.radians(30.0)
+    normal = np.array([math.sin(theta), 0.0, math.cos(theta)])
+    out = np.array([0.0, 100.0, 0.0])  # along the level line
+    slope = Solids((HalfSpace(tuple(out), tuple(normal)),))
+    gravity = tuple(-9.81 * normal)
+    solver = _solver(device, solids=slope, gravity=gravity)
+    if name == "box":
+        tilt = (0.0, math.sin(theta / 2.0), 0.0, math.cos(theta / 2.0))
+        body = Body(Shape.BOX, (0.1, 0.1, 0.1), DENSITY_KG_PER_M3,
+                    position_m=tuple(out + 0.1 * normal), orientation=tilt,
+                    velocity_m_per_s=(0.0, 5.0, 0.0))  # fmt: skip
+    else:
+        body = Body(Shape.SPHERE, (0.1, 0.0, 0.0), DENSITY_KG_PER_M3,
+                    position_m=tuple(out + 0.1 * normal),
+                    velocity_m_per_s=(0.0, 5.0, 0.0))  # fmt: skip
+    solver.add_bodies([body])
+
+    _run(solver, 10.0)
+
+    assert float(np.linalg.norm(solver.body_velocities()[0])) == pytest.approx(5.0, rel=1e-3)
+
+
+def test_a_box_spinning_flat_on_the_floor_keeps_its_spin(device: str) -> None:
+    """A box spinning at 10 rad/s about the vertical, resting on the frictionless floor:
+    after 3 s it still spins at 10 rad/s, within 1e-3. The static solids' energy budget
+    counts the spin; without it, every spin would stop at its first contact (#101's
+    sixth review)."""
+    solver = _solver(device)
+    solver.add_bodies([Body(Shape.BOX, (0.2, 0.1, 0.05), DENSITY_KG_PER_M3,
+                            position_m=(0.0, 0.0, 0.05),
+                            angular_velocity_rad_per_s=(0.0, 0.0, 10.0))])  # fmt: skip
+
+    _run(solver, 3.0)
+
+    np.testing.assert_allclose(solver.body_angular_velocities()[0], [0.0, 0.0, 10.0], atol=1e-2)
