@@ -171,7 +171,7 @@ _ANCHOR_FIELDS = (
 )
 
 
-def _anchors(size: int, device: str) -> _k.Anchors:
+def _anchors(size: int, device: str) -> Any:  # a `_kernels.Anchors` (a Warp struct)
     """`size` friction anchors, none set (ADR 0032)."""
     anchors = _k.Anchors()
     for name, dtype in _ANCHOR_FIELDS:
@@ -464,7 +464,7 @@ class RigidSolver:
 
     # Internals ----------------------------------------------------------------------
 
-    def _anchor_tables(self) -> tuple[tuple[str, _k.Anchors, int], ...]:
+    def _anchor_tables(self) -> tuple[tuple[str, Any, int], ...]:
         """The friction anchors' tables, with their checkpoint names and entries per body:
         the pairs' of the last substep, and the static solids'."""
         return (
@@ -472,7 +472,7 @@ class RigidSolver:
             ("static_anchor", self._static_anchors, _k.STATIC_PATCHES),
         )
 
-    def _anchor_state(self, tables: list[_k.Anchors], n: int) -> dict[str, np.ndarray]:
+    def _anchor_state(self, tables: list[Any], n: int) -> dict[str, np.ndarray]:
         """The first `n` bodies' rows of the anchor `tables` (as `_anchor_tables` orders
         them), one array per field and table, shaped (n, entries per body, ...)."""
         state: dict[str, np.ndarray] = {}
