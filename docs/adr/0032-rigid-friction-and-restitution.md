@@ -166,7 +166,7 @@ CUDA, with 1 / n and then with min(1, 1.8 / n):
 | A box dropped 0.5 m onto one box, onto two: rebound | 0.35, 0.95 m/s | 0.35, 0.96 m/s |
 | A box at 4 m/s into a row of 3: the row and the thrown box leave at | 0.74, 1.28, 1.65, 0.33 m/s | 0.74, 1.27, 1.41, 0.58 m/s |
 | V-RB-04, angular momentum over its terms' sizes: seed 4, worst of seeds 0 to 9 | 8.7e-4, 1.35e-3 | 6.3e-4, 1.20e-3 |
-| V-RB-04, linear momentum | 1.7e-5 | 1.6e-5 |
+| V-RB-04, linear momentum (with the pairs' exact shifts, #101's eighth round) | 1.6e-7 | 1.6e-7 |
 
 The clump scenes differ from ADR 0031's, so the table compares this probe's two columns.
 

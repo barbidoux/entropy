@@ -15,10 +15,12 @@ G = -GRAVITY[2]
 FLOOR = Solids((HalfSpace((0.0, 0.0, 0.0), (0.0, 0.0, 1.0)),))
 
 
-def _solver(device: str, solids: Solids | None = FLOOR, gravity=GRAVITY, **surface) -> RigidSolver:
+def _solver(
+    device: str, solids: Solids | None = FLOOR, gravity=GRAVITY, max_bodies: int = 16, **surface
+) -> RigidSolver:
     setup = RigidSetup(
         gravity_m_per_s2=gravity,
-        max_bodies=16,
+        max_bodies=max_bodies,
         solids=solids.to_device(device) if solids is not None else None,
         **surface,
     )
@@ -289,3 +291,27 @@ def test_a_sliding_box_far_from_the_origin_stops_where_kinetic_friction_says(dev
 
     travelled = float(solver.body_positions()[0, 0]) - 100.0
     assert travelled == pytest.approx(4.0 / (2.0 * 0.3 * G), rel=0.01)
+
+
+def test_with_friction_centred_stacks_stand_at_any_yaw(device: str) -> None:
+    """Four centred stacks of five 20 cm boxes at 58 to 82° of yaw over the Test Tank's
+    floor, μ = 0.5: for 30 s no box moves 1 mm off the one under it. Without friction a
+    stack falls within about a minute, these four at 12 to 22 s on CUDA: float32 tilts
+    each box's faces by about 1e-7 rad, a slope a frictionless box slides down (ADR 0031,
+    #101's eighth review). Static friction holds it."""
+    solver = _solver(device, max_bodies=20, static_friction=0.5, dynamic_friction=0.5)
+    spots = [((-1.693, 0.125), 82.1), ((0.143, -0.187), 65.7), ((-0.130, 1.645), 48.7),
+             ((1.350, 0.068), 58.2)]  # fmt: skip
+    boxes = []
+    for (x, y), yaw_deg in spots:
+        half = math.radians(yaw_deg) / 2.0
+        turn = (0.0, 0.0, math.sin(half), math.cos(half))
+        boxes += [_box((x, y, 0.1 + 0.2 * k), orientation=turn) for k in range(5)]
+    solver.add_bodies(boxes)
+
+    for _ in range(30 * 60):
+        solver.step(1.0 / 60.0)
+
+    x = solver.body_positions().reshape(4, 5, 3)
+    offsets = np.linalg.norm(x[:, 1:, :2] - x[:, :-1, :2], axis=2)
+    assert offsets.max() < 1e-3
