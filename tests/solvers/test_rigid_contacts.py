@@ -246,13 +246,19 @@ def test_a_long_capsule_does_not_fall_through_another(device: str) -> None:
     assert 0.15 - sag - 1e-3 <= solver.body_positions()[2, 2] <= 0.15 + 1e-3
 
 
-def test_the_tank_s_walls_keep_a_thrown_sphere_in(device: str) -> None:
+@pytest.mark.parametrize(
+    "throw",
+    [(6.0, 1.0, 0.0), (-6.0, -1.0, 0.0), (1.0, 6.0, 0.0), (-1.0, -6.0, 0.0)],
+    ids=["+x", "-x", "+y", "-y"],
+)
+def test_the_tank_s_walls_keep_a_thrown_sphere_in(device: str, throw) -> None:
     """The Test Tank's open box (the world's solids): a sphere thrown at 6 m/s along the
-    floor stays within the cavity."""
+    floor at each of its four walls stays within the cavity (each wall is its own plane,
+    #101's fourth review)."""
     tank = Solids((OpenBox((-2.0, -2.0, 0.0), (2.0, 2.0, 2.0), 0.02),))
     solver = _solver(device, solids=tank)
     solver.add_bodies([Body(Shape.SPHERE, (0.2, 0.0, 0.0), 600.0, position_m=(0.0, 0.0, 0.5),
-                            velocity_m_per_s=(6.0, 1.0, 0.0))])  # fmt: skip
+                            velocity_m_per_s=throw)])  # fmt: skip
 
     for _ in range(120):
         solver.step(1.0 / 60.0)
@@ -375,8 +381,10 @@ def test_a_curved_body_stays_put_on_a_box(device: str, name: str) -> None:
 
 
 def test_nine_boxes_rest_on_one_slab(device: str) -> None:
-    """Nine boxes resting on one slab: the slab is in nine pairs, each pair's correction
-    scaled by 1 / (the larger pair count), so the slab neither jitters nor sinks."""
+    """Nine boxes resting on one slab, the slab in nine pairs at once: it neither jitters
+    nor sinks, and each box rests on it. (Solved contact by contact in parallel, it
+    jittered and sank, ADR 0031. The pairs' 1 / n scale is not what holds it here:
+    unscaled, it holds too, #101's fourth review.)"""
     solver = _solver(device)
     small, density = (0.1, 0.1, 0.1), DENSITY_KG_PER_M3
     boxes = [Body(Shape.BOX, small, density, position_m=(0.25 * ix, 0.25 * iy, 0.3))
@@ -667,3 +675,46 @@ def test_a_box_falling_past_the_tank_s_outer_glass_is_untouched(device: str, hal
     assert np.linalg.norm(v[:2]) < 1e-3
     assert v[2] == pytest.approx(GRAVITY[2] * 140 / 240, rel=1e-3)
     assert np.linalg.norm(solver.body_angular_velocities()[0]) < 1e-2
+
+
+def test_a_sphere_resting_off_centre_on_a_box_stays(device: str) -> None:
+    """A sphere resting 1 mm off the centre of a box's top face (a box on the floor) stays
+    for 5 s, under 1 mm: the box's face centre, just off the sphere's lowest point, is
+    not tested against it, or it would push the sphere sideways and roll it off (#101's
+    fourth review: the centred case could not show it)."""
+    solver = _solver(device)
+    solver.add_bodies(
+        [
+            Body(Shape.BOX, (0.3, 0.3, 0.1), DENSITY_KG_PER_M3, position_m=(0.0, 0.0, 0.1)),
+            Body(Shape.SPHERE, (0.1, 0.0, 0.0), DENSITY_KG_PER_M3, position_m=(0.001, 0.0, 0.3)),
+        ]
+    )
+    _run(solver, 0.5)
+    settled = solver.body_positions()[1].copy()
+
+    _run(solver, 5.0)
+
+    assert np.linalg.norm(solver.body_positions()[1] - settled) < 1e-3
+
+
+def test_a_box_thrown_into_a_corner_stops_there(device: str) -> None:
+    """A box thrown down into the corner of the floor and a wall, at 4.8 m/s into the wall
+    and 2.4 m/s down, meeting both in the same substep: it stops there, without climbing
+    the wall. The floor and the wall are two patches, each with its own normal; one patch
+    for both stops only the speed along their mean normal, and the box slid up the wall
+    (#101's fourth review)."""
+    room = Solids(
+        (HalfSpace((0.0, 0.0, 0.0), (0.0, 0.0, 1.0)), HalfSpace((1.0, 0.0, 0.0), (-1.0, 0.0, 0.0)))
+    )
+    solver = _solver(device, solids=room)
+    box = Body(Shape.BOX, (0.1, 0.1, 0.1), DENSITY_KG_PER_M3, position_m=(0.89, 0.0, 0.105),
+               velocity_m_per_s=(4.8, 0.0, -2.4))  # fmt: skip
+    solver.add_bodies([box])
+
+    for _ in range(30):
+        solver.step(1.0 / 60.0)
+        assert solver.body_positions()[0, 2] < 0.105 + 1e-3  # it never climbs the wall
+
+    assert solver.body_positions()[0, 0] == pytest.approx(0.9, abs=1e-3)
+    assert solver.body_positions()[0, 2] == pytest.approx(0.1, abs=1e-3)
+    assert np.abs(solver.body_velocities()[0]).max() < 1e-2

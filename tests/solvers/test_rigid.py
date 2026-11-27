@@ -379,14 +379,14 @@ def test_a_dump_replays_its_frame(tmp_path) -> None:
     np.testing.assert_array_equal(replay.body_orientations()[:2], dump["orientations"][:2])
 
 
-def test_a_nan_orientation_is_caught(tmp_path) -> None:
+def test_a_nan_orientation_is_caught(device: str, tmp_path) -> None:
     """A NaN orientation is caught by the NaN guard at the next call: it reaches the
     angular velocity, recovered from the substep's rotation vectors, even where Warp's
     normalize would turn the quaternion itself back into the identity."""
-    floor = Solids((HalfSpace((0.0, 0.0, 0.0), (0.0, 0.0, 1.0)),)).to_device("cpu")
+    floor = Solids((HalfSpace((0.0, 0.0, 0.0), (0.0, 0.0, 1.0)),)).to_device(device)
     solver = RigidSolver.create(
         RigidSetup(gravity_m_per_s2=GRAVITY, max_bodies=4, dump_dir=tmp_path, solids=floor),
-        "cpu",
+        device,
     )
     solver.add_bodies([_box(position_m=(0.0, 0.0, 0.1))])
     state = solver.checkpoint()

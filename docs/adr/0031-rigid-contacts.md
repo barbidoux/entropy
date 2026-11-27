@@ -86,6 +86,11 @@ found the following, and they led to the decisions below:
     signs.
   - The pair's net corrections are scaled by 1 / (the larger pair count of the two
     bodies), Jacobi between pairs, and added atomically. Linear momentum is kept (V-RB-04).
+    The scale keeps a pile's corrections from adding up: unscaled, a 400-body pile in
+    the Test Tank crept 25 cm in 10 s and gained up to 83 J in one second. It slows
+    stacks: unscaled, 10 stacked boxes sink 3.8 mm instead of 7.7 mm (#101's fourth
+    review). No test in the suite is a pile that large: the soak test at the M2 gate
+    guards it.
   - The first version solved contact by contact in parallel. There, nine boxes on one
     slab jittered and sank, and the step cost half as much again.
   - Against a sphere, only the sphere's own sample is tested: it gives the exact contact,
@@ -104,9 +109,16 @@ found the following, and they led to the decisions below:
     points), along its mean normal.
   - The separating speed there becomes the one it had before the substep if it was
     separating, else 0. For one pair alone, or one body against the static solids, the
-    depth corrections then never turn into speed: no bounce, and no pop of two bodies
-    spawned overlapping (11 m/s before). Between several bodies at once this pass is
-    Jacobi and leaves part of that speed (named below).
+    depth corrections then do not turn into speed along the normal: no bounce, and no
+    pop of two bodies spawned overlapping (11 m/s before). Between several bodies at
+    once this pass is Jacobi and leaves part of that speed (named below).
+  - One point cannot take back the spin that a deep correction at a body's edge gives
+    it. So a body touching only the static solids in a substep (no pair) then has its
+    speed scaled down, if need be, to the kinetic energy it would have had without
+    contact: the static solids never give energy. Without it, a box spawned 30 to 50 cm
+    inside a table or a wall was flung at 57 to 211 m/s and up to 1,058 rad/s, and a
+    plank thrown at the floor at 30 m/s rebounded with up to 2.5 times its energy
+    (#101's fourth review).
   - A body's static patches are solved by its own thread, one after the other. The
     pairs' patches are solved in parallel, scaled by 1 / (the larger pair count).
   - #88 puts friction and restitution at the same patches.
@@ -114,6 +126,15 @@ found the following, and they led to the decisions below:
   prediction's and every correction's. A correction I⁻¹(r × p) then changes I ω by
   exactly r × p / h. Corrections turn the orientation by the exact exponential of their
   rotation vector.
+- **Fast spins: the gyroscopic step is split** (ADR 0030 solved it over the whole
+  substep). A hard hit spins a thin body to thousands of rad/s. The implicit midpoint's
+  fixed-point iterations converge only while |ω| h times the spread of the moments (the
+  largest over the smallest) is small. Over the whole substep, a plank of 8 × 2 × 0.5 cm
+  (moments 15 to 1) lost 41 % of 600 rad/s in 1 s and went non-finite from about
+  1,500 rad/s, freezing the solver in 11 of 20 throws at the floor at 30 m/s.
+  - The substep is now split into pieces of at most 0.2 of that measure, up to 256:
+    the plank keeps |L| and its energy within 1e-3 from 600 to 3,000 rad/s.
+  - Past 256 pieces the energy is capped at its start, so a spin never gains energy.
 - **Room for 16 pairs per body** by default (`max_pairs`). Contacts with the static
   solids need no room. Pairs past it are dropped and counted per step
   (`pair_overflows` in the diagnostics, for the HUD), through the status read at the
@@ -129,7 +150,7 @@ found the following, and they led to the decisions below:
 ## Named simplifications
 
 These are named in SPEC 5.4 and in the module. The numbers were measured on CUDA on
-2026-11-22, with 20 cm boxes unless stated.
+2026-11-22, and on 2026-11-27 for the fourth review's, with 20 cm boxes unless stated.
 
 - **Edge-on-edge contacts between bodies are sampled**, at edge midpoints and face
   centres, not found exactly: two boxes crossed edge to edge sink into each other until
@@ -150,6 +171,7 @@ These are named in SPEC 5.4 and in the module. The numbers were measured on CUDA
   escape in 1,440 throws of every shape. Boxes of 1 to 4 cm stay in up to 20 m/s. At
   30 m/s, 1 to 3 throws in 40 aimed at the floor-to-wall edge get out: the 2 and 4 cm
   boxes bounce up to 2 m and leave over the rim, and a 1 cm one leaks through the edge.
+  A 2 cm box also went through a 10 cm static wall in 1 throw of 20 at 30 m/s.
 - **Without friction, bodies resting off-centre slide off.** The body under the load
   tilts by a few hundredths of a degree within a substep, and nothing holds the one
   above on that slope:
@@ -168,13 +190,18 @@ These are named in SPEC 5.4 and in the module. The numbers were measured on CUDA
   - V-RB-05 (#89) holds stacks to its bound.
 - **Several bodies at once still pop and bounce.** The velocity pass between pairs is
   one Jacobi sweep, so it leaves part of the speed the depth corrections make:
-  - bodies spawned overlapping fly apart: 12 spheres in a 30 cm clump on the floor at
-    up to 14 m/s, still 12 m/s after 2 s; 27 boxes in a 3 x 3 x 3 block, 5 cm into
-    each other, at 9.8 m/s (two alone: none);
-  - a box dropped 0.5 m onto another rebounds at 0.43 m/s, onto a stack of two at
-    1.07 m/s, with no restitution;
+  - bodies spawned overlapping fly apart: 12 spheres of 10 cm radius in a 30 cm clump
+    on the floor at up to 19 m/s, still 19 m/s after 2 s; 27 boxes in a 3 x 3 x 3
+    block, 5 cm into each other, at 9.8 m/s (two alone: none);
+  - a box dropped 0.5 m onto another rebounds at 0.35 m/s, onto a stack of two at
+    0.95 m/s, with no restitution;
   - a box thrown at 4 m/s at a row of 3 leaves them at 0.76, 1.25, 1.59 and 0.39 m/s,
-    where an inelastic shock would give 1.0 each.
+    where an inelastic shock would give 1.0 each;
+  - a pile never settles: 400 mixed bodies dropped into the Test Tank keep 4 to 43 J of
+    kinetic energy over 60 s, gain up to 32 J in some one-second windows, spin at up
+    to 153 rad/s, and the median body moves 21 cm in the last 10 s; one 4 cm box left
+    the tank in the first 2 s. Without friction nothing stops them; friction (#88) and
+    sleeping (#89) settle piles.
   The spawner (#93) places bodies apart. Contacts kept from one substep to the next,
   with warm-started impulses, which #88's friction anchors begin, and the graph
   colouring of #90 are what Box2D and PhysX use against this.
