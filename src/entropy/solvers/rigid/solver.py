@@ -22,7 +22,8 @@ Simplifications, named (CLAUDE.md rule 7):
   thin plank at 600 to 3,000 rad/s over 1 s); its energy is capped at its start, so
   a spin never gains energy;
 - positions accumulate in float32: far from the origin a body's position drifts from
-  x₀ + vt (1.5 cm after 60 s at 1.26 m/s, 20 to 80 m out), its velocity stays exact;
+  x₀ + vt (1.5 cm after 60 s at 1.26 m/s, 20 to 80 m out), its velocity stays exact in
+  free flight (contacts see positions to float32's resolution, ADR 0031);
 - checkpoints are synchronous: on CUDA, taking one waits for the queued GPU work (#99);
 - contacts (ADR 0031, which gives the numbers): edge-on-edge contacts between bodies
   are sampled; a capsule's envelope sags by up to 0.13 r between samples; a fast body
@@ -34,7 +35,7 @@ Simplifications, named (CLAUDE.md rule 7):
   clump fly apart at up to 19 m/s), and a pile never settles; the static solids never
   give a body energy (its speed is scaled down to the kinetic energy it had before
   their corrections); angular momentum is kept within 1.35e-3 of its terms in V-RB-04's
-  scenes, the linear within 1.4e-5; a pair overflow loses support; the tank's rims are
+  scenes, the linear within 1.8e-7; a pair overflow loses support; the tank's rims are
   not sampled as edges;
 - no friction, restitution or sleeping yet (#88, #89).
 

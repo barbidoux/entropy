@@ -194,6 +194,25 @@ These are named in SPEC 5.4 and in the module. The numbers were measured on CUDA
   - a 4-3-2-1 pyramid collapses;
   - a crate under a slab 64 times heavier is squeezed out after about 2 s.
   Friction (#88) must hold all three; its tests include them.
+- **Without friction, even a centred stack falls within about a minute.** A box's
+  float32 orientation tilts its faces by about 1e-7 rad, and a box resting on another
+  slides down that slope as a frictionless box slides down any: the pair's corrections
+  push the two apart by g × 1e-7 or so, a few tenths of a millimetre in half a minute,
+  and the off-centre slide above finishes the stack. Of nine stacks at random yaws over
+  the Test Tank's floor, on CUDA in 60 s, 5 of 9 five-box stacks fell (at 12 to 54 s), 2
+  of 9 three-box stacks and 1 of 9 two-box stacks (eighth review).
+  - Before the pairs' exact shift, a float32 difference of positions rounded those
+    pushes away, and the stacks held for 90 s, but it biased every tilted contact (the
+    seventh review's slope stack, below).
+  - With friction (#88, μ = 0.5) none of the nine five-box stacks moves 1 mm in 60 s.
+  - On a frictionless slope, gravity along its normal, two stacked boxes part the same
+    way, faster as they go: at the origin on CUDA the upper one slides off between 24
+    and 28 s; after 10 s it is off by 1.4 to 1.5 mm 2 m down the slope, 12 to 17 mm 5 m
+    down, and 100 m down the stack falls apart.
+- **Far from the origin, contacts see positions to float32's resolution** (8 µm at
+  100 m), so contact speeds there carry that rounding: a body's speed stays exact in
+  free flight only (ADR 0030 said so of every body before contacts). The sums of the
+  corrections themselves are exact.
 - **Contacts between bodies converge slowly under load.**
   - Stacks of 3, 5 and 10 boxes: the top box sinks 0.5, 1.7 and 7.7 mm (the 10-stack's
     first interface 1.5 mm).
@@ -232,7 +251,7 @@ These are named in SPEC 5.4 and in the module. The numbers were measured on CUDA
 - **Angular momentum.** In V-RB-04's scene (seed 4) it is kept within 8.7e-4 of the sum
   of the bodies' terms' sizes (|x × m v| + |I ω|), 5.8e-3 of the total's size. Seeds 0
   to 9 give 1.5e-4 to 1.35e-3 (seed 8) of the terms' sizes. Linear momentum is kept
-  within 1.4e-5.
+  within 1.8e-7 (1.4e-5 before the pairs' shifts were exact sums).
   - The depth corrections turn each body about where it is during the substep, not where
     it started it. Turning about the start cancels the error, but it adds a torque to
     bodies sliding over each other, so it was not kept.

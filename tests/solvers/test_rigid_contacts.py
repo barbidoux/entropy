@@ -850,7 +850,8 @@ def test_a_stack_resting_on_a_frictionless_slope_stays_stacked(device: str) -> N
     upper box is within 1 mm of where it sat on the lower one. The pairs' corrections
     enter the motion as increments; as a float32 difference of positions they pushed it
     5.9 mm on CUDA and 49 mm on the CPU, and from 10 m down the slope off the lower box
-    (#101's seventh review)."""
+    (#101's seventh review). A frictionless stack stays unstable: left longer, or farther
+    down the slope, it still parts (ADR 0031)."""
     theta = math.radians(30.0)
     normal = np.array([math.sin(theta), 0.0, math.cos(theta)])
     down = np.array([math.cos(theta), 0.0, -math.sin(theta)])
