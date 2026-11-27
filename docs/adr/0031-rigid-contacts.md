@@ -123,12 +123,15 @@ found the following, and they led to the decisions below:
     - With a budget of the motion without contact, as first tried, a body in a pair had
       to be left out, or a box hitting a resting one stopped at half its speed; a box
       spawned in a table beside another then flew at 135 to 163 m/s (fifth review).
-  - The sweep's shift enters the body's displacement as the sum of its corrections,
-    exactly, as ADR 0030 keeps every increment. Taken as a float32 difference of
-    positions, it was biased on any tilted plane: a box sliding down a frictionless 30°
-    slope lost 0.7 % of its speed in 5 s, and a sphere sliding along a slope 100 m from
-    the origin gained 2.3 % in 10 s, which the energy rule did not stop (sixth
-    review).
+  - The sweep's shift, and each pair's, enter the bodies' displacements as the sums of
+    their corrections, exactly, as ADR 0030 keeps every increment. Taken as float32
+    differences of positions, they were biased on any tilted contact:
+    - a box sliding down a frictionless 30° slope lost 0.7 % of its speed in 5 s, and a
+      sphere sliding 100 m down a slope gained 2.2 to 2.8 % in 10 s, which the energy
+      rule did not stop (sixth review);
+    - two boxes stacked on a frictionless 30° slope, gravity pressing them onto it,
+      parted by 5.9 mm in 10 s on CUDA and 49 mm on the CPU at the origin, and 10 m down
+      the slope the upper one slid off (seventh review).
   - A body's static patches are solved by its own thread, one after the other. The
     pairs' patches are solved in parallel, scaled by 1 / (the larger pair count).
   - #88 puts friction and restitution at the same patches.

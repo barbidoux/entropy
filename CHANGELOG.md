@@ -54,8 +54,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   - A long capsule stays on a thin beam.
   - The static solids never give a body energy: a box spawned deep inside a table is
     not flung, and a plank thrown at the floor at 30 m/s does not rebound higher than it
-    fell. Their corrections enter the motion exactly, so a box slides down a
-    frictionless slope at g sin θ t. A box falling beside the tank's outer glass is
+    fell. Their corrections, and the pairs', enter the motion exactly: a box slides down
+    a frictionless slope at g sin θ t, and a stack on it stays stacked. A box falling beside the tank's outer glass is
     untouched.
   - The gyroscopic step is split for fast spins: a thin plank keeps |L| and its energy
     within 4e-4 up to 12,000 rad/s, where it froze the solver with a NaN from about
