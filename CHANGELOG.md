@@ -30,11 +30,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   - The static solids never give a body energy: a box spawned deep inside a table is
     not flung, and a plank thrown at the floor at 30 m/s does not rebound higher than it
     fell. Their corrections, and the pairs', enter the motion exactly: a box slides down
-    a frictionless slope at g sin θ t, and two boxes stacked on such a slope stay
-    together for 10 s near the origin. A box falling beside the tank's outer glass is
+    a frictionless slope at g sin θ t, and two boxes stacked on a frictionless slope,
+    with gravity along its normal, stay together for 10 s near the origin. A box falling beside the tank's outer glass is
     untouched.
-  - Without friction, even a centred stack falls within about a minute (named in ADR
-    0031 with its numbers); friction (#88) holds it.
+  - Without friction a stack is unstable, and off the origin most centred stacks fall
+    within a minute (named in ADR 0031 with its numbers); friction (#88) holds them.
   - The gyroscopic step is split for fast spins: a thin plank keeps |L| and its energy
     within 4e-4 up to 12,000 rad/s, where it froze the solver with a NaN from about
     1,500 rad/s.

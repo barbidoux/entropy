@@ -29,7 +29,9 @@ Simplifications, named (CLAUDE.md rule 7):
   are sampled; a capsule's envelope sags by up to 0.13 r between samples; a fast body
   can cross a thin one where it has no sample, from about 480 s⁻¹ times its thickness;
   small boxes can leave the Test Tank at 30 m/s; without friction, bodies resting
-  off-centre slide off; pairs are Jacobi between them, so stacks sink under load
+  off-centre slide off, so a stack is unstable (10 µm off brings five boxes down in 7 s,
+  and off the origin float32 positions seed it: most centred stacks fall within a
+  minute); pairs are Jacobi between them, so stacks sink under load
   (7.7 mm for 10 boxes of 20 cm), a far heavier body sinks into the one under it, and
   several bodies at once still pop and bounce (12 spheres of 10 cm spawned in a 30 cm
   clump fly apart at up to 19 m/s), and a pile never settles; the static solids never

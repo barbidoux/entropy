@@ -194,17 +194,21 @@ These are named in SPEC 5.4 and in the module. The numbers were measured on CUDA
   - a 4-3-2-1 pyramid collapses;
   - a crate under a slab 64 times heavier is squeezed out after about 2 s.
   Friction (#88) must hold all three; its tests include them.
-- **Without friction, even a centred stack falls within about a minute.** A box's
-  float32 orientation tilts its faces by about 1e-7 rad, and a box resting on another
-  slides down that slope as a frictionless box slides down any: the pair's corrections
-  push the two apart by g × 1e-7 or so, a few tenths of a millimetre in half a minute,
-  and the off-centre slide above finishes the stack. Of nine stacks at random yaws over
-  the Test Tank's floor, on CUDA in 60 s, 5 of 9 five-box stacks fell (at 12 to 54 s), 2
-  of 9 three-box stacks and 1 of 9 two-box stacks (eighth review).
+- **Without friction a stack is unstable, and off the origin most centred stacks fall.**
+  The top box of five set off by 10 µm brings the stack down in 7 to 8 s, before and
+  after the pairs' exact shift, at the origin as at 1.35 m: the off-centre slide above.
+  Off the origin, the contacts' float32 positions (the samples' centres and the lever
+  arms) tilt the boxes by 1e-7 to 1e-6 rad, the tilts line up and grow 3 to 4 times a
+  second, and seed the same fall; at the origin a centred stack does not move. Of nine
+  centred stacks at random yaws over the Test Tank's floor, on CUDA in 60 s, 5 of 9
+  five-box stacks fell (at 12 to 54 s), 2 of 9 three-box stacks and 1 of 9 two-box
+  stacks (eighth and ninth reviews).
   - Before the pairs' exact shift, a float32 difference of positions rounded those
-    pushes away, and the stacks held for 90 s, but it biased every tilted contact (the
-    seventh review's slope stack, below).
-  - With friction (#88, μ = 0.5) none of the nine five-box stacks moves 1 mm in 60 s.
+    pushes away where the stack stood off the origin (at 1.35 m it froze even a 1 mm
+    offset for 60 s), so those stacks held for 90 s; it did not at the origin, and it
+    biased every tilted contact (the seventh review's slope stack, below).
+  - With friction (#88, μ = 0.5) none of the nine five-box stacks moves 1 mm in 60 s,
+    nor do ten-box stacks with μ = 0.1.
   - On a frictionless slope, gravity along its normal, two stacked boxes part the same
     way, faster as they go: at the origin on CUDA the upper one slides off between 24
     and 28 s; after 10 s it is off by 1.4 to 1.5 mm 2 m down the slope, 12 to 17 mm 5 m
