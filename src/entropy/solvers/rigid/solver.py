@@ -41,12 +41,15 @@ Simplifications, named (CLAUDE.md rule 7):
   at its centre of pressure; on a wide patch static friction holds the resting body at
   the patch's anchor, at most μs times the patch's normal impulse, and between bodies,
   static or dynamic, it leaves the lower body's tipping torque to its support, so a box
-  sliding onto another in free fall loses angular momentum; no anchor on a patch that
-  is not wide, so a plank leaning on a wall creeps; no rolling resistance; a round body
-  resting on another can keep a separating speed that does not move it; far from the
-  origin, contacts see float32's resolution, and a block just past its friction angle
-  may stick from about 20 m; one surface material for all the static solids; torsion
-  about 1.4 times too strong on box faces, and dynamic only; bounces 1.3 to 1.7 % low;
+  sliding onto another in free fall loses angular momentum; bounces on several bodies
+  at once share one bounce, and the velocity pass does not know a body's support;
+  friction can give a little energy in fast hits between bodies; no anchor on a patch
+  that is not wide, so a plank leaning on a wall creeps; no rolling resistance, and no
+  torsion at a single contact point; a gentle push springs back by up to 0.2 mm; far
+  from the origin, contacts see float32's resolution, and a block just past its
+  friction angle may stick from about 20 m; one surface material for all the static
+  solids; torsion about 1.4 times too strong on box faces, and dynamic only; bounces
+  1.3 to 1.7 % low;
 - no sleeping yet (#89).
 
 NaN guard (SPEC 5.9): after each step a kernel counts non-finite bodies into a small
@@ -236,8 +239,13 @@ class RigidSolver:
         start = {
             key.removeprefix("before_"): v for key, v in dump.items() if key.startswith("before_")
         }
-        properties = {name: dump[name] for name, _ in _PROPERTIES}
-        solver.restore({"count": int(dump["count"]), **start, **properties})
+        # A dump from before friction (#88) has no coefficients: none made it.
+        count = int(dump["count"])
+        properties = {
+            name: dump[name] if name in dump else np.zeros(count, np.float32)
+            for name, _ in _PROPERTIES
+        }
+        solver.restore({"count": count, **start, **properties})
         return solver
 
     @property
@@ -301,6 +309,7 @@ class RigidSolver:
         self._angular_before_rad_per_s = wp.zeros(n, dtype=wp.vec3, device=device)
         self._kick_m_per_s = wp.zeros(n, dtype=wp.vec3, device=device)
         self._twist_rad_per_s = wp.zeros(n, dtype=wp.vec3, device=device)
+        self._bouncing = wp.zeros(n, dtype=wp.int32, device=device)  # pyright: ignore[reportArgumentType]
         self._kinetic_j = wp.zeros(n, dtype=float, device=device)
         self._contact_count = wp.zeros(1, dtype=wp.int32, device=device)  # pyright: ignore[reportArgumentType]
         self._overflows = wp.zeros(1, dtype=wp.int32, device=device)  # pyright: ignore[reportArgumentType]
@@ -572,10 +581,15 @@ class RigidSolver:
                           slow, h, self._kinetic_j],
                   device=device)  # fmt: skip
         kicks = [self._kick_m_per_s, self._twist_rad_per_s]
+        self._bouncing.zero_()
+        wp.launch(_k.count_bouncing, dim=patches.a.shape[0],
+                  inputs=[patches, positions, *before, properties["restitution"], slow,
+                          self._bouncing],
+                  device=device)  # fmt: skip
         wp.launch(_k.solve_velocities, dim=patches.a.shape[0],
                   inputs=[patches, positions, orientations, *velocities, *before, masses, inertia,
                           properties["dynamic_friction"], properties["restitution"], slow, h,
-                          *kicks],
+                          *kicks, self._bouncing],
                   device=device)  # fmt: skip
         wp.launch(_k.apply_velocity_corrections, dim=count, inputs=[*kicks, *velocities],
                   device=device)  # fmt: skip

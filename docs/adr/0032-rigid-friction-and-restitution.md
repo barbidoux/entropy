@@ -59,10 +59,14 @@ hold across substeps, not only within one.
     substep; the next depth sweep levelled it about its centre, and the block crept down
     by rolling.
   - Between bodies, a wide patch needs one body on top of the other (the normal within
-    60° of the vertical). Friction there, static and dynamic, turns neither body. The
-    torque the shifted normal forces would pass to the lower body, (x_lower − x_upper)
-    × P, is left to the lower body's own support, as the static solids take a resting
-    body's. Given each substep, the support answers only in the next one:
+    60° of the vertical). Friction there, static and dynamic, does not tip either body.
+    The torque the shifted normal forces would pass to the lower body, (x_lower −
+    x_upper) × P, is left to the lower body's own support, as the static solids take a
+    resting body's. Its part about the normal, which normal forces can never hold, turns
+    both bodies: dropped, a box sliding across a broad one on a frictionless floor, 25 cm
+    off its centre line, left it unturned and lost 89 % of the angular momentum about
+    the vertical in 0.5 s (#102's second review); now it is kept to 1e-4. Given each
+    substep, the tipping part was answered by the support only in the next one:
     - in static friction, the turn and the next sweep's levelling moved the anchor on
       the lower body's face by about 60 µm a substep against 17 µm of sliding, and a box
       resting on another on a slope 3° under its friction angle crept up to 4.5 mm in
@@ -71,7 +75,13 @@ hold across substeps, not only within one.
       a turn each substep, and they crept apart (boxes 4 and 8 cm off-centre on others,
       the pyramid, the crate, centred stacks); kept to bodies sliding at μd N, the
       torque still made a box slide 6 % too fast on a broad box held on a slope.
-    So where nothing supports the lower body, the angular momentum is not kept (below).
+    So where nothing supports the lower body, the angular momentum about the tipping
+    axes is not kept (below).
+  - Between bodies, static friction measures the sliding from the motion before the
+    pair's own corrections: the turn its depth corrections give the bodies is no
+    sliding. Cancelling it, friction flung two boxes spawned 1 cm into each other apart
+    with 24 J and 18 rad/s (#102's second review), and fed a capsule resting on a box a
+    vertical speed of 8 mm/s that did not move it; both are now gone.
   - On a patch that is not wide (a sphere, a capsule lying across the slope, a tall
     narrow box), friction acts at the centre of pressure and turns the body, so a ball
     rolls.
@@ -88,7 +98,8 @@ hold across substeps, not only within one.
     forces hold. Between bodies it sits on the lower body, which carries it as it moves
     and turns: the upper body's centre is kept in the lower body's frame. Held above a
     fixed point in the world instead, a box on a plank tilting to 20° slid 35 mm uphill,
-    its height times the tilt (#102's review); it now rides the plank within 0.02 mm.
+    its height times the tilt (#102's review); it now rides the plank within 0.1 mm
+    (0.7 mm turned 30° and 30 cm from the axis).
   - On a static solid the anchor is a fixed point, so the rounding of a resting body's
     float32 position is undone instead of summed. Without it, a box on a box 100 m down
     a slope 3° under the friction angle crept 1.9 mm in 5 s (#102's review), and now
@@ -127,11 +138,16 @@ hold across substeps, not only within one.
   - **Restitution:** the separating speed at the centre of pressure becomes e times the
     approaching speed before the substep, or the separating speed it had if the bodies
     were already separating. There is no bounce below 2|g|h, so resting bodies do not
-    jitter.
+    jitter. Between bodies, a bounce is shared only with the bodies' other bouncing
+    patches (`count_bouncing`), not with all their pairs: in the next substep the pair
+    counts as separating, so a share given then is never completed. Shared with all, a
+    ball dropped 1 m with e = 0.8 onto a slab resting on another rose 0.020 m instead of
+    0.64 m (#102's second review), and now 0.60 m; with no share at all, a box landing
+    across two boxes gained energy and rose 2.02 m.
   - **Dynamic friction:** an impulse against the sliding there, of at most μd times the
     patch's normal impulse in the substep. That impulse is its depth corrections over h
     plus the restitution's impulse, so a contact met right at the surface still rubs.
-    On a wide patch it acts as static friction does, without turning either body.
+    On a wide patch it acts as static friction does, without tipping either body.
   - **Friction against turning about the normal** (torsion): at most μd times the
     normal impulse times the patch's torsion radius, the root-mean-square distance of
     its points from the centre of pressure. Without it, one point has no lever against
@@ -160,19 +176,25 @@ On CUDA, 2026-11-27, except where noted.
 | A small box on a broad one held on a slope 1° past the pair's angle | 0.1904 m/s², the lower one 0.002 mm | 0.1914 m/s² |
 | A sphere on a 20° slope, μ = 0.6 | rolls at 2.397 m/s after 1 s, spin = v/r | (5/7) g sin θ t = 2.397 m/s |
 | A box spun flat at 10 rad/s, μ = 0.5 | stops in 0.25 s | 0.36 s under an even pressure |
-| A 20 cm box on a plank tilting to 20° at 0.3 rad/s, μ = 0.6 | moves 0.02 mm on the plank | rides it |
+| A 20 cm box on a plank tilting to 20° at 0.3 rad/s, μ = 0.6 | moves 0.09 mm on the plank; 0.74 mm turned 30° and 30 cm from the axis | rides it |
+| The same plank tilting on to 40° | the box slides from 32.9° | 31° |
+| A box kicked to 0.2 m/s on the floor, μ = 0.5 | slides 4.10 mm | v²/2μg = 4.08 mm |
+| A ball dropped 1 m, e = 0.8, onto the floor; a slab on the floor; a slab on a slab | rises 0.632; 0.615; 0.596 m | e² = 0.64 m |
+| A box sliding at 2 m/s across a broad box on a frictionless floor, 25 cm off its centre | L_z kept to 1e-4, the broad box turns at 0.48 rad/s after 0.5 s | L_z kept |
+| Two 20 cm boxes spawned 1 to 6 cm into each other, turned up to 45°, μ = 0.5, no gravity | 0.00 J after one frame | 0.00 J, as frictionless |
 | μ = 0.5, each body's largest move over 10 s after 1 s to settle: | | |
 | a box 1, 4 or 8 cm off-centre on an equal one | 0.000 mm | under 1 mm (the tests) |
-| a 4-3-2-1 pyramid; a 6-row one | 0.025 mm; 0.28 mm | under 1 mm |
+| a 4-3-2-1 pyramid; a 6-row one | 0.025 to 0.084 mm; 0.27 mm | under 1 mm |
 | a crate under a slab 64 times heavier | 0.37 mm | under 1 mm |
-| four boxes stacked as stairs, each 3 cm past the one under it | 1.0 mm | |
-| boxes on a slope (5 s, 4 starts): 2 at 3°, 1° and 0.5° under atan μ; 3 at 1°; 5 at 3° | at most 0.028 mm | under 1 mm |
-| a box on a box 3° under atan μ, 5 to 100 m down the slope (5 s) | at most 0.004 mm | under 1 mm |
+| four boxes stacked as stairs, each 3 cm past the one under it | 0.7 mm | |
+| boxes on a slope (5 s, 4 starts): 2 at 3°, 1° and 0.5° under atan μ; 3 at 1°; 5 at 3° | at most 0.063 mm | under 1 mm |
+| a box on a box 3° under atan μ, 5 to 100 m down the slope (5 s) | at most 0.008 mm | under 1 mm |
 
 Between bodies, ADR 0031's numbers stand: stacks sink 0.5, 1.7 and 7.7 mm for 3, 5 and
 10 boxes; 27 boxes spawned 5 cm into each other fly apart at 12.2 m/s; V-RB-04 keeps the
 angular momentum within 8.7e-4 of its terms (seed 4; 1.35e-3 at worst over seeds 0 to 9)
-and the linear within 1.6e-7.
+and the linear within 1.9e-7. Run to run on CUDA, the stacks' small moves vary (the
+pyramid 0.025 to 0.084 mm).
 
 ## Named simplifications
 
@@ -180,38 +202,49 @@ These are named in SPEC 5.4 and in the module.
 
 - **One surface material for all the static solids** (`RigidSetup`), until maps give
   their surfaces materials.
-- **Friction between bodies does not turn the lower one** (above). A lower body that
+- **Friction between bodies does not tip the lower one** (above). A lower body that
   cannot hold the torque, a ball under a box, misses it. In free fall, where nothing
   supports either, a box sliding onto another at 2 m/s, μ = 0.5, loses 29 % of their
   angular momentum about their centre of mass in 0.2 s (1 % with no gravity, where no
   body is on top).
+- **Bounces on several bodies at once share one bounce**, and the velocity pass does not
+  know a body's support. A plank landing flat across two blocks rises 0.03 m where e² =
+  0.64 m, a box landing across two boxes 0.27 m, and a ball on a 20 cm box resting on a
+  slab 0.23 m, the box being pushed into the slab. #90's graph colouring (Gauss–Seidel
+  between pairs) is the way.
+- **Friction can give a little energy in fast hits between bodies.** Its position
+  correction undoes the sliding the bodies' motion would have made, which the depth
+  corrections may already have turned away: over 60 random hits of two boxes at 2 to
+  8 m/s, e = 1 and μ = 0.5, the worst ends with 1.075 times its energy (frictionless
+  1.000); most lose some. Real materials have e < 1.
 - **A patch that is not wide has no anchor.** Its static friction undoes one substep's
   sliding, so Jacobi's leftover is lost there, and between two narrow patches one
   Gauss–Seidel pass leaves a little sliding each substep. A plank leaning on a wall
   (both ends on edges), μ = 0.5, holds in statics up to 53° from the vertical; it
   creeps 11, 26 and 47 mm in 20 s at 30, 40 and 45°, and slides off at 50°. So is a
   pair past its body's row of `PAIRS_PER_BODY` anchors.
-- **No rolling resistance.** A ball rolled on the floor keeps its speed (0.465 m/s, 5 m
-  in 10 s), and a sphere knocked out of a stack rolls on. With spheres in a pile, the
-  spheres keep moving after the boxes stop.
-- **A round body resting on another can keep a separating speed that does not move
-  it.** The velocity pass keeps the separating speed a patch had, and friction feeds it:
-  a capsule lying 5 cm off-centre on a box (μ = 0.5) gains a vertical speed of 8 mm/s in
-  60 s while its height stays put, rocks with a growing swing, and rolls off after about
-  140 s. ADR 0031's off-centre load also tilts the box under it by 1 to 3 µrad, so the
-  capsule drifts off even without friction, more slowly. Simply aiming at no separation
-  below 2|g|h removed the false speed but left a tilted box landing on a frictionless
-  floor turning at 0.1 rad/s. Sleeping (#89) needs true zero speeds at rest: it takes
-  this up.
+- **No rolling resistance, and no torsion at one point.** A ball rolled on the floor
+  keeps its speed (0.465 m/s, 5 m in 10 s), and a sphere knocked out of a stack rolls
+  on; with spheres in a pile, the spheres keep moving after the boxes stop. A sphere
+  spun about the vertical on the floor keeps spinning: its single contact gives the
+  torsion no lever.
+- **A round body resting off-centre on another drifts.** ADR 0031's off-centre load
+  tilts the box under it by 1 to 3 µrad, so a capsule lying 5 cm off-centre on a box
+  rolls 3.9 mm in 60 s, even with friction.
+- **A gentle push springs back a little.** The anchor keeps the sliding left within the
+  0.2 mm window and undoes it later: a box kicked to 0.1 m/s slides 0.96 mm and settles
+  back to 0.93 mm, where v²/2μg is 1.02 mm.
+- **A dynamic friction above the static one** is taken as given: past μs the patch's
+  friction is clamped to μd, so it holds up to μd. Materials have μd ≤ μs.
 - **Far from the origin, contacts see float32's resolution** (ADR 0030, 0031): depths and
   slips are rounded to about 1 µm at 10 m and 8 µm at 100 m, against 0.8 µm of a
   substep's sliding 1° past the friction angle. A block 1° above it slides 9 % short
   over 1 s at 10 m (V-RB-03 still holds), half as far at 20 m and not at all at 100 m;
   below it, it holds everywhere. The Street (M8) will need positions relative to a
   local origin.
-- **Piles still move.** A pile of 100 random boxes on the floor has 7 to 16 of them
-  moving over 1 mm between 15 and 25 s (seeds 0 to 4), up to 0.12 m; sleeping (#89)
-  stops them.
+- **Piles still move.** A pile of 100 random boxes on the floor has 5 to 17 of them
+  moving over 1 mm between 15 and 25 s (seeds 0 to 4, run to run on CUDA), up to
+  0.15 m; sleeping (#89) stops them.
 - **Torsion is too strong on box faces.** A box's samples weigh its corners and edges
   more than an even pressure would. The torsion radius comes out about 1.4 times too
   large, so a spinning box stops about 1.4 times too soon. Torsion has dynamic friction
@@ -243,7 +276,13 @@ Measured on the CPU in the tests' scenes, except where noted.
   rule). The dips of the per-substep normal impulse broke it: two boxes on a slope 1°
   under the friction angle slid 64 mm in 5 s, on the CPU as on CUDA.
 - **Turning the lower body, in static or dynamic friction** (above). It keeps the
-  angular momentum in free fall but not a supported stack at rest.
+  angular momentum in free fall but not a supported stack at rest. Its part about the
+  normal is given (above); left out, the yaw a sliding box gives the body under it was
+  lost.
+- **A pair's sliding measured with its own corrections** (Müller et al.'s current
+  positions). Bodies pushed out of an overlap were flung apart (above).
+- **A bounce shared with all of a body's pairs** (1 / n, as the depths), **or with none**:
+  dead bounces on stacks, or energy gained by bodies hit twice at once (above).
 - **Anchors on every patch.** A ball's anchor, a point of its surface, rolled away and
   dragged it back: 10 % too slow down a slope.
 - **Clamping without skipping dynamic friction.** It counted friction twice: V-RB-03's
@@ -279,5 +318,5 @@ Measured on the CPU in the tests' scenes, except where noted.
 - A pushed box starts sliding late, or too slowly once it does.
 - A ball on a box does not roll off, or a box rolls like a ball.
 - Spinning boxes stop visibly too fast, or keep spinning.
-- Bounces look dead or too lively against the material's e.
+- Bounces look dead or too lively against the material's e, on the floor or on a stack.
 - Spawned piles fly apart (the spawner, #93), or settled bodies keep trembling.

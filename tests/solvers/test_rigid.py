@@ -381,6 +381,32 @@ def test_a_dump_replays_its_frame(tmp_path) -> None:
     np.testing.assert_array_equal(replay.body_orientations()[:2], dump["orientations"][:2])
 
 
+def test_a_dump_from_before_friction_replays_frictionless(tmp_path) -> None:
+    """A dump written before friction (#88) has no coefficients and no anchors: it
+    replays with none, which is what made it, bit for bit on the CPU (rule 8: old dumps
+    stay regression tests)."""
+    floor = Solids((HalfSpace((0.0, 0.0, 0.0), (0.0, 0.0, 1.0)),)).to_device("cpu")
+    setup = RigidSetup(gravity_m_per_s2=GRAVITY, max_bodies=8, dump_dir=tmp_path, solids=floor)
+    solver = RigidSolver.create(setup, "cpu")
+    solver.add_bodies([_box(position_m=(0.0, 0.0, 0.1)), _box(position_m=(0.02, 0.0, 0.3)),
+                       _box(position_m=(3.0, 0.0, 5.0))])  # fmt: skip
+    for _ in range(20):
+        solver.step(1.0 / 60.0)
+    solver.set_body_velocity(2, (math.nan, 0.0, 0.0))
+    solver.step(1.0 / 30.0)
+    with pytest.raises(NonFiniteStateError) as raised:
+        solver.step(1.0 / 60.0)
+    newer = ("friction", "restitution", "anchor")
+    dump = {
+        k: v for k, v in load_dump(raised.value.dump_path).items() if not any(w in k for w in newer)
+    }
+
+    replay = RigidSolver.from_dump(dump, "cpu")
+    replay.step(float(dump["dt_s"]))
+
+    np.testing.assert_array_equal(replay.body_positions()[:2], dump["positions_m"][:2])
+
+
 def test_a_nan_orientation_is_caught(device: str, tmp_path) -> None:
     """A NaN orientation is caught by the NaN guard at the next call: it reaches the
     angular velocity, recovered from the substep's rotation vectors, even where Warp's

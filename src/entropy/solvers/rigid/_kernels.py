@@ -1318,12 +1318,12 @@ def solve_pairs(
         if mu > 0.0:
             ra = point - place_a
             rb = point - place_b
-            start_a = (
-                xa - displacement_m[a] + wp.quat_rotate_inv(turn[a], ra - wp.cross(spin_a, ra))
-            )
-            start_b = (
-                xb - displacement_m[b] + wp.quat_rotate_inv(turn[b], rb - wp.cross(spin_b, rb))
-            )
+            # Where the bodies' material points at `point` were when the substep began,
+            # traced back through the motion before this pair's corrections: the turn the
+            # depth corrections give is no sliding, and cancelling it flung bodies pushed
+            # out of an overlap apart (#102's second review).
+            start_a = xa - displacement_m[a] + wp.quat_rotate_inv(turn[a], point - xa)
+            start_b = xb - displacement_m[b] + wp.quat_rotate_inv(turn[b], point - xb)
             slip = start_b - start_a  # a's point moved by point - start_a, b's by point - start_b
             slip = slip - wp.dot(slip, n) * n
             stuck = int(0)  # noqa: UP018, RUF046 (a mutable int for Warp)
@@ -1393,6 +1393,13 @@ def solve_pairs(
                         )
                         spin_b = spin_b - _inverse_inertia_world(
                             qb, inertia_kg_m2[b], wp.cross(rb, push)
+                        )
+                    else:  # the normal forces cannot hold its torque about the normal
+                        spin_a = spin_a + _inverse_inertia_world(
+                            qa, inertia_kg_m2[a], wp.dot(wp.cross(ra, push), n) * n
+                        )
+                        spin_b = spin_b - _inverse_inertia_world(
+                            qb, inertia_kg_m2[b], wp.dot(wp.cross(rb, push), n) * n
                         )
             if entry >= 0 and stuck == 0:  # the anchor, where the bodies are now
                 ca = place_a - place_b  # each centre in the other body's frame
@@ -1507,6 +1514,51 @@ def _point_velocity(
     return velocity[body] + wp.cross(angular[body], point - position_m[body])
 
 
+@wp.func
+def _approach(
+    p: int,
+    patches: Patches,
+    position_m: wp.array(dtype=wp.vec3),
+    velocity_before_m_per_s: wp.array(dtype=wp.vec3),
+    angular_before_rad_per_s: wp.array(dtype=wp.vec3),
+) -> float:
+    """Patch p's normal speed at its centre of pressure before the substep (m/s), a's
+    away from b; negative when they were closing."""
+    point = patches.moment[p] / patches.impulse[p]
+    n = wp.normalize(patches.normal[p])
+    a = patches.a[p]
+    b = patches.b[p]
+    before = _point_velocity(
+        a, point, position_m, velocity_before_m_per_s, angular_before_rad_per_s
+    ) - _point_velocity(b, point, position_m, velocity_before_m_per_s, angular_before_rad_per_s)
+    return wp.dot(before, n)
+
+
+@wp.kernel
+def count_bouncing(
+    patches: Patches,
+    position_m: wp.array(dtype=wp.vec3),
+    velocity_before_m_per_s: wp.array(dtype=wp.vec3),
+    angular_before_rad_per_s: wp.array(dtype=wp.vec3),
+    restitution: wp.array(dtype=float),
+    slow_m_per_s: float,
+    bouncing: wp.array(dtype=wp.int32),
+):
+    """Each body's patches that bounce this substep (`bouncing`, cleared before): the
+    pair has some restitution and was closing faster than `slow_m_per_s` (2|g|h)."""
+    p = wp.tid()
+    if p >= wp.min(patches.count[0], patches.a.shape[0]):
+        return
+    if patches.impulse[p] <= 0.0 or wp.length(patches.normal[p]) <= 0.0:
+        return
+    a = patches.a[p]
+    b = patches.b[p]
+    approach = _approach(p, patches, position_m, velocity_before_m_per_s, angular_before_rad_per_s)
+    if wp.max(restitution[a], restitution[b]) > 0.0 and approach < -slow_m_per_s:
+        wp.atomic_add(bouncing, a, 1)
+        wp.atomic_add(bouncing, b, 1)
+
+
 @wp.kernel
 def solve_velocities(
     patches: Patches,
@@ -1524,12 +1576,14 @@ def solve_velocities(
     dt_s: float,
     kick_m_per_s: wp.array(dtype=wp.vec3),
     twist_rad_per_s: wp.array(dtype=wp.vec3),
+    bouncing: wp.array(dtype=wp.int32),
 ):
     """The velocity pass of the pairs' patches, in parallel, at each one's centre of
     pressure: restitution, dynamic friction and the friction against turning about the
     normal as `solve_static_velocities`, with the larger e of the two bodies and the
     geometric mean of their μd, scaled by 1 / (the larger pair count of the two) and
-    given to both alike, so both momenta are kept. The friction's bound is not scaled:
+    given to both alike, so both momenta are kept; a bounce is scaled by 1 / (the larger
+    count of bouncing patches, `count_bouncing`) instead. The friction's bound is not scaled:
     it is the patch's own normal impulse. On a wide patch with a body on top, both bodies
     slow without turning: the torque the upper body's shifted normal forces would pass to
     the lower one, (x_lower - x_upper) x P, is left to the lower body's support, as in
@@ -1551,19 +1605,19 @@ def solve_velocities(
     scale = 1.0 / float(wp.max(patches.per_body[a], patches.per_body[b]))
     v = _point_velocity(a, point, position_m, velocity_m_per_s, angular_velocity_rad_per_s)
     v = v - _point_velocity(b, point, position_m, velocity_m_per_s, angular_velocity_rad_per_s)
-    before = _point_velocity(
-        a, point, position_m, velocity_before_m_per_s, angular_before_rad_per_s
-    )
-    before = before - _point_velocity(
-        b, point, position_m, velocity_before_m_per_s, angular_before_rad_per_s
-    )
-    approach = wp.dot(before, n)
+    approach = _approach(p, patches, position_m, velocity_before_m_per_s, angular_before_rad_per_s)
     e = wp.max(restitution[a], restitution[b])
     if wp.abs(approach) <= slow_m_per_s:
         e = 0.0
     vn = wp.dot(v, n)
     weight = _weight(a, b, point, n, position_m, orientation, masses_kg, inertia_kg_m2)
-    normal_impulse = scale * (wp.max(-e * approach, approach) - vn) / weight
+    # A bounce is shared only with the bodies' other bouncing patches: a resting one asks
+    # nothing of the same speed, and shared with it the rest of the bounce was never given,
+    # the pair counting as separating in the next substep.
+    share = scale
+    if e > 0.0 and approach < 0.0:
+        share = 1.0 / float(wp.max(1, wp.max(bouncing[a], bouncing[b])))
+    normal_impulse = share * (wp.max(-e * approach, approach) - vn) / weight
     _push(a, b, point, normal_impulse * n, position_m, orientation, masses_kg, inertia_kg_m2,
           kick_m_per_s, twist_rad_per_s)  # fmt: skip
     mu = _mean(dynamic_friction[a], dynamic_friction[b])
@@ -1585,6 +1639,15 @@ def solve_velocities(
             rub = -wp.min(mu * pressing, scale * sliding / (1.0 / ma + 1.0 / mb)) * t  # on a
             wp.atomic_add(kick_m_per_s, a, rub / ma)
             wp.atomic_sub(kick_m_per_s, b, rub / mb)
+            # Its torque about the normal, which the normal forces cannot hold, turns both.
+            ta = wp.dot(wp.cross(point - position_m[a], rub), n) * n
+            tb = wp.dot(wp.cross(point - position_m[b], rub), n) * n
+            wp.atomic_add(
+                twist_rad_per_s, a, _inverse_inertia_world(orientation[a], inertia_kg_m2[a], ta)
+            )
+            wp.atomic_sub(
+                twist_rad_per_s, b, _inverse_inertia_world(orientation[b], inertia_kg_m2[b], tb)
+            )
         else:
             weight = _weight(a, b, point, t, position_m, orientation, masses_kg, inertia_kg_m2)
             rub = -wp.min(mu * pressing, scale * sliding / weight) * t

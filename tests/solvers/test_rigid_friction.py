@@ -42,6 +42,25 @@ def test_a_sliding_box_stops_where_kinetic_friction_says(device: str) -> None:
     assert np.abs(solver.body_velocities()[0]).max() < 1e-3
 
 
+def test_a_box_kicked_gently_stops_where_kinetic_friction_says(device: str) -> None:
+    """A 20 cm box resting on the floor, kicked to 0.2 m/s, μ = 0.5: it slides v²/(2μg) =
+    4.08 mm, within 5 %, and stays there. The anchor keeps the sliding left within its
+    0.2 mm window and undoes it later: with a 2 mm window, the box sprang back to 2.1 mm
+    (#102's second review)."""
+    solver = _solver(device, static_friction=0.5, dynamic_friction=0.5)
+    solver.add_bodies([_box((0.0, 0.0, 0.1))])
+    for _ in range(30):
+        solver.step(1.0 / 60.0)
+    start = float(solver.body_positions()[0, 0])
+    solver.set_body_velocity(0, (0.2, 0.0, 0.0))
+
+    for _ in range(60):
+        solver.step(1.0 / 60.0)
+
+    travelled = float(solver.body_positions()[0, 0]) - start
+    assert travelled == pytest.approx(0.2**2 / (2.0 * 0.5 * G), rel=0.05)
+
+
 def test_without_friction_a_box_keeps_sliding(device: str) -> None:
     """The defaults: no friction and no bounce unless a body or the surface has some."""
     solver = _solver(device)
@@ -102,6 +121,50 @@ def test_a_box_dropped_flat_bounces_as_a_sphere_does(device: str) -> None:
     assert np.abs(solver.body_angular_velocities()[0]).max() < 1e-3
 
 
+def test_a_ball_bounces_on_a_stack_as_on_the_floor(device: str) -> None:
+    """A ball dropped 1 m onto a heavy slab resting on another, e = 0.8: it rises e² of
+    its fall within 10 %, as on the floor. The bounce is shared among the patches that
+    bounce, not with the slab's resting one: shared with it, the ball rose 2 cm (#102's
+    second review)."""
+    solver = _solver(device, restitution=0.8)
+    slab = {"half": (0.5, 0.5, 0.05), "density": 2400.0, "restitution": 0.8}
+    solver.add_bodies([_box((0.0, 0.0, 0.05), **slab), _box((0.0, 0.0, 0.15), **slab),
+                       Body(Shape.SPHERE, (0.1, 0.0, 0.0), 600.0, position_m=(0.0, 0.0, 1.3),
+                            restitution=0.8)])  # fmt: skip
+    peak, rising = 0.0, False
+    for _ in range(2 * 480):
+        solver.step(1.0 / 480.0)
+        z, vz = solver.body_positions()[2, 2], solver.body_velocities()[2, 2]
+        rising = rising or vz > 0.0
+        if rising:
+            peak = max(peak, z - 0.3)
+            if vz < 0.0:
+                break
+
+    assert peak == pytest.approx(0.8**2, rel=0.1)
+
+
+def test_a_box_landing_on_two_boxes_at_once_gains_no_energy(device: str) -> None:
+    """A 20 cm box dropped 1 m flat across two heavy boxes, e = 0.8: both patches bounce
+    in the same substep and share the bounce, so the box rises no higher than e² of its
+    fall (0.27 m: a named limit, ADR 0032). Each giving the whole bounce, it rose 2.02 m
+    (#102's second review)."""
+    solver = _solver(device, restitution=0.8)
+    under = [_box((x, 0.0, 0.1), density=5000.0, restitution=0.8) for x in (-0.1001, 0.1001)]
+    solver.add_bodies([*under, _box((0.0, 0.0, 1.3), restitution=0.8)])
+    peak, rising = 0.0, False
+    for _ in range(2 * 480):
+        solver.step(1.0 / 480.0)
+        z, vz = solver.body_positions()[2, 2], solver.body_velocities()[2, 2]
+        rising = rising or vz > 0.0
+        if rising:
+            peak = max(peak, z - 0.3)
+            if vz < 0.0:
+                break
+
+    assert 0.0 < peak <= 0.8**2
+
+
 def test_friction_between_bodies_keeps_momentum(device: str) -> None:
     """No gravity: a sphere spinning at 20 rad/s grazes a box, both with friction. The
     friction pushes the box sideways (0.24 m/s; exactly 0 without friction) and slows the
@@ -128,6 +191,40 @@ def test_friction_between_bodies_keeps_momentum(device: str) -> None:
     assert solver.body_angular_velocities()[0, 2] < 15.0  # and slowed the sphere's spin
 
 
+def _kinetic_energy(solver: RigidSolver) -> float:
+    """The bodies' kinetic energy (J), linear and angular."""
+    state = solver.checkpoint()
+    m = state["masses_kg"].astype(np.float64)
+    inertia = state["inertia_kg_m2"].astype(np.float64)
+    v = solver.body_velocities().astype(np.float64)
+    w = solver.body_angular_velocities().astype(np.float64)
+    total = 0.5 * float((m * (v * v).sum(axis=1)).sum())
+    for i, q in enumerate(solver.body_orientations()):
+        spin = _rotation(q).T @ w[i]
+        total += 0.5 * float(spin @ (inertia[i] * spin))
+    return total
+
+
+@pytest.mark.parametrize("tilt_deg", [0.0, 45.0])
+def test_friction_gives_no_energy_to_bodies_pushed_out_of_an_overlap(
+    device: str, tilt_deg: float
+) -> None:
+    """Two 20 cm boxes spawned 1 cm into each other at rest, the second turned, μ = 0.5,
+    no gravity: the depths push them apart with no speed to speak of, as without friction
+    (ADR 0031). Friction must not take the turn the depth corrections give for sliding:
+    cancelling it, it flung them apart with 24 J and 18 rad/s at 45° (#102's second
+    review)."""
+    solver = _solver(device, solids=None, gravity=(0.0, 0.0, 0.0))
+    half = math.radians(tilt_deg) / 2.0
+    axis = np.array([1.0, 0.7, 0.3]) / np.linalg.norm([1.0, 0.7, 0.3])
+    turn = (*(math.sin(half) * axis), math.cos(half))
+    solver.add_bodies([_box((0.0, 0.0, 0.0)), _box((0.19, 0.03, 0.05), orientation=turn)])
+
+    solver.step(1.0 / 60.0)
+
+    assert _kinetic_energy(solver) < 0.05
+
+
 def _rotation(q) -> np.ndarray:
     """The rotation matrix of a unit quaternion (x, y, z, w)."""
     x, y, z, w = (float(c) for c in q)
@@ -138,6 +235,38 @@ def _rotation(q) -> np.ndarray:
             [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)],
         ]
     )
+
+
+def test_a_box_sliding_across_another_off_centre_turns_it(device: str) -> None:
+    """A 20 cm box sliding at 2 m/s across a broad box on a frictionless floor, 25 cm off
+    its centre line, μ = 0.5 between them: gravity and the floor act along z, so the
+    angular momentum about z is kept, within 1 % over 0.5 s, and the broad box turns.
+    The normal forces of a wide patch hold friction's tipping torque, not its torque
+    about the normal: dropped, the broad box never turned and L_z fell by 89 % (#102's
+    second review)."""
+    solver = _solver(device)
+    solver.add_bodies([_box((0.0, 0.0, 0.05), half=(0.4, 0.4, 0.05)),
+                       _box((-0.3, 0.25, 0.2), velocity_m_per_s=(2.0, 0.0, 0.0))])  # fmt: skip
+
+    def spin_z() -> float:
+        state = solver.checkpoint()
+        m = state["masses_kg"].astype(np.float64)
+        inertia = state["inertia_kg_m2"].astype(np.float64)
+        x = solver.body_positions().astype(np.float64)
+        v = solver.body_velocities().astype(np.float64)
+        w = solver.body_angular_velocities().astype(np.float64)
+        total = 0.0
+        for i, q in enumerate(solver.body_orientations()):
+            r = _rotation(q)
+            total += float((r @ (inertia[i] * (r.T @ w[i])))[2] + m[i] * np.cross(x[i], v[i])[2])
+        return total
+
+    before = spin_z()
+    for _ in range(30):
+        solver.step(1.0 / 60.0)
+
+    assert spin_z() == pytest.approx(before, rel=0.01)
+    assert abs(solver.body_angular_velocities()[0, 2]) > 0.1
 
 
 @pytest.mark.parametrize("value", [-0.1, 1.5, math.nan])
@@ -173,12 +302,20 @@ def _drift(solver: RigidSolver, seconds: float) -> float:
     return float(np.linalg.norm(solver.body_positions() - settled, axis=1).max())
 
 
-@pytest.mark.parametrize("offset_m", [0.01, 0.04, 0.08])
-def test_with_friction_a_box_off_centre_on_another_stays(device: str, offset_m: float) -> None:
+@pytest.mark.parametrize(
+    ("offset_m", "upper_first"),
+    [(0.01, False), (0.04, False), (0.08, False), (0.04, True)],
+    ids=["1cm", "4cm", "8cm", "4cm-upper-first"],
+)
+def test_with_friction_a_box_off_centre_on_another_stays(
+    device: str, offset_m: float, upper_first: bool
+) -> None:
     """A box resting on an equal one, offset by 1, 4 or 8 cm, μ = 0.5: it stays for 10 s
-    (moves under 1 mm), where without friction it slides off (ADR 0031)."""
+    (moves under 1 mm), where without friction it slides off (ADR 0031); also with the
+    upper box listed first, which takes the other branch of the pair's rule."""
     solver = _solver(device, static_friction=0.5, dynamic_friction=0.5)
-    solver.add_bodies([_box((0.0, 0.0, 0.1)), _box((offset_m, 0.0, 0.3))])
+    boxes = [_box((0.0, 0.0, 0.1)), _box((offset_m, 0.0, 0.3))]
+    solver.add_bodies(boxes[::-1] if upper_first else boxes)
 
     assert _drift(solver, 10.0) < 1e-3
 
@@ -226,46 +363,84 @@ def test_with_friction_a_box_on_a_box_holds_on_a_slope(device: str, margin_deg: 
     assert _drift(solver, 5.0) < 1e-3
 
 
-@pytest.mark.parametrize("plank", [0, 1], ids=["plank-first", "box-first"])
-def test_with_friction_a_box_rides_a_tilting_plank(device: str, plank: int) -> None:
-    """A 20 cm box resting on a plank that turns about its centre to 20° at 0.3 rad/s,
-    driven as a tool would hold it, μ = 0.6 (31°), no floor: the box rides the plank,
-    moving under 1 mm in the plank's frame, whichever of the two has the lower index.
-    Static friction holds the upper body's centre where the lower body carries it: held
-    above the anchor in the world instead, the box slid 35 mm uphill, its height times
-    the tilt (#102's review)."""
+def _tilting_plank(device: str, plank: int, yaw_deg: float, until_deg: float, along_m: float = 0.0):
+    """A 20 cm box (turned by `yaw_deg` about z, `along_m` along the plank from its
+    middle) resting on a heavy plank that turns about its centre at 0.3 rad/s from 0.5 s
+    on, to `until_deg`, driven as a tool would hold it, μ = 0.6 (31°), no floor; `plank`
+    is its index. Yields (the plank's angle in degrees, the box's centre in the plank's
+    frame) after each 1/480 s step."""
     solver = _solver(device, solids=None, static_friction=0.6, dynamic_friction=0.6)
+    half = math.radians(yaw_deg) / 2.0
     bodies = [
         _box((0.0, 0.0, 0.0), half=(1.0, 0.5, 0.05), density=1.0e5,
              static_friction=0.6, dynamic_friction=0.6),
-        _box((0.0, 0.0, 0.15), static_friction=0.6, dynamic_friction=0.6),
+        _box((along_m, 0.0, 0.15), orientation=(0.0, 0.0, math.sin(half), math.cos(half)),
+             static_friction=0.6, dynamic_friction=0.6),
     ]  # fmt: skip
     solver.add_bodies(bodies if plank == 0 else bodies[::-1])
     box = 1 - plank
-    h, rate, tilt = 1.0 / 480.0, 0.3, math.radians(20.0)
-    start, on_plank = None, np.zeros(3)
-    for k in range(round((0.5 + tilt / rate) / h)):
+    h, rate = 1.0 / 480.0, 0.3
+    for k in range(round((0.5 + math.radians(until_deg) / rate) / h)):
         solver.step(h)
         angle = rate * max(0.0, (k + 1) * h - 0.5)
         state = solver.checkpoint()
         state["positions_m"][plank] = 0.0
         state["orientations"][plank] = (0.0, math.sin(angle / 2.0), 0.0, math.cos(angle / 2.0))
-        state["velocities_m_per_s"][plank] = 0.0
+        # Held still: the next substep's gravity is taken back in advance, so the plank
+        # does not fall and press the box twice as hard as its weight.
+        state["velocities_m_per_s"][plank] = -np.asarray(GRAVITY) * h
         state["angular_velocities_rad_per_s"][plank] = (0.0, rate if angle > 0.0 else 0.0, 0.0)
         solver.restore(state)
-        on_plank = _rotation(state["orientations"][plank]).T @ solver.body_positions()[box]
+        yield (
+            math.degrees(angle),
+            _rotation(state["orientations"][plank]).T @ (solver.body_positions()[box]),
+        )
+
+
+@pytest.mark.parametrize(
+    ("plank", "yaw_deg", "along_m"),
+    [(0, 0.0, 0.0), (1, 30.0, 0.3)],
+    ids=["plank-first", "box-first-turned-off-centre"],
+)
+def test_with_friction_a_box_rides_a_tilting_plank(
+    device: str, plank: int, yaw_deg: float, along_m: float
+) -> None:
+    """A box on a plank tilting to 20°, under its friction angle of 31°: it rides the
+    plank, moving under 1 mm in the plank's frame, whichever of the two has the lower
+    index, also turned and 30 cm from the axis. Static friction holds the upper body's
+    centre where the lower body carries it: held above the anchor in the world instead,
+    the box slid 35 mm uphill, its height times the tilt (#102's review); carried in the
+    upper body's frame, the turned box 3.5 mm (its second review)."""
+    start, now = None, np.zeros(3)
+    for angle, now in _tilting_plank(device, plank, yaw_deg, 20.0, along_m):
         if start is None and angle > 0.0:
-            start = on_plank
+            start = now
 
     assert start is not None
-    assert np.linalg.norm(on_plank - start) < 1e-3
+    assert np.linalg.norm(now - start) < 1e-3
+
+
+def test_a_box_slides_off_a_plank_tilting_past_its_friction_angle(device: str) -> None:
+    """The same plank tilting on to 40°: the box starts sliding (moves 1 mm on the plank)
+    between 29 and 35°, its friction angle being 31°. With the plank's fall each substep
+    pressing it twice as hard, the box rode a plank held at 40° (#102's second
+    review)."""
+    start, broke = None, None
+    for angle, now in _tilting_plank(device, 0, 0.0, 40.0):
+        if start is None and angle > 0.0:
+            start = now
+        if start is not None and broke is None and np.linalg.norm(now - start) > 1e-3:
+            broke = angle
+
+    assert broke is not None
+    assert 29.0 < broke < 35.0
 
 
 def test_a_block_breaking_free_slides_with_kinetic_friction(device: str) -> None:
     """A block released on an incline 1° steeper than its static friction angle, μs = 0.6
     and μd = 0.4: once it breaks free, friction is μd's, so after 1 s it slides at g (sin
-    θ - μd cos θ) t = 1.86 m/s, within 3 %. Clamped at μs while slow, it reached only
-    about 1 m/s (#102's review)."""
+    θ - μd cos θ) t = 1.86 m/s, within 3 %. Clamped at μs while slow, it reached 1.70 m/s
+    (#102's reviews)."""
     theta = math.atan(0.6) + math.radians(1.0)
     normal = (0.0, -math.sin(theta), math.cos(theta))
     slope = Solids((HalfSpace((0.0, 0.0, 0.0), normal),))

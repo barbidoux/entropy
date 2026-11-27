@@ -14,7 +14,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   - Friction and restitution act once per contact patch, at its centre of pressure.
     Static friction is a position correction; dynamic friction, friction against
     turning and restitution run in the velocity pass. On a wide patch, friction moves
-    the resting body without turning it.
+    the resting body without tipping it; between bodies its torque about the normal
+    turns both.
   - Friction anchors (as PhysX's patch friction and Solver2D): on a wide patch, static
     friction holds the resting body where the patch began. Between bodies the anchor
     sits on the lower body, which carries it as it moves and turns (a box rides a
@@ -23,20 +24,25 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   - The bound is μs times the patch's normal impulse. Past it the patch slides, with
     its friction clamped to μd times the normal impulse while the sliding left is under
     0.2 mm, and gets no more dynamic friction that substep.
-  - Held for 10 s, under 1 mm: a box 1 to 8 cm off-centre on another, a 4-3-2-1
-    pyramid, a crate under a slab 64 times heavier, two boxes on a slope 1° and 3°
-    under the friction angle.
+  - Between bodies, static friction measures the sliding from the motion before the
+    pair's own corrections, so bodies pushed out of an overlap gain no energy, and a
+    bounce is shared only among a body's bouncing patches, so a ball bounces on a
+    stack as on the floor.
+  - Held, under 1 mm: for 10 s, a box 1 to 8 cm off-centre on another, a 4-3-2-1
+    pyramid, a crate under a slab 64 times heavier; for 5 s, two boxes on a slope 1°
+    and 3° under the friction angle.
   - V-RB-02: bounces rise e² of their fall, 1.3 to 1.7 % low (3 % allowed).
   - V-RB-03: a block 1° below the friction angle does not move, and 1° above it
     accelerates at the expected rate; a block breaking free slides with μd.
   - A sliding box stops within 0.6 % of v²/2μg, and a ball rolls down a slope at
     (5/7) g sin θ.
   - Named limits (ADR 0032): between bodies friction leaves the lower body's tipping
-    torque to its support; no anchor on a narrow patch (a plank leaning on a wall
-    creeps); no rolling resistance; a round body resting on another can keep a false
-    separating speed; far from the origin, float32's resolution.
+    torque to its support; bounces on several bodies at once share one bounce (#90);
+    friction can give a little energy in fast hits between bodies; no anchor on a
+    narrow patch (a plank leaning on a wall creeps); no rolling resistance; far from
+    the origin, float32's resolution.
   - Coefficients are checked; checkpoints and dumps carry them. The material files
-    supply them with the spawner (#93).
+    supply them with the spawner (#93). Dumps from before friction replay without it.
 - Rigid contacts (#87, ADR 0031): bodies against the static solids and against each
   other.
   - A hash grid finds the pairs. Each body's sample spheres (a box's corners, edge
