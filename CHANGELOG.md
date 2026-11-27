@@ -13,8 +13,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
     mean of the frictions and the larger restitution.
   - Friction and restitution act once per contact patch, at its centre of pressure.
     Static friction is a position correction; dynamic friction, friction against
-    turning and restitution run in the velocity pass. On a wide patch of the static
-    solids, friction moves the body without turning it.
+    turning and restitution run in the velocity pass. On a wide patch, friction moves
+    the resting body without turning it.
+  - Friction anchors (as PhysX's patch friction and Solver2D): on a wide patch, static
+    friction holds the resting body where the patch began, clamped at μs times the
+    patch's normal impulse averaged over about 8 substeps, so the part the parallel
+    pair solve leaves each substep is undone later instead of adding up. A patch held
+    at its bound gets no dynamic friction. Checkpoints and dumps carry the anchors.
+  - The pairs' parallel average is over-relaxed, min(1, 1.8 / n): a 10-box stack sinks
+    4.3 mm instead of 7.7 mm; overlapping spawns pop harder.
+  - Held for 10 s, under 1 mm: a box 1 to 8 cm off-centre on another, a 4-3-2-1
+    pyramid, a crate under a slab 64 times heavier, two boxes on a slope 3° under the
+    friction angle.
   - V-RB-02: bounces rise e² of their fall, 1.3 to 1.7 % low (3 % allowed).
   - V-RB-03: a block 1° below the friction angle does not move, and 1° above it
     accelerates at the expected rate.
