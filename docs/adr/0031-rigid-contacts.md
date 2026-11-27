@@ -113,12 +113,18 @@ found the following, and they led to the decisions below:
     pop of two bodies spawned overlapping (11 m/s before). Between several bodies at
     once this pass is Jacobi and leaves part of that speed (named below).
   - One point cannot take back the spin that a deep correction at a body's edge gives
-    it. So a body touching only the static solids in a substep (no pair) then has its
-    speed scaled down, if need be, to the kinetic energy it would have had without
-    contact: the static solids never give energy. Without it, a box spawned 30 to 50 cm
-    inside a table or a wall was flung at 57 to 211 m/s and up to 1,058 rad/s, and a
-    plank thrown at the floor at 30 m/s rebounded with up to 2.5 times its energy
-    (#101's fourth review).
+    it. So every body touching the static solids then has its speed scaled down, if need
+    be, to the kinetic energy its motion had before their corrections: free motion,
+    gravity and the pairs' corrections (taken after `apply_corrections`). The static
+    solids never give energy. The rule acts only past 1e-5 over that budget, float32's
+    noise; trimming the noise slowed a box sliding down a frictionless 30° slope by
+    0.3 % in 3 s.
+    - Without the rule, a box spawned 30 to 50 cm inside a table or a wall was flung at
+      57 to 211 m/s and up to 1,058 rad/s, and a plank thrown at the floor at 30 m/s
+      rebounded with up to 2.5 times its energy (#101's fourth review).
+    - With a budget of the motion without contact, as first tried, a body in a pair had
+      to be left out, or a box hitting a resting one stopped at half its speed; a box
+      spawned in a table beside another then flew at 135 to 163 m/s (fifth review).
   - A body's static patches are solved by its own thread, one after the other. The
     pairs' patches are solved in parallel, scaled by 1 / (the larger pair count).
   - #88 puts friction and restitution at the same patches.
@@ -130,11 +136,13 @@ found the following, and they led to the decisions below:
   substep). A hard hit spins a thin body to thousands of rad/s. The implicit midpoint's
   fixed-point iterations converge only while |ω| h times the spread of the moments (the
   largest over the smallest) is small. Over the whole substep, a plank of 8 × 2 × 0.5 cm
-  (moments 15 to 1) lost 41 % of 600 rad/s in 1 s and went non-finite from about
+  (moments 16 to 1) lost 41 % of 600 rad/s in 1 s and went non-finite from about
   1,500 rad/s, freezing the solver in 11 of 20 throws at the floor at 30 m/s.
   - The substep is now split into pieces of at most 0.2 of that measure, up to 256:
-    the plank keeps |L| and its energy within 1e-3 from 600 to 3,000 rad/s.
-  - Past 256 pieces the energy is capped at its start, so a spin never gains energy.
+    the plank keeps |L| and its energy within 4e-4 up to 12,000 rad/s, and loses 7 % of
+    its energy a second at 30,000 rad/s (no NaN at 100,000 rad/s). The extra cost is not
+    measurable with 2,000 tumbling bodies on CUDA (fifth review).
+  - The energy is then capped at its start, so a spin never gains energy.
 - **Room for 16 pairs per body** by default (`max_pairs`). Contacts with the static
   solids need no room. Pairs past it are dropped and counted per step
   (`pair_overflows` in the diagnostics, for the HUD), through the status read at the
@@ -192,13 +200,19 @@ These are named in SPEC 5.4 and in the module. The numbers were measured on CUDA
   one Jacobi sweep, so it leaves part of the speed the depth corrections make:
   - bodies spawned overlapping fly apart: 12 spheres of 10 cm radius in a 30 cm clump
     on the floor at up to 19 m/s, still 19 m/s after 2 s; 27 boxes in a 3 x 3 x 3
-    block, 5 cm into each other, at 9.8 m/s (two alone: none);
+    block, 5 cm into each other, at 9.8 m/s (two alone: none); two boxes 5 cm into each
+    other and 50 cm into a table at 35 m/s, since the static solids' budget holds the
+    pair's push apart;
+  - a thin plank (8 × 2 × 0.5 cm) thrown at 20 to 30 m/s onto a small body lying on the
+    floor gains up to 47 % of its energy in 1 to 5 throws of 40, from the pair's
+    corrections, which the static solids' rule cannot tell from a real push;
   - a box dropped 0.5 m onto another rebounds at 0.35 m/s, onto a stack of two at
     0.95 m/s, with no restitution;
-  - a box thrown at 4 m/s at a row of 3 leaves them at 0.76, 1.25, 1.59 and 0.39 m/s,
+  - a box thrown at 4 m/s at a row of 3 leaves them at 0.74, 1.28, 1.65 and 0.33 m/s,
     where an inelastic shock would give 1.0 each;
   - a pile never settles: 400 mixed bodies dropped into the Test Tank keep 4 to 43 J of
-    kinetic energy over 60 s, gain up to 32 J in some one-second windows, spin at up
+    kinetic energy over 60 s, gain up to 32 to 38 J in some one-second windows (the GPU
+    runs differ), spin at up
     to 153 rad/s, and the median body moves 21 cm in the last 10 s; one 4 cm box left
     the tank in the first 2 s. Without friction nothing stops them; friction (#88) and
     sleeping (#89) settle piles.

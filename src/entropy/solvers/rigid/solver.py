@@ -19,7 +19,7 @@ Simplifications, named (CLAUDE.md rule 7):
 - the gyroscopic torque by the implicit midpoint rule, solved by four fixed-point
   iterations over pieces of the substep short enough for them to converge: it keeps a
   tumbling body's |L| and energy within 1e-3 in the tests (20 and 30 rad/s over 10 s, a
-  thin plank at 600 to 3,000 rad/s over 1 s); past 256 pieces its energy is capped, so
+  thin plank at 600 to 3,000 rad/s over 1 s); its energy is capped at its start, so
   a spin never gains energy;
 - positions accumulate in float32: far from the origin a body's position drifts from
   x₀ + vt (1.5 cm after 60 s at 1.26 m/s, 20 to 80 m out), its velocity stays exact;
@@ -30,10 +30,12 @@ Simplifications, named (CLAUDE.md rule 7):
   small boxes can leave the Test Tank at 30 m/s; without friction, bodies resting
   off-centre slide off; pairs are Jacobi between them, so stacks sink under load
   (7.7 mm for 10 boxes of 20 cm), a far heavier body sinks into the one under it, and
-  several bodies at once still pop and bounce (a spawned clump flies apart at up to
-  14 m/s); angular momentum is kept within 1.35e-3 of its terms in V-RB-04's scenes,
-  the linear within 1.4e-5; a pair overflow loses support; the tank's rims are not
-  sampled as edges;
+  several bodies at once still pop and bounce (12 spheres of 10 cm spawned in a 30 cm
+  clump fly apart at up to 19 m/s), and a pile never settles; the static solids never
+  give a body energy (its speed is scaled down to the kinetic energy it had before
+  their corrections); angular momentum is kept within 1.35e-3 of its terms in V-RB-04's
+  scenes, the linear within 1.4e-5; a pair overflow loses support; the tank's rims are
+  not sampled as edges;
 - no friction, restitution or sleeping yet (#88, #89).
 
 NaN guard (SPEC 5.9): after each step a kernel counts non-finite bodies into a small
@@ -244,6 +246,7 @@ class RigidSolver:
         self._angular_before_rad_per_s = wp.zeros(n, dtype=wp.vec3, device=device)
         self._kick_m_per_s = wp.zeros(n, dtype=wp.vec3, device=device)
         self._twist_rad_per_s = wp.zeros(n, dtype=wp.vec3, device=device)
+        self._kinetic_j = wp.zeros(n, dtype=float, device=device)
         self._contact_count = wp.zeros(1, dtype=wp.int32, device=device)  # pyright: ignore[reportArgumentType]
         self._overflows = wp.zeros(1, dtype=wp.int32, device=device)  # pyright: ignore[reportArgumentType]
         self._signs = wp.array(_BOX_SIGNS, dtype=wp.vec3, device=device)
@@ -255,7 +258,9 @@ class RigidSolver:
         self._status_host = wp.zeros(3, dtype=float, device="cpu", pinned=cuda)
         self._status_event = wp.Event(device) if cuda else None
         self._status_pending = False
-        self._frozen: NonFiniteStateError | None = None
+        # The dump of the frame that went non-finite; each call raises a new error for it,
+        # since a kept one would hold its traceback, and with it this solver, in a cycle.
+        self._frozen: Path | None = None
         self._last_dt_s = 0.0
         self._timer: Any = None
         self._diagnostics = {"bodies": 0, "substeps": 0, "contacts": 0, "pair_overflows": 0}
@@ -442,7 +447,8 @@ class RigidSolver:
             device=device,
         )  # fmt: skip
         wp.launch(_k.apply_corrections, dim=count,
-                  inputs=[*corrections, positions, orientations, *increments],
+                  inputs=[*corrections, positions, orientations, *increments, masses, inertia, h,
+                          self._kinetic_j],
                   device=device)  # fmt: skip
         static = [positions, orientations, *increments, properties["shapes"], properties["sizes_m"],
                   properties["bounds_m"], masses, inertia, self._signs, *self._solids.arrays(),
@@ -453,7 +459,7 @@ class RigidSolver:
                   device=device)  # fmt: skip
         wp.launch(_k.solve_static_velocities, dim=count,
                   inputs=[positions, orientations, *velocities, *before, masses, inertia,
-                          *self._static_patches, self._turn, patches.per_body, gravity, h],
+                          *self._static_patches, self._kinetic_j],
                   device=device)  # fmt: skip
         kicks = [self._kick_m_per_s, self._twist_rad_per_s]
         wp.launch(_k.solve_velocities, dim=patches.a.shape[0],
@@ -485,7 +491,7 @@ class RigidSolver:
 
     def _read_status(self) -> None:
         if self._frozen is not None:
-            raise self._frozen
+            raise NonFiniteStateError(self._frozen)
         if not self._status_pending:
             return
         if self._status_event is not None:
@@ -495,8 +501,8 @@ class RigidSolver:
         self._diagnostics["contacts"] = int(status[1])
         self._diagnostics["pair_overflows"] = int(status[2])
         if float(status[0]) > 0.0:
-            self._frozen = NonFiniteStateError(self._dump())
-            raise self._frozen
+            self._frozen = self._dump()
+            raise NonFiniteStateError(self._frozen)
 
     def _dump(self) -> Path:
         setup = self._require_setup()

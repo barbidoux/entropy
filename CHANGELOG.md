@@ -27,12 +27,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   - 10 and 20 cm boxes stay in the tank up to 30 m/s; smaller ones up to 20 m/s. A box
     slides across the seam of two slabs and past a table's edge untouched.
   - A long capsule stays on a thin beam.
-  - A body touching only the static solids never gains energy from them: a box spawned
+  - The static solids never give a body energy: a box spawned
     deep inside a table is not flung, and a plank thrown at the floor at 30 m/s does
     not rebound higher than it fell. A box falling beside the tank's outer glass is
     untouched.
   - The gyroscopic step is split for fast spins: a thin plank keeps |L| and its energy
-    within 1e-3 up to 3,000 rad/s, where it froze the solver with a NaN from about
+    within 4e-4 up to 12,000 rad/s, where it froze the solver with a NaN from about
     1,500 rad/s.
   - A NaN dump replays, contacts included (`RigidSolver.from_dump`).
   - Pairs past the room are counted per step.

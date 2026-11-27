@@ -16,9 +16,14 @@ GYROSCOPIC_ITERATIONS = 4
 GYROSCOPIC_PIECE_RAD = wp.constant(0.2)
 """The gyroscopic step's pieces: |w| dt times the spread of the moments at most this
 much each (`_gyroscopic`)."""
+ENERGY_SLACK = wp.constant(1.0e-5)
+"""The static solids' energy rule (`solve_static_velocities`) acts only past this share
+over the budget, float32's noise in a body's kinetic energy: trimming that slowed a box
+sliding down a frictionless 30° slope by 0.3 % in 3 s (#101's fifth review)."""
 GYROSCOPIC_MAX_PIECES = wp.constant(256)
-"""The most pieces a substep's gyroscopic step is split into: 256 hold a thin plank
-(moments 15 to 1) to about 3,000 rad/s at 1/480 s."""
+"""The most pieces a substep's gyroscopic step is split into: a thin plank (moments 16 to
+1) keeps |L| and its energy within 4e-4 to 12,000 rad/s at 1/480 s, and loses 7 % of its
+energy a second at 30,000 rad/s (#101's fifth review)."""
 
 
 @wp.func
@@ -48,8 +53,8 @@ def _gyroscopic(w_body: wp.vec3, inertia: wp.vec3, dt_s: float) -> wp.vec3:
     over the smallest) is small, so the substep is split into pieces of at most
     `GYROSCOPIC_PIECE_RAD` of that, up to `GYROSCOPIC_MAX_PIECES`: whole, it lost 41 % of
     a thin plank's 600 rad/s in 1 s and went non-finite from about 1,500 rad/s, speeds a
-    hard hit gives it (#101's fourth review). Past the last piece the energy is capped at
-    its start, so a spin never gains energy."""
+    hard hit gives it (#101's fourth review). The energy is then capped at its start, so
+    a spin never gains energy."""
     spread = wp.max(inertia[0], wp.max(inertia[1], inertia[2])) / wp.min(
         inertia[0], wp.min(inertia[1], inertia[2])
     )
@@ -617,10 +622,7 @@ def solve_static_velocities(
     patch_impulse_kg_m: wp.array(dtype=float),
     patch_moment_kg_m2: wp.array(dtype=wp.vec3),
     patch_normal_kg_m: wp.array(dtype=wp.vec3),
-    turn: wp.array(dtype=wp.quat),
-    pairs_per_body: wp.array(dtype=wp.int32),
-    gravity_m_per_s2: wp.vec3,
-    dt_s: float,
+    kinetic_j: wp.array(dtype=float),
 ):
     """The velocity pass of body i's static patches (Müller et al. 2020, §3.6), by its
     own thread, one after the other, at each patch's centre of pressure: the separating
@@ -629,11 +631,12 @@ def solve_static_velocities(
     #88's) and no pop of a body spawned in the floor.
 
     One point cannot take back the spin a deep correction at the body's edge gives it,
-    so a body touching only the static solids this substep (no pair) then has its speed
-    scaled down, if need be, to the kinetic energy it would have had without contact:
-    the static solids never give energy. A box spawned 50 cm inside a table was flung at
-    121 m/s and 1,058 rad/s, and a plank thrown at the floor at 30 m/s rebounded with up
-    to 2.5 times its energy (#101's fourth review)."""
+    so the body then has its speed scaled down, if need be, to the kinetic energy its
+    motion had before the static solids' corrections (`kinetic_j`: free motion, gravity
+    and the pairs' corrections): the static solids never give energy. A box spawned
+    50 cm inside a table was flung at 121 m/s and 1,058 rad/s, and a plank thrown at the
+    floor at 30 m/s rebounded with up to 2.5 times its energy (#101's fourth review);
+    with a box beside it, 163 m/s (fifth review)."""
     i = wp.tid()
     x = position_m[i]
     q = orientation[i]
@@ -659,16 +662,12 @@ def solve_static_velocities(
             v = v + impulse / mass * n
             w = w + _inverse_inertia_world(q, inertia, impulse * t)
     if changed > 0:
-        if pairs_per_body[i] == 0:
-            free = velocity_before_m_per_s[i] + gravity_m_per_s2 * dt_s
-            spin = wp.quat_rotate_inv(wp.quat_inverse(turn[i]) * q, angular_before_rad_per_s[i])
-            allowed = mass * wp.dot(free, free) + wp.dot(spin, wp.cw_mul(inertia, spin))
-            spin = wp.quat_rotate_inv(q, w)
-            moving = mass * wp.dot(v, v) + wp.dot(spin, wp.cw_mul(inertia, spin))
-            if moving > allowed:
-                share = wp.sqrt(allowed / moving)
-                v = share * v
-                w = share * w
+        spin = wp.quat_rotate_inv(q, w)
+        moving = 0.5 * (mass * wp.dot(v, v) + wp.dot(spin, wp.cw_mul(inertia, spin)))
+        if moving > kinetic_j[i] * (1.0 + ENERGY_SLACK):
+            share = wp.sqrt(kinetic_j[i] / moving)
+            v = share * v
+            w = share * w
         velocity_m_per_s[i] = v
         angular_velocity_rad_per_s[i] = w
 
@@ -992,9 +991,15 @@ def apply_corrections(
     displacement_m: wp.array(dtype=wp.vec3),
     turn: wp.array(dtype=wp.quat),
     rotated_rad: wp.array(dtype=wp.vec3),
+    masses_kg: wp.array(dtype=float),
+    inertia_kg_m2: wp.array(dtype=wp.vec3),
+    dt_s: float,
+    kinetic_j: wp.array(dtype=float),
 ):
     """Move every body by its corrections, into its position and its increments (the
-    rotation by the exact exponential of the rotation vector), then clear them."""
+    rotation by the exact exponential of the rotation vector), then clear them. Then the
+    kinetic energy its motion this substep stands for so far (J), free motion and the
+    pairs' corrections: what the static solids may leave it (`solve_static_velocities`)."""
     i = wp.tid()
     shift = shift_m[i]
     position_m[i] = position_m[i] + shift
@@ -1006,6 +1011,9 @@ def apply_corrections(
     rotated_rad[i] = rotated_rad[i] + s
     shift_m[i] = wp.vec3(0.0, 0.0, 0.0)
     spin_rad[i] = wp.vec3(0.0, 0.0, 0.0)
+    v = displacement_m[i] / dt_s
+    w = wp.quat_rotate_inv(orientation[i], rotated_rad[i] / dt_s)
+    kinetic_j[i] = 0.5 * (masses_kg[i] * wp.dot(v, v) + wp.dot(w, wp.cw_mul(inertia_kg_m2[i], w)))
 
 
 @wp.func

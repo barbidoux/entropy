@@ -1,5 +1,6 @@
 """Frame statistics for the performance HUD (`entropy.core.profiler`)."""
 
+import gc
 import sys
 from types import SimpleNamespace
 
@@ -107,6 +108,7 @@ def test_no_gpu_memory_on_cpu() -> None:
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows process memory API")
 def test_host_memory_sees_a_new_allocation() -> None:
+    gc.collect()  # garbage freed by the collector during the measure would hide the block
     before = host_memory_bytes()
     block = bytearray(64 * 2**20)  # committed and touched
     after = host_memory_bytes()
