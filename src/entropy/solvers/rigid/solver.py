@@ -451,7 +451,7 @@ class RigidSolver:
                   device=device)  # fmt: skip
         wp.launch(_k.solve_static_velocities, dim=count,
                   inputs=[positions, orientations, *velocities, *before, masses, inertia,
-                          *self._static_patches],
+                          *self._static_patches, self._turn, patches.per_body, gravity, h],
                   device=device)  # fmt: skip
         kicks = [self._kick_m_per_s, self._twist_rad_per_s]
         wp.launch(_k.solve_velocities, dim=patches.a.shape[0],
