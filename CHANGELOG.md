@@ -14,8 +14,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   - Friction and restitution act once per contact patch, at its centre of pressure.
     Static friction is a position correction; dynamic friction, friction against
     turning and restitution run in the velocity pass. On a wide patch, friction moves
-    the resting body without tipping it; between bodies its torque about the normal
-    turns both.
+    the resting body without turning it.
   - Friction anchors (as PhysX's patch friction and Solver2D): on a wide patch, static
     friction holds the resting body where the patch began. Between bodies the anchor
     sits on the lower body, which carries it as it moves and turns (a box rides a

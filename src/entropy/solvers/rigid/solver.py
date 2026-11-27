@@ -40,8 +40,9 @@ Simplifications, named (CLAUDE.md rule 7):
 - friction and restitution (ADR 0032, which gives the numbers): once per contact patch,
   at its centre of pressure; on a wide patch static friction holds the resting body at
   the patch's anchor, at most μs times the patch's normal impulse, and between bodies,
-  static or dynamic, it leaves the lower body's tipping torque to its support, so a box
-  sliding onto another in free fall loses angular momentum; bounces on several bodies
+  static or dynamic, it turns neither body, so a box sliding onto another in free fall
+  loses angular momentum, and one sliding across another off its centre does not turn
+  it; bounces on several bodies
   at once share one bounce, and the velocity pass does not know a body's support;
   friction can give a little energy in fast hits between bodies; no anchor on a patch
   that is not wide, so a plank leaning on a wall creeps; no rolling resistance, and no
@@ -239,10 +240,14 @@ class RigidSolver:
         start = {
             key.removeprefix("before_"): v for key, v in dump.items() if key.startswith("before_")
         }
-        # A dump from before friction (#88) has no coefficients: none made it.
+        # A dump from before friction (#88) has no coefficients: none made it. Any other
+        # property missing is a broken dump, and raises.
         count = int(dump["count"])
+        coefficients = ("static_friction", "dynamic_friction", "restitution")
         properties = {
-            name: dump[name] if name in dump else np.zeros(count, np.float32)
+            name: np.zeros(count, np.float32)
+            if name in coefficients and name not in dump
+            else dump[name]
             for name, _ in _PROPERTIES
         }
         solver.restore({"count": count, **start, **properties})

@@ -1394,13 +1394,6 @@ def solve_pairs(
                         spin_b = spin_b - _inverse_inertia_world(
                             qb, inertia_kg_m2[b], wp.cross(rb, push)
                         )
-                    else:  # the normal forces cannot hold its torque about the normal
-                        spin_a = spin_a + _inverse_inertia_world(
-                            qa, inertia_kg_m2[a], wp.dot(wp.cross(ra, push), n) * n
-                        )
-                        spin_b = spin_b - _inverse_inertia_world(
-                            qb, inertia_kg_m2[b], wp.dot(wp.cross(rb, push), n) * n
-                        )
             if entry >= 0 and stuck == 0:  # the anchor, where the bodies are now
                 ca = place_a - place_b  # each centre in the other body's frame
                 cb = place_b - place_a
@@ -1588,9 +1581,12 @@ def solve_velocities(
     slow without turning: the torque the upper body's shifted normal forces would pass to
     the lower one, (x_lower - x_upper) x P, is left to the lower body's support, as in
     `solve_pairs`. Given here, the support answered only in the next substep: resting
-    stacks crept apart, and a box slid 6 % too fast on a box held on a slope. So the
-    angular momentum is not kept where nothing supports the lower body: a box sliding onto
-    another in free fall loses 29 % of theirs about their centre of mass (ADR 0032)."""
+    stacks crept apart, and a box slid 6 % too fast on a box held on a slope. Its part
+    about the normal, which no normal force holds, is left out too: given in both passes,
+    it set resting bodies turning (a concrete cube on a board's end turned 90° and slid
+    153 mm in 10 s, #102's third review). So the angular momentum is not kept: a box
+    sliding onto another in free fall loses 29 % of theirs about their centre of mass,
+    and a box sliding across a broad one off its centre does not turn it (ADR 0032)."""
     p = wp.tid()
     if p >= wp.min(patches.count[0], patches.a.shape[0]):
         return
@@ -1639,15 +1635,6 @@ def solve_velocities(
             rub = -wp.min(mu * pressing, scale * sliding / (1.0 / ma + 1.0 / mb)) * t  # on a
             wp.atomic_add(kick_m_per_s, a, rub / ma)
             wp.atomic_sub(kick_m_per_s, b, rub / mb)
-            # Its torque about the normal, which the normal forces cannot hold, turns both.
-            ta = wp.dot(wp.cross(point - position_m[a], rub), n) * n
-            tb = wp.dot(wp.cross(point - position_m[b], rub), n) * n
-            wp.atomic_add(
-                twist_rad_per_s, a, _inverse_inertia_world(orientation[a], inertia_kg_m2[a], ta)
-            )
-            wp.atomic_sub(
-                twist_rad_per_s, b, _inverse_inertia_world(orientation[b], inertia_kg_m2[b], tb)
-            )
         else:
             weight = _weight(a, b, point, t, position_m, orientation, masses_kg, inertia_kg_m2)
             rub = -wp.min(mu * pressing, scale * sliding / weight) * t

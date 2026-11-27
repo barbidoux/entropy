@@ -144,18 +144,20 @@ def test_a_ball_bounces_on_a_stack_as_on_the_floor(device: str) -> None:
     assert peak == pytest.approx(0.8**2, rel=0.1)
 
 
-def test_a_box_landing_on_two_boxes_at_once_gains_no_energy(device: str) -> None:
+@pytest.mark.parametrize("falling", [2, 0], ids=["falling-last", "falling-first"])
+def test_a_box_landing_on_two_boxes_at_once_gains_no_energy(device: str, falling: int) -> None:
     """A 20 cm box dropped 1 m flat across two heavy boxes, e = 0.8: both patches bounce
     in the same substep and share the bounce, so the box rises no higher than e² of its
-    fall (0.27 m: a named limit, ADR 0032). Each giving the whole bounce, it rose 2.02 m
-    (#102's second review)."""
+    fall (0.27 m: a named limit, ADR 0032), whichever index it has. Each giving the whole
+    bounce, it rose 2.02 m (#102's second review)."""
     solver = _solver(device, restitution=0.8)
     under = [_box((x, 0.0, 0.1), density=5000.0, restitution=0.8) for x in (-0.1001, 0.1001)]
-    solver.add_bodies([*under, _box((0.0, 0.0, 1.3), restitution=0.8)])
+    top = _box((0.0, 0.0, 1.3), restitution=0.8)
+    solver.add_bodies([*under, top] if falling == 2 else [top, *under])
     peak, rising = 0.0, False
     for _ in range(2 * 480):
         solver.step(1.0 / 480.0)
-        z, vz = solver.body_positions()[2, 2], solver.body_velocities()[2, 2]
+        z, vz = solver.body_positions()[falling, 2], solver.body_velocities()[falling, 2]
         rising = rising or vz > 0.0
         if rising:
             peak = max(peak, z - 0.3)
@@ -237,38 +239,6 @@ def _rotation(q) -> np.ndarray:
     )
 
 
-def test_a_box_sliding_across_another_off_centre_turns_it(device: str) -> None:
-    """A 20 cm box sliding at 2 m/s across a broad box on a frictionless floor, 25 cm off
-    its centre line, μ = 0.5 between them: gravity and the floor act along z, so the
-    angular momentum about z is kept, within 1 % over 0.5 s, and the broad box turns.
-    The normal forces of a wide patch hold friction's tipping torque, not its torque
-    about the normal: dropped, the broad box never turned and L_z fell by 89 % (#102's
-    second review)."""
-    solver = _solver(device)
-    solver.add_bodies([_box((0.0, 0.0, 0.05), half=(0.4, 0.4, 0.05)),
-                       _box((-0.3, 0.25, 0.2), velocity_m_per_s=(2.0, 0.0, 0.0))])  # fmt: skip
-
-    def spin_z() -> float:
-        state = solver.checkpoint()
-        m = state["masses_kg"].astype(np.float64)
-        inertia = state["inertia_kg_m2"].astype(np.float64)
-        x = solver.body_positions().astype(np.float64)
-        v = solver.body_velocities().astype(np.float64)
-        w = solver.body_angular_velocities().astype(np.float64)
-        total = 0.0
-        for i, q in enumerate(solver.body_orientations()):
-            r = _rotation(q)
-            total += float((r @ (inertia[i] * (r.T @ w[i])))[2] + m[i] * np.cross(x[i], v[i])[2])
-        return total
-
-    before = spin_z()
-    for _ in range(30):
-        solver.step(1.0 / 60.0)
-
-    assert spin_z() == pytest.approx(before, rel=0.01)
-    assert abs(solver.body_angular_velocities()[0, 2]) > 0.1
-
-
 @pytest.mark.parametrize("value", [-0.1, 1.5, math.nan])
 def test_a_restitution_outside_0_to_1_is_refused(value: float) -> None:
     with pytest.raises(ValueError, match="restitution"):
@@ -294,12 +264,21 @@ def _box(position_m, half=(0.1, 0.1, 0.1), density=600.0, **kw) -> Body:
 
 def _drift(solver: RigidSolver, seconds: float) -> float:
     """How far the bodies moved at most over `seconds` (m), after 1 s to settle."""
+    return _drift_and_turn(solver, seconds)[0]
+
+
+def _drift_and_turn(solver: RigidSolver, seconds: float) -> tuple[float, float]:
+    """How far the bodies moved (m) and turned (degrees) at most over `seconds`, after
+    1 s to settle."""
     for _ in range(60):
         solver.step(1.0 / 60.0)
     settled = solver.body_positions().copy()
+    turned = solver.body_orientations().copy()
     for _ in range(round(seconds * 60)):
         solver.step(1.0 / 60.0)
-    return float(np.linalg.norm(solver.body_positions() - settled, axis=1).max())
+    moved = float(np.linalg.norm(solver.body_positions() - settled, axis=1).max())
+    dots = np.abs((solver.body_orientations().astype(np.float64) * turned).sum(axis=1))
+    return moved, float(np.degrees(2.0 * np.arccos(np.clip(dots, 0.0, 1.0))).max())
 
 
 @pytest.mark.parametrize(
@@ -322,8 +301,9 @@ def test_with_friction_a_box_off_centre_on_another_stays(
 
 def test_with_friction_a_pyramid_stands(device: str) -> None:
     """A 4-3-2-1 pyramid of boxes, each row resting on the joints of the one below, μ =
-    0.5: it stands for 10 s, every box moving under 1 mm (without friction it collapses,
-    ADR 0031)."""
+    0.5: it stands for 10 s, every box moving under 1 mm and turning under 0.1° (without
+    friction it collapses, ADR 0031). With friction's torque about the normal given on
+    resting patches, the boxes turned up to 1.9° in 30 s (#102's third review)."""
     solver = _solver(device, static_friction=0.5, dynamic_friction=0.5)
     boxes = []
     for row, count in enumerate((4, 3, 2, 1)):
@@ -331,7 +311,31 @@ def test_with_friction_a_pyramid_stands(device: str) -> None:
             boxes.append(_box((0.2 * (k - (count - 1) / 2.0), 0.0, 0.1 + 0.2 * row)))
     solver.add_bodies(boxes)
 
-    assert _drift(solver, 10.0) < 1e-3
+    moved, turned = _drift_and_turn(solver, 10.0)
+    assert moved < 1e-3
+    assert turned < 0.1
+
+
+@pytest.mark.parametrize("scene", ["board", "bridge"])
+def test_with_friction_a_heavy_cube_rests_on_a_wooden_plank(device: str, scene: str) -> None:
+    """A heavy 20 cm cube resting near the end of a long wooden plank, μ = 0.5: concrete
+    0.85 m out on a 2 m board lying on the floor, or steel 0.6 m out on a plank laid
+    across two blocks. For 10 s no body moves 1 mm or turns 0.1°. With friction's torque
+    about the normal given on resting patches, the cube on the board slid 153 mm and
+    turned 90° (#102's third review)."""
+    solver = _solver(device, max_bodies=8, static_friction=0.5, dynamic_friction=0.5)
+    if scene == "board":
+        bodies = [_box((0.0, 0.0, 0.01), half=(1.0, 0.1, 0.01)),
+                  _box((0.85, 0.0, 0.121), density=2450.0)]  # fmt: skip
+    else:
+        bodies = [_box((-0.9, 0.0, 0.1)), _box((0.9, 0.0, 0.1)),
+                  _box((0.0, 0.0, 0.225), half=(1.0, 0.1, 0.025)),
+                  _box((0.6, 0.0, 0.351), density=7850.0)]  # fmt: skip
+    solver.add_bodies(bodies)
+
+    moved, turned = _drift_and_turn(solver, 10.0)
+    assert moved < 1e-3
+    assert turned < 0.1
 
 
 def test_with_friction_a_crate_under_a_heavy_slab_stays(device: str) -> None:
