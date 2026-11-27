@@ -795,13 +795,13 @@ def test_a_box_sliding_into_a_resting_one_shares_its_speed(device: str) -> None:
 @pytest.mark.parametrize("name", ["box", "sphere"])
 def test_a_body_sliding_far_from_the_origin_keeps_its_speed(device: str, name: str) -> None:
     """A box or a sphere sliding at 5 m/s along a frictionless 30° slope's level line,
-    100 m from the origin, gravity pressing it onto the slope: after 10 s it still slides
+    100 m down the slope, gravity pressing it onto the slope: after 10 s it still slides
     at 5 m/s, within 0.1 %. The static solids' corrections enter its motion as
-    increments; as a float32 difference of positions, far out, they gave the sphere
-    2.3 % and, without the energy rule, a box 15 % (#101's sixth review)."""
+    increments; as a float32 difference of positions, 100 m down, they gave the sphere
+    2.2 to 2.8 % (#101's sixth and seventh reviews)."""
     theta = math.radians(30.0)
     normal = np.array([math.sin(theta), 0.0, math.cos(theta)])
-    out = np.array([0.0, 100.0, 0.0])  # along the level line
+    out = 100.0 * np.array([math.cos(theta), 0.0, -math.sin(theta)])  # down the slope
     slope = Solids((HalfSpace(tuple(out), tuple(normal)),))
     gravity = tuple(-9.81 * normal)
     solver = _solver(device, solids=slope, gravity=gravity)
@@ -821,16 +821,47 @@ def test_a_body_sliding_far_from_the_origin_keeps_its_speed(device: str, name: s
     assert float(np.linalg.norm(solver.body_velocities()[0])) == pytest.approx(5.0, rel=1e-3)
 
 
-def test_a_box_spinning_flat_on_the_floor_keeps_its_spin(device: str) -> None:
-    """A box spinning at 10 rad/s about the vertical, resting on the frictionless floor:
-    after 3 s it still spins at 10 rad/s, within 1e-3. The static solids' energy budget
-    counts the spin; without it, every spin would stop at its first contact (#101's
-    sixth review)."""
+@pytest.mark.parametrize("name", ["box", "lying-capsule"])
+def test_a_body_spinning_on_the_floor_keeps_its_spin(device: str, name: str) -> None:
+    """A box lying flat, or a capsule lying, spinning about the vertical at 10 rad/s on
+    the frictionless floor: after 3 s it still spins at 10 rad/s, within 1e-3. The static
+    solids' energy budget counts the spin, in the body's frame: without the spin, every
+    spin stopped at its first contact; with the spin in the world frame, the lying
+    capsule (whose vertical is not its body's) lost 99 % of it (#101's sixth and seventh
+    reviews)."""
     solver = _solver(device)
-    solver.add_bodies([Body(Shape.BOX, (0.2, 0.1, 0.05), DENSITY_KG_PER_M3,
-                            position_m=(0.0, 0.0, 0.05),
-                            angular_velocity_rad_per_s=(0.0, 0.0, 10.0))])  # fmt: skip
+    if name == "box":
+        body = Body(Shape.BOX, (0.2, 0.1, 0.05), DENSITY_KG_PER_M3, position_m=(0.0, 0.0, 0.05),
+                    angular_velocity_rad_per_s=(0.0, 0.0, 10.0))  # fmt: skip
+    else:
+        body = Body(Shape.CAPSULE, (0.05, 0.1, 0.0), DENSITY_KG_PER_M3,
+                    position_m=(0.0, 0.0, 0.05), orientation=LYING,
+                    angular_velocity_rad_per_s=(0.0, 0.0, 10.0))  # fmt: skip
+    solver.add_bodies([body])
 
     _run(solver, 3.0)
 
     np.testing.assert_allclose(solver.body_angular_velocities()[0], [0.0, 0.0, 10.0], atol=1e-2)
+
+
+def test_a_stack_resting_on_a_frictionless_slope_stays_stacked(device: str) -> None:
+    """Two 20 cm boxes stacked on a frictionless 30° slope at the origin, gravity pressing
+    them onto it (along its normal), so nothing pushes them along it: after 10 s the
+    upper box is within 1 mm of where it sat on the lower one. The pairs' corrections
+    enter the motion as increments; as a float32 difference of positions they pushed it
+    5.9 mm on CUDA and 49 mm on the CPU, and from 10 m down the slope off the lower box
+    (#101's seventh review)."""
+    theta = math.radians(30.0)
+    normal = np.array([math.sin(theta), 0.0, math.cos(theta)])
+    down = np.array([math.cos(theta), 0.0, -math.sin(theta)])
+    slope = Solids((HalfSpace((0.0, 0.0, 0.0), tuple(normal)),))
+    solver = _solver(device, solids=slope, gravity=tuple(-9.81 * normal))
+    tilt = (0.0, math.sin(theta / 2.0), 0.0, math.cos(theta / 2.0))
+    solver.add_bodies([Body(Shape.BOX, (0.1, 0.1, 0.1), DENSITY_KG_PER_M3,
+                            position_m=tuple(height * normal), orientation=tilt)
+                       for height in (0.1, 0.3)])  # fmt: skip
+
+    _run(solver, 10.0)
+
+    x = solver.body_positions()
+    assert abs(float((x[1] - x[0]) @ down)) < 1e-3

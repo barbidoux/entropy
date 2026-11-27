@@ -858,6 +858,10 @@ def solve_pairs(
         axis = _box_axis(xa, qa, sizes_m[a], xb, qb, sizes_m[b])
     place_a = xa
     place_b = xb
+    # The corrections' shifts, kept exact (ADR 0030): place - x would be a float32
+    # difference of positions, biased on a tilted contact (#101's seventh review).
+    moved_a = wp.vec3(0.0, 0.0, 0.0)
+    moved_b = wp.vec3(0.0, 0.0, 0.0)
     spin_a = wp.vec3(0.0, 0.0, 0.0)
     spin_b = wp.vec3(0.0, 0.0, 0.0)
     total = float(0.0)  # noqa: UP018 (a mutable float for Warp)
@@ -870,6 +874,8 @@ def solve_pairs(
         o = b
         xs = place_a
         xo = place_b
+        ms_moved = moved_a
+        mo_moved = moved_b
         ss = spin_a
         so = spin_b
         direction = axis
@@ -880,6 +886,8 @@ def solve_pairs(
             o = a
             xs = place_b
             xo = place_a
+            ms_moved = moved_b
+            mo_moved = moved_a
             ss = spin_b
             so = spin_a
             direction = -axis
@@ -908,8 +916,10 @@ def solve_pairs(
                 weight += 1.0 / mo + wp.dot(to, _inverse_inertia_world(qo, inertia_o, to))
                 impulse = hit[3] / weight
                 xs = xs + impulse / ms * n
+                ms_moved = ms_moved + impulse / ms * n
                 ss = ss + _inverse_inertia_world(qs, inertia_s, impulse * ts)
                 xo = xo - impulse / mo * n
+                mo_moved = mo_moved - impulse / mo * n
                 so = so - _inverse_inertia_world(qo, inertia_o, impulse * to)
                 total += impulse
                 moment = moment + impulse * point
@@ -918,17 +928,21 @@ def solve_pairs(
         if side == 0:
             place_a = xs
             place_b = xo
+            moved_a = ms_moved
+            moved_b = mo_moved
             spin_a = ss
             spin_b = so
         else:
             place_b = xs
             place_a = xo
+            moved_b = ms_moved
+            moved_a = mo_moved
             spin_b = ss
             spin_a = so
     scale = 1.0 / float(wp.max(patches.per_body[a], patches.per_body[b]))
-    wp.atomic_add(shift_m, a, scale * (place_a - xa))
+    wp.atomic_add(shift_m, a, scale * moved_a)
     wp.atomic_add(spin_rad, a, scale * spin_a)
-    wp.atomic_add(shift_m, b, scale * (place_b - xb))
+    wp.atomic_add(shift_m, b, scale * moved_b)
     wp.atomic_add(spin_rad, b, scale * spin_b)
     patches.impulse[p] = scale * total
     patches.moment[p] = scale * moment
