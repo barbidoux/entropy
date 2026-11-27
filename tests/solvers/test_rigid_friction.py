@@ -250,3 +250,42 @@ def test_a_ball_rolls_down_a_slope_at_five_sevenths_g_sin_theta(device: str) -> 
     assert speed == pytest.approx(5.0 / 7.0 * G * math.sin(theta) * 1.0, rel=0.02)
     spin = float(np.linalg.norm(solver.body_angular_velocities()[0]))
     assert spin == pytest.approx(speed / radius, rel=0.02)
+
+
+@pytest.mark.parametrize("stacked", [False, True], ids=["one-box", "box-on-a-box"])
+def test_with_friction_boxes_hold_on_a_slope_far_from_the_origin(
+    device: str, stacked: bool
+) -> None:
+    """A box, or a box on a box, on an incline 3° below the friction angle (μ = 0.5), 100 m
+    down the slope, where a float32 position resolves only about 8 µm, half a substep's
+    slip: neither moves by more than 1 mm in 5 s. Friction's corrections enter the motion
+    exactly and its anchors are fixed points, so the rounding of each slip it measures is
+    not summed up (#101's sixth and seventh reviews found the sums biased)."""
+    theta = math.atan(0.5) - math.radians(3.0)
+    normal = np.array([0.0, -math.sin(theta), math.cos(theta)])
+    down = np.array([0.0, -math.cos(theta), -math.sin(theta)])
+    slope = Solids((HalfSpace((0.0, 0.0, 0.0), tuple(normal)),))
+    solver = _solver(device, solids=slope, static_friction=0.5, dynamic_friction=0.5)
+    tilt = (math.sin(theta / 2.0), 0.0, 0.0, math.cos(theta / 2.0))
+    base = 100.0 * down
+    boxes = [_box(tuple(base + 0.1 * normal), orientation=tilt)]
+    if stacked:
+        boxes.append(_box(tuple(base + 0.3 * normal), orientation=tilt))
+    solver.add_bodies(boxes)
+
+    assert _drift(solver, 5.0) < 1e-3
+
+
+def test_a_sliding_box_far_from_the_origin_stops_where_kinetic_friction_says(device: str) -> None:
+    """A box sliding at 2 m/s on the floor 100 m from the origin, μ = 0.3: it stops after
+    v²/2μg = 0.680 m, within 1 %, as it does at the origin."""
+    solver = _solver(device, static_friction=0.3, dynamic_friction=0.3)
+    solver.add_bodies([_box((100.0, 0.0, 0.1), half=(0.2, 0.2, 0.1),
+                            velocity_m_per_s=(2.0, 0.0, 0.0),
+                            static_friction=0.3, dynamic_friction=0.3)])  # fmt: skip
+
+    for _ in range(120):
+        solver.step(1.0 / 60.0)
+
+    travelled = float(solver.body_positions()[0, 0]) - 100.0
+    assert travelled == pytest.approx(4.0 / (2.0 * 0.3 * G), rel=0.01)
