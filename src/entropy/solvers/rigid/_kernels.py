@@ -122,6 +122,12 @@ STATIC_PATCHES = wp.constant(3)
 PATCH_COS = wp.constant(0.9)
 """A body's contacts with the static solids share a patch when their normals lie within
 about 25° of the patch's first one: a floor and a wall make two patches."""
+PAIR_RELAXATION = wp.constant(1.8)
+"""Over-relaxation of the pairs' Jacobi average (Macklin et al. 2014, "Unified particle
+physics for real-time applications", §4.2): a pair's corrections are scaled by
+min(1, ω / n), n the larger pair count of its two bodies, so a lone pair is solved
+exactly. With 1 / n, a 4-3-2-1 pyramid sank and tilted its rows by 0.36°, the boxes
+pushed each other apart, and the top one crept 29 mm in 10 s (#88)."""
 ANCHOR_COS = wp.constant(0.98)
 """A patch keeps its friction anchor while its normal stays within about 11° of the one
 the anchor was set with; a patch turned farther is a new one (ADR 0032)."""
@@ -1326,7 +1332,7 @@ def solve_pairs(
                 anchors.pressing_kg_m[entry] = total
                 anchors.offset_a_m[entry] = ra
                 anchors.offset_b_m[entry] = rb
-    scale = 1.0 / float(wp.max(patches.per_body[a], patches.per_body[b]))
+    scale = wp.min(1.0, PAIR_RELAXATION / float(wp.max(patches.per_body[a], patches.per_body[b])))
     wp.atomic_add(shift_m, a, scale * (place_a - xa))
     wp.atomic_add(spin_rad, a, scale * spin_a)
     wp.atomic_add(shift_m, b, scale * (place_b - xb))
