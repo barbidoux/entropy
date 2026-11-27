@@ -29,7 +29,9 @@ Simplifications, named (CLAUDE.md rule 7):
   over-relaxation): edge-on-edge contacts between bodies are sampled; a capsule's
   envelope sags by up to 0.13 r between samples; a fast body can cross a thin one where
   it has no sample, from about 480 s⁻¹ times its thickness; small boxes can leave the
-  Test Tank at 30 m/s; pairs are Jacobi between them, over-relaxed, so stacks sink under
+  Test Tank at 30 m/s; without friction a stack is unstable (10 µm off brings five
+  boxes down in 7 s, and off the origin float32 positions seed it), which friction
+  holds; pairs are Jacobi between them, over-relaxed, so stacks sink under
   load (4.3 mm for 10 boxes of 20 cm), a far heavier body sinks into the one under it,
   and several bodies at once still pop and bounce (27 boxes spawned 5 cm into each other
   fly apart at up to 16 m/s); the static solids never give a body energy (its speed is
