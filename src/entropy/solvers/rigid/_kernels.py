@@ -16,10 +16,6 @@ GYROSCOPIC_ITERATIONS = 4
 GYROSCOPIC_PIECE_RAD = wp.constant(0.2)
 """The gyroscopic step's pieces: |w| dt times the spread of the moments at most this
 much each (`_gyroscopic`)."""
-ENERGY_SLACK = wp.constant(1.0e-5)
-"""The static solids' energy rule (`solve_static_velocities`) acts only past this share
-over the budget, float32's noise in a body's kinetic energy: trimming that slowed a box
-sliding down a frictionless 30° slope by 0.3 % in 3 s (#101's fifth review)."""
 GYROSCOPIC_MAX_PIECES = wp.constant(256)
 """The most pieces a substep's gyroscopic step is split into: a thin plank (moments 16 to
 1) keeps |L| and its energy within 4e-4 to 12,000 rad/s at 1/480 s, and loses 7 % of its
@@ -645,6 +641,7 @@ def solve_static(
     x0 = x - displacement_m[i]
     q0 = wp.quat_inverse(turn[i]) * q
     origin = x
+    moved = wp.vec3(0.0, 0.0, 0.0)  # the corrections' shift, kept exact (ADR 0030)
     mass = masses_kg[i]
     inertia = inertia_kg_m2[i]
     shape = shapes[i]
@@ -690,6 +687,7 @@ def solve_static(
                         patch_spread_m2[entry] = patch_spread_m2[entry] + wp.outer(rel, rel)
                         if depth > 0.0:
                             x, spin, impulse = _lift(x, spin, q, mass, inertia, point, n, depth)
+                            moved = moved + impulse / mass * n
                             patch_impulse_kg_m[entry] = patch_impulse_kg_m[entry] + impulse
                             patch_moment_kg_m2[entry] = patch_moment_kg_m2[entry] + impulse * point
                             patch_normal_kg_m[entry] = patch_normal_kg_m[entry] + impulse * n
@@ -753,6 +751,7 @@ def solve_static(
                                         x, spin, impulse = _lift(
                                             x, spin, q, mass, inertia, p, n, -hit[3]
                                         )
+                                        moved = moved + impulse / mass * n
                                         patch_impulse_kg_m[entry] = (
                                             patch_impulse_kg_m[entry] + impulse
                                         )
@@ -845,6 +844,7 @@ def solve_static(
                         if kept == 1 and held < sliding / weight:  # at its bound, not let go
                             patch_clamped[entry] = 1
                     x = x - held / mass * direction
+                    moved = moved - held / mass * direction
                     if not wide:
                         spin = spin - _inverse_inertia_world(q, inertia, held * lever)
             if stuck == 0 and mu > 0.0:  # the anchor, where the patch is now
@@ -857,7 +857,10 @@ def solve_static(
         correction = _rotation_quat(spin, 1.0)
         position_m[i] = x
         orientation[i] = _unit(correction * q)
-        displacement_m[i] = displacement_m[i] + (x - origin)
+        # The shift as the sum of the corrections, not x - origin: a float32 difference of
+        # positions is biased on a slope, and a box sliding down a frictionless 30° slope
+        # lost 0.7 % of its speed in 5 s (#101's sixth review).
+        displacement_m[i] = displacement_m[i] + moved
         turn[i] = _unit(correction * turn[i])  # the substep's whole turn, for later passes
         rotated_rad[i] = rotated_rad[i] + spin
         wp.atomic_add(static_contacts, 0, found)
@@ -965,7 +968,7 @@ def solve_static_velocities(
     if changed > 0:
         spin = wp.quat_rotate_inv(q, w)
         moving = 0.5 * (mass * wp.dot(v, v) + wp.dot(spin, wp.cw_mul(inertia, spin)))
-        if moving > kinetic_j[i] * (1.0 + ENERGY_SLACK):
+        if moving > kinetic_j[i]:
             share = wp.sqrt(kinetic_j[i] / moving)
             v = share * v
             w = share * w
