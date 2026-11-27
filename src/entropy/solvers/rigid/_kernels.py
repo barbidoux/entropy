@@ -1189,12 +1189,12 @@ def solve_pairs(
     to where the pair's anchor on the lower one holds it (`Anchors`, the entry `detect`
     gave the pair), carried as the lower body moves and turns, the leftover of its Jacobi
     share undone in later substeps as the normal overlap's is, so a pair holds up to μs.
-    Both bodies move without turning: the
-    torque the shifted normal forces would pass to the lower body is left to its own
-    support, as the static solids take a resting body's. Given as a turn each substep and
-    levelled by the next sweep, it moved the anchor on the lower body's face by about
-    60 µm a substep, against 17 µm of sliding, and a box resting on another on a slope 3°
-    under its friction angle crept up to 4.5 mm in 5 s (#88). Otherwise it undoes this
+    Both bodies move without turning: the torque the shifted normal forces would pass to
+    the lower body is left to its own support, as the static solids take a resting
+    body's. Given as a turn each substep and levelled by the next sweep, it moved the
+    anchor on the lower body's face by about 60 µm a substep, against 17 µm of sliding,
+    and a box resting on another on a slope 3° under its friction angle crept up to
+    4.5 mm in 5 s (#88). Otherwise it undoes this
     substep's sliding at the centre of pressure and turns both, its anchor left as it is.
     `Patches.clamped` marks a pair held at its bound."""
     p = wp.tid()

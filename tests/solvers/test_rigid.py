@@ -407,6 +407,26 @@ def test_a_dump_from_before_friction_replays_frictionless(tmp_path) -> None:
     np.testing.assert_array_equal(replay.body_positions()[:2], dump["positions_m"][:2])
 
 
+@pytest.mark.parametrize("missing", ["masses_kg", "shapes", "bounds_m"])
+def test_a_dump_missing_a_body_property_is_refused(tmp_path, missing: str) -> None:
+    """Only the coefficients, which dumps from before friction lack, have a default: a
+    dump missing any other property is broken and raises, rather than replaying bodies
+    with no mass or shape (#102's fourth review)."""
+    floor = Solids((HalfSpace((0.0, 0.0, 0.0), (0.0, 0.0, 1.0)),)).to_device("cpu")
+    setup = RigidSetup(gravity_m_per_s2=GRAVITY, max_bodies=8, dump_dir=tmp_path, solids=floor)
+    solver = RigidSolver.create(setup, "cpu")
+    solver.add_bodies([_box(position_m=(0.0, 0.0, 0.1)), _box(position_m=(3.0, 0.0, 5.0))])
+    solver.step(1.0 / 60.0)
+    solver.set_body_velocity(1, (math.nan, 0.0, 0.0))
+    solver.step(1.0 / 30.0)  # the guard reads its status at the next call
+    with pytest.raises(NonFiniteStateError) as raised:
+        solver.step(1.0 / 60.0)
+    dump = {k: v for k, v in load_dump(raised.value.dump_path).items() if k != missing}
+
+    with pytest.raises(KeyError, match=missing):
+        RigidSolver.from_dump(dump, "cpu")
+
+
 def test_a_nan_orientation_is_caught(device: str, tmp_path) -> None:
     """A NaN orientation is caught by the NaN guard at the next call: it reaches the
     angular velocity, recovered from the substep's rotation vectors, even where Warp's

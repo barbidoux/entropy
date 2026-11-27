@@ -35,11 +35,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
     accelerates at the expected rate; a block breaking free slides with μd.
   - A sliding box stops within 0.6 % of v²/2μg, and a ball rolls down a slope at
     (5/7) g sin θ.
-  - Named limits (ADR 0032): between bodies friction leaves the lower body's tipping
-    torque to its support; bounces on several bodies at once share one bounce (#90);
-    friction can give a little energy in fast hits between bodies; no anchor on a
-    narrow patch (a plank leaning on a wall creeps); no rolling resistance; far from
-    the origin, float32's resolution.
+  - Named limits (ADR 0032): on a wide patch between bodies friction turns neither
+    body (no yaw from a box sliding across another); bounces on several bodies at once
+    share one bounce (#90); friction can give a little energy in fast hits between
+    bodies; no anchor on a narrow patch (a plank leaning on a wall creeps); no rolling
+    resistance; far from the origin, float32's resolution.
   - Coefficients are checked; checkpoints and dumps carry them. The material files
     supply them with the spawner (#93). Dumps from before friction replay without it.
 - Rigid contacts (#87, ADR 0031): bodies against the static solids and against each

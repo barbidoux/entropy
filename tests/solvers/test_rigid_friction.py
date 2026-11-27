@@ -277,7 +277,12 @@ def _drift_and_turn(solver: RigidSolver, seconds: float) -> tuple[float, float]:
     for _ in range(round(seconds * 60)):
         solver.step(1.0 / 60.0)
     moved = float(np.linalg.norm(solver.body_positions() - settled, axis=1).max())
-    dots = np.abs((solver.body_orientations().astype(np.float64) * turned).sum(axis=1))
+    # Over the quaternions' lengths: float32 leaves them about 1e-7 off 1, as much as
+    # cos(θ/2) falls short of 1 for θ = 0.05°.
+    now = solver.body_orientations().astype(np.float64)
+    then = turned.astype(np.float64)
+    norms = np.linalg.norm(now, axis=1) * np.linalg.norm(then, axis=1)
+    dots = np.abs((now * then).sum(axis=1)) / norms
     return moved, float(np.degrees(2.0 * np.arccos(np.clip(dots, 0.0, 1.0))).max())
 
 
@@ -303,7 +308,8 @@ def test_with_friction_a_pyramid_stands(device: str) -> None:
     """A 4-3-2-1 pyramid of boxes, each row resting on the joints of the one below, μ =
     0.5: it stands for 10 s, every box moving under 1 mm and turning under 0.1° (without
     friction it collapses, ADR 0031). With friction's torque about the normal given on
-    resting patches, the boxes turned up to 1.9° in 30 s (#102's third review)."""
+    resting patches, the boxes turned 0.18° in 10 s on the CPU, 0.15° on CUDA (#102's
+    third review)."""
     solver = _solver(device, static_friction=0.5, dynamic_friction=0.5)
     boxes = []
     for row, count in enumerate((4, 3, 2, 1)):
@@ -321,8 +327,9 @@ def test_with_friction_a_heavy_cube_rests_on_a_wooden_plank(device: str, scene: 
     """A heavy 20 cm cube resting near the end of a long wooden plank, μ = 0.5: concrete
     0.85 m out on a 2 m board lying on the floor, or steel 0.6 m out on a plank laid
     across two blocks. For 10 s no body moves 1 mm or turns 0.1°. With friction's torque
-    about the normal given on resting patches, the cube on the board slid 153 mm and
-    turned 90° (#102's third review)."""
+    about the normal given on resting patches, the cube on the board slid 10 mm and
+    turned 12° on the CPU (153 mm and 90° on CUDA), and the bridge moved 40 mm (#102's
+    third review)."""
     solver = _solver(device, max_bodies=8, static_friction=0.5, dynamic_friction=0.5)
     if scene == "board":
         bodies = [_box((0.0, 0.0, 0.01), half=(1.0, 0.1, 0.01)),

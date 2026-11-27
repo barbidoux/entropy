@@ -76,7 +76,7 @@ hold across substeps, not only within one.
       the turn it gives, and a held patch's turn was never taken back, so resting
       bodies turned. A concrete cube resting on the end of a wooden board slid 153 mm
       and turned 90° in 10 s, a steel cube on a plank bridge moved 40 mm, and a pyramid
-      turned 1.9° in 30 s (#102's third review).
+      turned 1.8° in 30 s (#102's third review).
     So the angular momentum is not kept (below).
   - Between bodies, static friction measures the sliding from the motion before the
     pair's own corrections: the turn its depth corrections give the bodies is no
@@ -184,10 +184,10 @@ On CUDA, 2026-11-27, except where noted.
 | Two 20 cm boxes spawned 1 to 6 cm into each other, turned up to 45°, μ = 0.5, no gravity | 0.00 J after one frame | 0.00 J, as frictionless |
 | μ = 0.5, each body's largest move over 10 s after 1 s to settle: | | |
 | a box 1, 4 or 8 cm off-centre on an equal one | 0.000 mm | under 1 mm (the tests) |
-| a 4-3-2-1 pyramid; a 6-row one | 0.013 to 0.084 mm, unturned; 0.25 to 0.98 mm, turned up to 0.17° | under 1 mm, 0.1° (the test: 4-3-2-1) |
+| a 4-3-2-1 pyramid; a 6-row one | 0.013 mm, unturned; 0.11 to 1.03 mm, turned up to 0.13° | under 1 mm, 0.1° (the test: 4-3-2-1) |
 | a concrete cube 0.85 m out on a 2 m wooden board; a steel cube 0.6 m out on a plank bridge | 0.003 mm; 0.16 mm; unturned | under 1 mm and 0.1° (the tests) |
 | a crate under a slab 64 times heavier | 0.37 mm | under 1 mm |
-| four boxes stacked as stairs, each 3 cm past the one under it | 0.7 to 1.0 mm | |
+| four boxes stacked as stairs, each 3 cm past the one under it | 1.0 mm | |
 | boxes on a slope (5 s, 4 starts): 2 at 3°, 1° and 0.5° under atan μ; 3 at 1°; 5 at 3° | at most 0.087 mm | under 1 mm |
 | a box on a box 3° under atan μ, 5 to 100 m down the slope (5 s) | at most 0.008 mm | under 1 mm |
 
@@ -195,7 +195,7 @@ Between bodies, ADR 0031's numbers stand: stacks sink 0.5, 1.7 and 7.7 mm for 3,
 10 boxes; 27 boxes spawned 5 cm into each other fly apart at 12.2 m/s; V-RB-04 keeps the
 angular momentum within 8.7e-4 of its terms (seed 4; 1.35e-3 at worst over seeds 0 to 9)
 and the linear within 1.9e-7. Run to run on CUDA, the stacks' small moves vary (the
-pyramid 0.013 to 0.084 mm, the 6-row one 0.25 to 0.98 mm).
+6-row pyramid 0.11 to 1.03 mm over ten runs).
 
 ## Named simplifications
 
@@ -222,8 +222,9 @@ These are named in SPEC 5.4 and in the module.
   correction undoes the sliding the bodies' motion would have made, which the depth
   corrections may already have turned away: over 60 random hits of two boxes at 2 to
   8 m/s, e = 1 and μ = 0.5, the worst ends with 1.075 times its energy (frictionless
-  1.000); most lose some. A dense box pushed off a plank's edge onto a frictionless
-  floor gains up to 13 % of its kinetic energy for a moment. Real materials have e < 1.
+  1.000); most lose some. A dense box pushed at 1 m/s off a plank's edge onto a
+  frictionless floor gains up to 13 % of its kinetic energy for a moment, 5 % of it with
+  no friction between them (the contacts' own, ADR 0031). Real materials have e < 1.
 - **A patch that is not wide has no anchor.** Its static friction undoes one substep's
   sliding, so Jacobi's leftover is lost there, and between two narrow patches one
   Gauss–Seidel pass leaves a little sliding each substep. A plank leaning on a wall
@@ -286,11 +287,14 @@ Measured on the CPU in the tests' scenes, except where noted.
   keeps the angular momentum in free fall but not a supported stack at rest. Its part
   about the normal alone set resting bodies turning (above). Sizing the impulse with
   the turn it gives fixed the cube on the board but not the plank bridge (40 mm) or the
-  pyramids (2.3°); also leaving the turn out on patches an anchor holds fixed those, at
-  the cost of a held pair's turn together (#102's third review). A torsional anchor
+  6-row pyramid (2.3 to 2.5°); also leaving the turn out on patches an anchor holds
+  fixed the bridge, though the 6-row pyramid still turned 0.17 to 0.83°, at the cost of
+  a held pair's turn together (#102's third review). A torsional anchor
   would be the principled way; it is not tried.
 - **A pair's sliding measured with its own corrections** (Müller et al.'s current
-  positions). Bodies pushed out of an overlap were flung apart (above).
+  positions). Bodies pushed out of an overlap were flung apart (above). It held a 6-row
+  pyramid better: 0.016 to 0.078 mm and 0.013° at most in 10 s, against 0.11 to 1.03 mm
+  and 0.13° now; the overlaps decided.
 - **A bounce shared with all of a body's pairs** (1 / n, as the depths), **or with none**:
   dead bounces on stacks, or energy gained by bodies hit twice at once (above).
 - **Anchors on every patch.** A ball's anchor, a point of its surface, rolled away and

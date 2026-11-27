@@ -42,9 +42,9 @@ Simplifications, named (CLAUDE.md rule 7):
   the patch's anchor, at most μs times the patch's normal impulse, and between bodies,
   static or dynamic, it turns neither body, so a box sliding onto another in free fall
   loses angular momentum, and one sliding across another off its centre does not turn
-  it; bounces on several bodies
-  at once share one bounce, and the velocity pass does not know a body's support;
-  friction can give a little energy in fast hits between bodies; no anchor on a patch
+  it; bounces on several bodies at once share one bounce, and the velocity pass does
+  not know a body's support; friction can give a little energy between bodies, in fast
+  hits or a box tipping off a plank's edge; no anchor on a patch
   that is not wide, so a plank leaning on a wall creeps; no rolling resistance, and no
   torsion at a single contact point; a gentle push springs back by up to 0.2 mm; far
   from the origin, contacts see float32's resolution, and a block just past its
