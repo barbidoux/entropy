@@ -22,17 +22,23 @@ Simplifications, named (CLAUDE.md rule 7):
 - positions accumulate in float32: far from the origin a body's position drifts from
   x₀ + vt (1.5 cm after 60 s at 1.26 m/s, 20 to 80 m out), its velocity stays exact;
 - checkpoints are synchronous: on CUDA, taking one waits for the queued GPU work (#99);
-- contacts (ADR 0031, which gives the numbers): edge-on-edge contacts between bodies
-  are sampled; a capsule's envelope sags by up to 0.13 r between samples; a fast body
-  can cross a thin one where it has no sample, from about 480 s⁻¹ times its thickness;
-  small boxes can leave the Test Tank at 30 m/s; without friction, bodies resting
-  off-centre slide off; pairs are Jacobi between them, so stacks sink under load
-  (7.7 mm for 10 boxes of 20 cm), a far heavier body sinks into the one under it, and
-  several bodies at once still pop and bounce (a spawned clump flies apart at up to
-  14 m/s); angular momentum is kept within 1.35e-3 of its terms in V-RB-04's scenes,
-  the linear within 1.4e-5; a pair overflow loses support; the tank's rims are not
-  sampled as edges;
-- no friction, restitution or sleeping yet (#88, #89).
+- contacts (ADR 0031, which gives the numbers, and ADR 0032 for the pairs'
+  over-relaxation): edge-on-edge contacts between bodies are sampled; a capsule's
+  envelope sags by up to 0.13 r between samples; a fast body can cross a thin one where
+  it has no sample, from about 480 s⁻¹ times its thickness; small boxes can leave the
+  Test Tank at 30 m/s; pairs are Jacobi between them, over-relaxed, so stacks sink under
+  load (4.3 mm for 10 boxes of 20 cm), a far heavier body sinks into the one under it,
+  and several bodies at once still pop and bounce (27 boxes spawned 5 cm into each other
+  fly apart at up to 16 m/s); angular momentum is kept within 1.2e-3 of its terms in
+  V-RB-04's scenes, the linear within 1.6e-5; a pair overflow loses support; the tank's
+  rims are not sampled as edges;
+- friction and restitution (ADR 0032, which gives the numbers): once per contact patch,
+  at its centre of pressure; static friction holds each patch's anchors together, at
+  most μs times the patch's normal impulse averaged over 8 substeps, so a body at its
+  bound may creep 0.2 mm before it slides; one surface material for all the static
+  solids; torsion about 1.4 times too strong on box faces, and dynamic only; bounces
+  1.3 to 1.7 % low;
+- no sleeping yet (#89).
 
 NaN guard (SPEC 5.9): after each step a kernel counts non-finite bodies into a small
 status array, copied to the host without waiting; the next call reads it. A non-finite

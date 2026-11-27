@@ -228,3 +228,25 @@ def test_a_checkpoint_keeps_the_friction_anchors() -> None:
 
     np.testing.assert_array_equal(solver.body_positions(), expected[0])
     np.testing.assert_array_equal(solver.body_orientations(), expected[1])
+
+
+def test_a_ball_rolls_down_a_slope_at_five_sevenths_g_sin_theta(device: str) -> None:
+    """A sphere on a 20° slope with μ = 0.6 rolls without slipping: after 1 s its speed is
+    (5/7) g sin θ t within 2 % and its spin v / r. Static friction holds the point that
+    touches the slope now, not a point of the ball's surface, which rolls away from it."""
+    theta = math.radians(20.0)
+    normal = (0.0, -math.sin(theta), math.cos(theta))
+    slope = Solids((HalfSpace((0.0, 0.0, 0.0), normal),))
+    solver = _solver(device, solids=slope, static_friction=0.6, dynamic_friction=0.6)
+    radius = 0.1
+    solver.add_bodies([Body(Shape.SPHERE, (radius, 0.0, 0.0), 600.0,
+                            position_m=tuple(radius * np.asarray(normal)),
+                            static_friction=0.6, dynamic_friction=0.6)])  # fmt: skip
+
+    for _ in range(60):
+        solver.step(1.0 / 60.0)
+
+    speed = float(np.linalg.norm(solver.body_velocities()[0]))
+    assert speed == pytest.approx(5.0 / 7.0 * G * math.sin(theta) * 1.0, rel=0.02)
+    spin = float(np.linalg.norm(solver.body_angular_velocities()[0]))
+    assert spin == pytest.approx(speed / radius, rel=0.02)
