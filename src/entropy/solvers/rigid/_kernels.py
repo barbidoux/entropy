@@ -1106,8 +1106,10 @@ def detect(
     """Body i's pairs: each neighbour j > i within reach (the hash grid) whose sample
     spheres and i's (as `_tested` says) touch gets a patch; each pair is met once. A pair
     past the room is dropped and counted, and holds both bodies back from sleeping.
-    Two sleeping bodies are not tested: their pair's anchor is carried over as it is; a
-    sleeping body an awake one touches has its island marked in `wake` (ADR 0033).
+    A sleeping body tests nothing: its pairs with sleeping bodies keep their anchors as
+    they are, and an awake neighbour tests it, whichever index it has. A sleeping body an
+    awake one touches has its island marked in `wake`; their pair starts with no anchor
+    (ADR 0033).
 
     Row i of the friction anchors, `pairs_per_body` entries, is written again: a pair
     still in contact carries its anchor over from the last substep (`previous`), a pair
@@ -1135,11 +1137,13 @@ def detect(
                     anchors.normal[entry] = previous.normal[old]
                     anchors.offset_a_m[entry] = previous.offset_a_m[old]
                     anchors.offset_b_m[entry] = previous.offset_b_m[old]
+        return  # an awake neighbour tests it, whichever index it has
     query = wp.hash_grid_query(grid, x, bounds_m[i] + max_bound_m)
     j = int(0)  # noqa: UP018, RUF046 (Warp needs a mutable int)
     while wp.hash_grid_query_next(query, j):
-        both_asleep = asleep[i] == 1 and asleep[j] == 1
-        if j > i and not both_asleep and wp.length(position_m[j] - x) < bounds_m[i] + bounds_m[j]:
+        # Each pair once: by its smaller index, or by the awake body if the other sleeps.
+        sleeper = j < i and asleep[j] == 1
+        if (j > i or sleeper) and wp.length(position_m[j] - x) < bounds_m[i] + bounds_m[j]:
             xj = position_m[j]
             qj = orientation[j]
             axis = wp.vec3(0.0, 0.0, 0.0)
@@ -1161,18 +1165,16 @@ def detect(
                     if _sink(centre, sample[3], x, q, none, shapes[i], sizes_m[i], -axis)[3] > 0.0:
                         touching = 1
             if touching == 1:
-                if asleep[i] == 1:
-                    wake[root[i]] = 1
                 if asleep[j] == 1:
                     wake[root[j]] = 1
                 slot = wp.atomic_add(patches.count, 0, 1)
                 if slot < patches.a.shape[0]:
-                    patches.a[slot] = i
-                    patches.b[slot] = j
+                    patches.a[slot] = wp.min(i, j)
+                    patches.b[slot] = wp.max(i, j)
                     wp.atomic_add(patches.per_body, i, 1)
                     wp.atomic_add(patches.per_body, j, 1)
                     entry = int(-1)  # noqa: UP018, RUF046 (a mutable int for Warp)
-                    if rows < pairs_per_body:
+                    if rows < pairs_per_body and not sleeper:
                         entry = row + rows
                         rows += 1
                         anchors.other[entry] = j

@@ -106,3 +106,12 @@ def test_hud_shows_extra_notes() -> None:
     lines = hud_lines(SUMMARY, None, interop="zero-copy", notes=["200,000 points"])
 
     assert lines[-1] == "200,000 points"
+
+
+def test_the_bodies_note_counts_the_sleeping_ones() -> None:
+    """The rigid bodies' line on the HUD names how many sleep (#89, ADR 0033), from the
+    solver's diagnostics."""
+    from entropy.ui.hud import bodies_note
+
+    assert bodies_note({"bodies": 5000, "sleeping": 4200}) == "5,000 corps, dont 4,200 endormis"
+    assert bodies_note({"bodies": 3.0, "sleeping": 0.0}) == "3 corps, dont 0 endormis"

@@ -7,7 +7,7 @@ as a Dear ImGui overlay in the top-left corner. The HUD only reads state.
 from __future__ import annotations
 
 import ctypes
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from types import TracebackType
 from typing import Any
 
@@ -74,6 +74,12 @@ def hud_lines(
         )
     lines += list(notes)
     return lines
+
+
+def bodies_note(diagnostics: Mapping[str, float]) -> str:
+    """The rigid bodies' HUD note: how many there are and how many sleep (#89, ADR
+    0033), from the rigid solver's `diagnostics()`."""
+    return f"{int(diagnostics['bodies']):,} corps, dont {int(diagnostics['sleeping']):,} endormis"
 
 
 class PerformanceHud:

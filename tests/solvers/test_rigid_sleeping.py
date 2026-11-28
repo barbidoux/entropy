@@ -330,3 +330,20 @@ def test_a_dump_replays_a_frame_with_sleeping_bodies(tmp_path) -> None:
 
     np.testing.assert_array_equal(replay.body_positions()[:3], dump["positions_m"][:3])
     assert replay.checkpoint()["sleep_asleep"][:3].all()
+
+
+def test_a_world_all_asleep_skips_its_substeps_until_something_changes(device: str) -> None:
+    """When every body sleeps and nothing has touched them since, a step does no work: it
+    runs no substep. A body added above the stack starts the work again, falls and wakes
+    it (ADR 0033)."""
+    solver = _stack(device)
+    _run(solver, 3.0)
+    solver.step(1.0 / 60.0)
+    assert solver.diagnostics()["substeps"] == 0
+
+    solver.add_bodies([_box((0.0, 0.0, 1.1), mu=0.5)])
+    solver.step(1.0 / 60.0)
+
+    assert solver.diagnostics()["substeps"] == 8
+    _run(solver, 0.5)
+    assert not _asleep(solver).any()

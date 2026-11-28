@@ -363,6 +363,7 @@ class RigidSolver:
         self._frozen: Path | None = None
         self._last_dt_s = 0.0
         self._timer: Any = None
+        self._changed = True  # bodies or their state changed since the last step's status
         self._diagnostics = {
             "bodies": 0,
             "substeps": 0,
@@ -383,6 +384,16 @@ class RigidSolver:
         h = dt_s / n
         count = self._count
         self._before_count = count
+        if (
+            setup.sleeping
+            and count
+            and not self._changed
+            and self._diagnostics["sleeping"] == count
+        ):
+            # Everything sleeps and nothing has touched it since: the world stands still.
+            self._diagnostics.update(substeps=0, contacts=0)
+            self._last_dt_s = dt_s
+            return
         with self._stage("rigid bodies (CUDA)"):
             for name, _ in _STATE:
                 if count:
@@ -404,6 +415,7 @@ class RigidSolver:
                     self._sleep_step(dt_s)
         self._diagnostics["substeps"] = n
         self._last_dt_s = dt_s
+        self._changed = False
         self._send_status()
 
     def max_advance_s(self) -> float:
@@ -467,6 +479,7 @@ class RigidSolver:
         self._overflows.zero_()
         self._frozen = None
         self._status_pending = False
+        self._changed = True
 
     def diagnostics(self) -> dict[str, float]:
         return dict(self._diagnostics)
@@ -510,6 +523,7 @@ class RigidSolver:
             for name, _ in _ANCHOR_FIELDS:
                 getattr(table, name)[start * per_body : (start + count) * per_body].zero_()
         self._wake_fresh(start, count)
+        self._changed = True
         self._count += count
         self._max_bound_m = max(self._max_bound_m, *rows["bounds_m"])
         self._diagnostics["bodies"] = self._count
@@ -522,6 +536,7 @@ class RigidSolver:
             np.asarray([velocity_m_per_s], np.float32), dtype=wp.vec3, device=self._device
         )
         wp.copy(self._state["velocities_m_per_s"], values, dest_offset=index, count=1)
+        self._changed = True
         self._wake.zero_()  # its island wakes, and stays awake this frame (ADR 0033)
         wp.launch(_k.mark_wake_body, dim=1,
                   inputs=[index, self._sleep["root"], self._wake, self._held],
@@ -537,6 +552,7 @@ class RigidSolver:
         self._read_status()
         if not self._count:
             return
+        self._changed = True
         self._wake.zero_()
         wp.launch(_k.mark_wake_box, dim=self._count,
                   inputs=[self._state["positions_m"], self._properties["bounds_m"],
