@@ -20,10 +20,13 @@ TANK = Solids((OpenBox((-2.0, -2.0, 0.0), (2.0, 2.0, 2.0), 0.02),))  # the Test 
 
 
 def _solver(device: str, solids: Solids | None = FLOOR, gravity=GRAVITY, **kw) -> RigidSolver:
+    """Sleeping is off: these tests watch the contact physics, which bodies asleep would
+    pass trivially (ADR 0033)."""
     setup = RigidSetup(
         gravity_m_per_s2=gravity,
         max_bodies=64,
         solids=solids.to_device(device) if solids is not None else None,
+        sleeping=False,
         **kw,
     )
     return RigidSolver.create(setup, device)

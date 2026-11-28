@@ -341,8 +341,16 @@ class RigidSolver:
         self._max_bound_m = 0.0
         self._solids = setup.solids or _no_solids(device)
         cuda = wp.get_device(device).is_cuda
-        self._status = wp.zeros(3, dtype=float, device=device)
-        self._status_host = wp.zeros(3, dtype=float, device="cpu", pinned=cuda)
+        # Sleeping (ADR 0033): which bodies rest on a static solid in the last substep and
+        # which are held back this frame, and the islands' tallies by root.
+        self._touched_static = wp.zeros(n, dtype=wp.int32, device=device)  # pyright: ignore[reportArgumentType]
+        self._held = wp.zeros(n, dtype=wp.int32, device=device)  # pyright: ignore[reportArgumentType]
+        self._island_tally = [
+            wp.zeros(n, dtype=wp.int32, device=device)  # pyright: ignore[reportArgumentType]
+            for _ in range(3)
+        ]
+        self._status = wp.zeros(4, dtype=float, device=device)
+        self._status_host = wp.zeros(4, dtype=float, device="cpu", pinned=cuda)
         self._status_event = wp.Event(device) if cuda else None
         self._status_pending = False
         # The dump of the frame that went non-finite; each call raises a new error for it,
@@ -350,7 +358,13 @@ class RigidSolver:
         self._frozen: Path | None = None
         self._last_dt_s = 0.0
         self._timer: Any = None
-        self._diagnostics = {"bodies": 0, "substeps": 0, "contacts": 0, "pair_overflows": 0}
+        self._diagnostics = {
+            "bodies": 0,
+            "substeps": 0,
+            "contacts": 0,
+            "pair_overflows": 0,
+            "sleeping": 0,
+        }
 
     def step(self, dt_s: float, ctx: Any = None) -> None:
         """Advance every body by `dt_s` seconds in substeps of at most `MAX_SUBSTEP_S`.
@@ -568,7 +582,9 @@ class RigidSolver:
         before = [self._velocity_before_m_per_s, self._angular_before_rad_per_s]
         wp.copy(before[0], velocities[0], count=count)
         wp.copy(before[1], velocities[1], count=count)
-        wp.launch(_k.predict, dim=count, inputs=[*state, inertia, gravity, h, *increments],
+        asleep = self._sleep["asleep"]
+        wp.launch(_k.predict, dim=count,
+                  inputs=[*state, inertia, gravity, h, *increments, asleep],
                   device=device)  # fmt: skip
         patches = self._patches
         self._contact_count.zero_()
@@ -583,7 +599,7 @@ class RigidSolver:
             dim=count,
             inputs=[self._grid.id, positions, orientations, shapes, sizes, properties["bounds_m"],
                     self._max_bound_m, self._signs, self._overflows, patches,
-                    self._spare_anchors, self._pair_anchors, PAIRS_PER_BODY],
+                    self._spare_anchors, self._pair_anchors, PAIRS_PER_BODY, asleep, self._held],
             device=device,
         )  # fmt: skip
         corrections = [self._shift_m, self._spin_rad]
@@ -605,7 +621,7 @@ class RigidSolver:
                   self._static_contacts, *self._static_patches, self._static_touch,
                   properties["static_friction"], setup.static_friction,
                   properties["dynamic_friction"], setup.dynamic_friction,
-                  self._static_anchors]  # fmt: skip
+                  self._static_anchors, asleep, self._touched_static]  # fmt: skip
         wp.launch(_k.solve_static, dim=count, inputs=static, device=device)
         wp.launch(_k.recover, dim=count,
                   inputs=[self._displacement, self._rotated_rad, h, *velocities],
@@ -647,10 +663,26 @@ class RigidSolver:
         """Once per step, after the substeps: each body's quiet timer (ADR 0033)."""
         state = [self._state[name] for name, _ in _STATE]
         sleep = self._sleep
-        wp.launch(_k.update_quiet, dim=self._count,
+        count, device = self._count, self._device
+        wp.launch(_k.update_quiet, dim=count,
                   inputs=[*state, self._properties["bounds_m"], sleep["last_position_m"],
                           sleep["last_orientation"], dt_s, sleep["timer_s"]],
-                  device=self._device)  # fmt: skip
+                  device=device)  # fmt: skip
+        asleep, root, tally = sleep["asleep"], sleep["root"], self._island_tally
+        wp.launch(_k.island_reset, dim=count, inputs=[asleep, root, *tally], device=device)
+        wp.launch(_k.island_join, dim=self._patches.a.shape[0], inputs=[self._patches, root],
+                  device=device)  # fmt: skip
+        wp.launch(_k.island_compress, dim=count, inputs=[root], device=device)
+        wp.launch(_k.island_tally, dim=count,
+                  inputs=[asleep, sleep["timer_s"], self._touched_static, self._held, root,
+                          *tally],
+                  device=device)  # fmt: skip
+        wp.launch(
+            _k.island_decide,
+            dim=count,
+            inputs=[root, *tally, asleep, self._held, *state[2:]],
+            device=device,
+        )
 
     def _send_status(self) -> None:
         self._status.zero_()
@@ -667,6 +699,9 @@ class RigidSolver:
                 inputs=[*(self._state[name] for name, _ in _STATE), self._status],
                 device=self._device,
             )
+            wp.launch(_k.count_sleeping, dim=self._count,
+                      inputs=[self._sleep["asleep"], self._status],
+                      device=self._device)  # fmt: skip
         wp.copy(self._status_host, self._status)
         if self._status_event is not None:
             wp.get_device(self._device).stream.record_event(self._status_event)
@@ -683,6 +718,7 @@ class RigidSolver:
         status = self._status_host.numpy()
         self._diagnostics["contacts"] = int(status[1])
         self._diagnostics["pair_overflows"] = int(status[2])
+        self._diagnostics["sleeping"] = int(status[3])
         if float(status[0]) > 0.0:
             self._frozen = self._dump()
             raise NonFiniteStateError(self._frozen)

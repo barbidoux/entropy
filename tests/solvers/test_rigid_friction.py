@@ -18,10 +18,13 @@ FLOOR = Solids((HalfSpace((0.0, 0.0, 0.0), (0.0, 0.0, 1.0)),))
 def _solver(
     device: str, solids: Solids | None = FLOOR, gravity=GRAVITY, max_bodies: int = 16, **surface
 ) -> RigidSolver:
+    """Sleeping is off: these tests watch the friction physics, which a stack asleep
+    would pass trivially (ADR 0033)."""
     setup = RigidSetup(
         gravity_m_per_s2=gravity,
         max_bodies=max_bodies,
         solids=solids.to_device(device) if solids is not None else None,
+        sleeping=False,
         **surface,
     )
     return RigidSolver.create(setup, device)

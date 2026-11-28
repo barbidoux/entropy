@@ -83,14 +83,20 @@ def predict(
     displacement_m: wp.array(dtype=wp.vec3),
     turn: wp.array(dtype=wp.quat),
     rotated_rad: wp.array(dtype=wp.vec3),
+    asleep: wp.array(dtype=wp.int32),
 ):
     """The first half of an XPBD substep (Müller et al. 2020): move every body with
     gravity and the gyroscopic torque, and keep the motion as increments: a displacement,
     a turn (the rotation, a quaternion) and the rotation vector it was made of.
     Constraints add their corrections to all three; `recover` turns them into the
     velocities, not the difference of two nearby positions or orientations, which
-    float32 does not keep exact (ADR 0030)."""
+    float32 does not keep exact (ADR 0030). A sleeping body does not move (ADR 0033)."""
     i = wp.tid()
+    if asleep[i] == 1:
+        displacement_m[i] = wp.vec3(0.0, 0.0, 0.0)
+        turn[i] = wp.quat_identity()
+        rotated_rad[i] = wp.vec3(0.0, 0.0, 0.0)
+        return
     q0 = orientation[i]
     v = velocity_m_per_s[i] + gravity_m_per_s2 * dt_s
     # The gyroscopic torque, in the body's frame where the inertia is diagonal. Only its
@@ -598,6 +604,8 @@ def solve_static(
     dynamic_friction: wp.array(dtype=float),
     solids_dynamic_friction: float,
     anchors: Anchors,
+    asleep: wp.array(dtype=wp.int32),
+    touched_static: wp.array(dtype=wp.int32),
 ):
     """Body i against the static solids, by its own thread: one Gauss-Seidel sweep, each
     correction applied before the next is tested, compliance 0.
@@ -659,6 +667,8 @@ def solve_static(
         patch_spread_m2[STATIC_PATCHES * i + s] = wp.mat33()
         patch_touch[STATIC_PATCHES * i + s] = wp.vec4(0.0, 0.0, 0.0, 0.0)
         patch_clamped[STATIC_PATCHES * i + s] = 0
+    if asleep[i] == 1:  # frozen, resting where it fell asleep (ADR 0033)
+        return
     candidates = plane_points.shape[0] + box_centres.shape[0] + 6 * tank_lows.shape[0]
     count = _samples(shape, size)
     for step in range(count):
@@ -860,6 +870,9 @@ def solve_static(
         turn[i] = _unit(correction * turn[i])  # the substep's whole turn, for later passes
         rotated_rad[i] = rotated_rad[i] + spin
         wp.atomic_add(static_contacts, 0, found)
+        touched_static[i] = 1
+    else:
+        touched_static[i] = 0
 
 
 @wp.kernel
@@ -1085,10 +1098,14 @@ def detect(
     previous: Anchors,
     anchors: Anchors,
     pairs_per_body: int,
+    asleep: wp.array(dtype=wp.int32),
+    held: wp.array(dtype=wp.int32),
 ):
     """Body i's pairs: each neighbour j > i within reach (the hash grid) whose sample
     spheres and i's (as `_tested` says) touch gets a patch; each pair is met once. A pair
-    past the room is dropped and counted.
+    past the room is dropped and counted, and holds both bodies back from sleeping.
+    Two sleeping bodies are not tested: their pair's anchor is carried over as it is
+    (ADR 0033).
 
     Row i of the friction anchors, `pairs_per_body` entries, is written again: a pair
     still in contact carries its anchor over from the last substep (`previous`), a pair
@@ -1103,10 +1120,24 @@ def detect(
         anchors.other[row + r] = -1
         anchors.stuck[row + r] = 0
     rows = int(0)  # noqa: UP018, RUF046 (a mutable int for Warp)
+    if asleep[i] == 1:  # its pairs with sleeping bodies keep their anchors
+        for r in range(pairs_per_body):
+            old = row + r
+            other = previous.other[old]
+            if other >= 0:  # noqa: SIM102 (Warp's `and` does not short-circuit: no asleep[-1])
+                if asleep[other] == 1:
+                    entry = row + rows
+                    rows += 1
+                    anchors.other[entry] = other
+                    anchors.stuck[entry] = previous.stuck[old]
+                    anchors.normal[entry] = previous.normal[old]
+                    anchors.offset_a_m[entry] = previous.offset_a_m[old]
+                    anchors.offset_b_m[entry] = previous.offset_b_m[old]
     query = wp.hash_grid_query(grid, x, bounds_m[i] + max_bound_m)
     j = int(0)  # noqa: UP018, RUF046 (Warp needs a mutable int)
     while wp.hash_grid_query_next(query, j):
-        if j > i and wp.length(position_m[j] - x) < bounds_m[i] + bounds_m[j]:
+        both_asleep = asleep[i] == 1 and asleep[j] == 1
+        if j > i and not both_asleep and wp.length(position_m[j] - x) < bounds_m[i] + bounds_m[j]:
             xj = position_m[j]
             qj = orientation[j]
             axis = wp.vec3(0.0, 0.0, 0.0)
@@ -1149,6 +1180,8 @@ def detect(
                     patches.anchor[slot] = entry
                 else:
                     wp.atomic_add(overflows, 0, 1)
+                    held[i] = 1  # a pair lost: neither may sleep this frame
+                    held[j] = 1
 
 
 @wp.kernel
@@ -1705,6 +1738,123 @@ def update_quiet(
         timer_s[i] = 0.0
     last_position_m[i] = x
     last_orientation[i] = q
+
+
+@wp.func
+def _find(root: wp.array(dtype=wp.int32), body: int) -> int:
+    """The root of `body`'s island in the union-find held in `root`."""
+    r = body
+    for _hop in range(64):
+        parent = root[r]
+        if parent == r:
+            return r
+        r = parent
+    return r
+
+
+@wp.kernel
+def island_reset(
+    asleep: wp.array(dtype=wp.int32),
+    root: wp.array(dtype=wp.int32),
+    quiet_all: wp.array(dtype=wp.int32),
+    supported_all: wp.array(dtype=wp.int32),
+    held_all: wp.array(dtype=wp.int32),
+):
+    """Each awake body its own island; a sleeping one keeps its island's root, since its
+    island's pairs are not tested while it sleeps. The islands' tallies are reset."""
+    i = wp.tid()
+    if asleep[i] == 0:
+        root[i] = i
+    quiet_all[i] = 1
+    supported_all[i] = 0
+    held_all[i] = 0
+
+
+@wp.kernel
+def island_join(patches: Patches, root: wp.array(dtype=wp.int32)):
+    """The islands of patch p's two bodies become one: the larger root is linked to the
+    smaller by compare-and-swap, so the root is the island's smallest index, whatever
+    the threads' order (deterministic islands, ADR 0033)."""
+    p = wp.tid()
+    if p >= wp.min(patches.count[0], patches.a.shape[0]):
+        return
+    a = patches.a[p]
+    b = patches.b[p]
+    for _try in range(64):
+        ra = _find(root, a)
+        rb = _find(root, b)
+        if ra == rb:
+            return
+        high = wp.max(ra, rb)
+        low = wp.min(ra, rb)
+        if wp.atomic_cas(root, high, high, low) == high:
+            return
+
+
+@wp.kernel
+def island_compress(root: wp.array(dtype=wp.int32)):
+    """Each body points straight at its island's root."""
+    i = wp.tid()
+    root[i] = _find(root, i)
+
+
+@wp.kernel
+def island_tally(
+    asleep: wp.array(dtype=wp.int32),
+    timer_s: wp.array(dtype=float),
+    touched_static: wp.array(dtype=wp.int32),
+    held: wp.array(dtype=wp.int32),
+    root: wp.array(dtype=wp.int32),
+    quiet_all: wp.array(dtype=wp.int32),
+    supported_all: wp.array(dtype=wp.int32),
+    held_all: wp.array(dtype=wp.int32),
+):
+    """Body i's part in its island's decision: whether it is quiet, rests on a static
+    solid, or is held back (a tool set it this frame, or a pair of it was dropped)."""
+    i = wp.tid()
+    r = root[i]
+    quiet = int(0)  # noqa: UP018, RUF046 (a mutable int for Warp)
+    if asleep[i] == 1 or timer_s[i] >= SLEEP_TIME_S:
+        quiet = 1
+    wp.atomic_min(quiet_all, r, quiet)
+    if asleep[i] == 1 or touched_static[i] == 1:
+        wp.atomic_max(supported_all, r, 1)
+    if held[i] == 1:
+        wp.atomic_max(held_all, r, 1)
+
+
+@wp.kernel
+def island_decide(
+    root: wp.array(dtype=wp.int32),
+    quiet_all: wp.array(dtype=wp.int32),
+    supported_all: wp.array(dtype=wp.int32),
+    held_all: wp.array(dtype=wp.int32),
+    asleep: wp.array(dtype=wp.int32),
+    held: wp.array(dtype=wp.int32),
+    velocity_m_per_s: wp.array(dtype=wp.vec3),
+    angular_velocity_rad_per_s: wp.array(dtype=wp.vec3),
+):
+    """An island sleeps whole, when every body in it is quiet, one rests on a static
+    solid and none is held back (ADR 0033); a body falling asleep stops."""
+    i = wp.tid()
+    r = root[i]
+    sleep = quiet_all[r] == 1 and supported_all[r] == 1 and held_all[r] == 0
+    if sleep:
+        if asleep[i] == 0:
+            velocity_m_per_s[i] = wp.vec3(0.0, 0.0, 0.0)
+            angular_velocity_rad_per_s[i] = wp.vec3(0.0, 0.0, 0.0)
+        asleep[i] = 1
+    else:
+        asleep[i] = 0
+    held[i] = 0
+
+
+@wp.kernel
+def count_sleeping(asleep: wp.array(dtype=wp.int32), status: wp.array(dtype=float)):
+    """status[3] counts the sleeping bodies."""
+    i = wp.tid()
+    if asleep[i] == 1:
+        wp.atomic_add(status, 3, 1.0)
 
 
 @wp.kernel

@@ -178,17 +178,19 @@ def test_v_rb_03_a_block_holds_below_the_friction_angle_and_slides_above(
         assert moved > 0.05
 
 
-def test_v_rb_05_a_stack_of_ten_boxes_stands_for_a_minute(device: str) -> None:
+@pytest.mark.parametrize("sleeping", [False, True], ids=["awake", "sleeping"])
+def test_v_rb_05_a_stack_of_ten_boxes_stands_for_a_minute(device: str, sleeping: bool) -> None:
     """V-RB-05: ten 20 cm wooden boxes stacked on the floor, μ = 0.5, off the origin and
     turned 30° about z (where a frictionless stack falls within a minute, ADR 0031): over
     60 s after 1 s to settle, no box drifts more than 1 mm. The stack's sinking under its
-    own load (7.7 mm, ADR 0031) happens while it settles."""
+    own load (7.7 mm, ADR 0031) happens while it settles. It stands awake, by friction
+    (#88), and asleep (ADR 0033)."""
     from entropy.world.sdf import HalfSpace, Solids
 
     floor = Solids((HalfSpace((0.0, 0.0, 0.0), (0.0, 0.0, 1.0)),)).to_device(device)
     solver = RigidSolver.create(
         RigidSetup(gravity_m_per_s2=GRAVITY, max_bodies=16, solids=floor,
-                   static_friction=0.5, dynamic_friction=0.5),
+                   static_friction=0.5, dynamic_friction=0.5, sleeping=sleeping),
         device,
     )  # fmt: skip
     turn = (0.0, 0.0, math.sin(math.radians(15.0)), math.cos(math.radians(15.0)))
