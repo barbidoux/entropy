@@ -345,6 +345,7 @@ class RigidSolver:
         # which are held back this frame, and the islands' tallies by root.
         self._touched_static = wp.zeros(n, dtype=wp.int32, device=device)  # pyright: ignore[reportArgumentType]
         self._held = wp.zeros(n, dtype=wp.int32, device=device)  # pyright: ignore[reportArgumentType]
+        self._wake = wp.zeros(n, dtype=wp.int32, device=device)  # pyright: ignore[reportArgumentType]
         self._island_tally = [
             wp.zeros(n, dtype=wp.int32, device=device)  # pyright: ignore[reportArgumentType]
             for _ in range(3)
@@ -514,6 +515,27 @@ class RigidSolver:
             np.asarray([velocity_m_per_s], np.float32), dtype=wp.vec3, device=self._device
         )
         wp.copy(self._state["velocities_m_per_s"], values, dest_offset=index, count=1)
+        self._wake.zero_()  # its island wakes, and stays awake this frame (ADR 0033)
+        wp.launch(_k.mark_wake_body, dim=1,
+                  inputs=[index, self._sleep["root"], self._wake, self._held],
+                  device=self._device)  # fmt: skip
+        self._wake_marked()
+
+    def wake_in_box(
+        self, low_m: tuple[float, float, float], high_m: tuple[float, float, float]
+    ) -> None:
+        """Wake every island with a body whose bounding sphere meets the box (m), as a tool
+        acting on a region would, or an edit of the static solids (ADR 0033). Raises while
+        frozen."""
+        self._read_status()
+        if not self._count:
+            return
+        self._wake.zero_()
+        wp.launch(_k.mark_wake_box, dim=self._count,
+                  inputs=[self._state["positions_m"], self._properties["bounds_m"],
+                          self._sleep["root"], wp.vec3(*low_m), wp.vec3(*high_m), self._wake],
+                  device=self._device)  # fmt: skip
+        self._wake_marked()
 
     def body_count(self) -> int:
         return self._count
@@ -591,6 +613,7 @@ class RigidSolver:
         self._static_contacts.zero_()
         patches.count.zero_()
         patches.per_body.zero_()
+        self._wake.zero_()
         self._grid.build(positions[:count], max(2.0 * self._max_bound_m, 1e-3))
         shapes, sizes = properties["shapes"], properties["sizes_m"]
         self._pair_anchors, self._spare_anchors = self._spare_anchors, self._pair_anchors
@@ -599,9 +622,11 @@ class RigidSolver:
             dim=count,
             inputs=[self._grid.id, positions, orientations, shapes, sizes, properties["bounds_m"],
                     self._max_bound_m, self._signs, self._overflows, patches,
-                    self._spare_anchors, self._pair_anchors, PAIRS_PER_BODY, asleep, self._held],
+                    self._spare_anchors, self._pair_anchors, PAIRS_PER_BODY, asleep, self._held,
+                    self._sleep["root"], self._wake],
             device=device,
         )  # fmt: skip
+        self._wake_marked()  # a sleeper an awake body touches wakes before the pairs are solved
         corrections = [self._shift_m, self._spin_rad]
         wp.launch(
             _k.solve_pairs,
@@ -645,6 +670,15 @@ class RigidSolver:
                   device=device)  # fmt: skip
         wp.launch(_k.apply_velocity_corrections, dim=count, inputs=[*kicks, *velocities],
                   device=device)  # fmt: skip
+
+    def _wake_marked(self) -> None:
+        """Wake the islands marked in `_wake`, by their roots (ADR 0033)."""
+        sleep = self._sleep
+        wp.launch(_k.wake_islands, dim=self._count,
+                  inputs=[sleep["asleep"], sleep["root"], self._wake, sleep["timer_s"],
+                          self._state["positions_m"], self._state["orientations"],
+                          sleep["last_position_m"], sleep["last_orientation"]],
+                  device=self._device)  # fmt: skip
 
     def _wake_fresh(self, start: int, count: int) -> None:
         """Bodies `start` to `start + count` awake, unquiet, each its own island, their

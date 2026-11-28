@@ -1100,12 +1100,14 @@ def detect(
     pairs_per_body: int,
     asleep: wp.array(dtype=wp.int32),
     held: wp.array(dtype=wp.int32),
+    root: wp.array(dtype=wp.int32),
+    wake: wp.array(dtype=wp.int32),
 ):
     """Body i's pairs: each neighbour j > i within reach (the hash grid) whose sample
     spheres and i's (as `_tested` says) touch gets a patch; each pair is met once. A pair
     past the room is dropped and counted, and holds both bodies back from sleeping.
-    Two sleeping bodies are not tested: their pair's anchor is carried over as it is
-    (ADR 0033).
+    Two sleeping bodies are not tested: their pair's anchor is carried over as it is; a
+    sleeping body an awake one touches has its island marked in `wake` (ADR 0033).
 
     Row i of the friction anchors, `pairs_per_body` entries, is written again: a pair
     still in contact carries its anchor over from the last substep (`previous`), a pair
@@ -1159,6 +1161,10 @@ def detect(
                     if _sink(centre, sample[3], x, q, none, shapes[i], sizes_m[i], -axis)[3] > 0.0:
                         touching = 1
             if touching == 1:
+                if asleep[i] == 1:
+                    wake[root[i]] = 1
+                if asleep[j] == 1:
+                    wake[root[j]] = 1
                 slot = wp.atomic_add(patches.count, 0, 1)
                 if slot < patches.a.shape[0]:
                     patches.a[slot] = i
@@ -1847,6 +1853,60 @@ def island_decide(
     else:
         asleep[i] = 0
     held[i] = 0
+
+
+@wp.kernel
+def wake_islands(
+    asleep: wp.array(dtype=wp.int32),
+    root: wp.array(dtype=wp.int32),
+    wake: wp.array(dtype=wp.int32),
+    timer_s: wp.array(dtype=float),
+    position_m: wp.array(dtype=wp.vec3),
+    orientation: wp.array(dtype=wp.quat),
+    last_position_m: wp.array(dtype=wp.vec3),
+    last_orientation: wp.array(dtype=wp.quat),
+):
+    """Every body of an island marked in `wake` (by its root) wakes, its quiet timer
+    started again where it is (ADR 0033)."""
+    i = wp.tid()
+    if asleep[i] == 1 and wake[root[i]] == 1:
+        asleep[i] = 0
+        timer_s[i] = 0.0
+        last_position_m[i] = position_m[i]
+        last_orientation[i] = orientation[i]
+
+
+@wp.kernel
+def mark_wake_body(
+    index: int,
+    root: wp.array(dtype=wp.int32),
+    wake: wp.array(dtype=wp.int32),
+    held: wp.array(dtype=wp.int32),
+):
+    """A tool set body `index`: its island is marked to wake, and held back this frame."""
+    wake[root[index]] = 1
+    held[index] = 1
+
+
+@wp.kernel
+def mark_wake_box(
+    position_m: wp.array(dtype=wp.vec3),
+    bounds_m: wp.array(dtype=float),
+    root: wp.array(dtype=wp.int32),
+    low_m: wp.vec3,
+    high_m: wp.vec3,
+    wake: wp.array(dtype=wp.int32),
+):
+    """The island of each body whose bounding sphere meets the box is marked to wake."""
+    i = wp.tid()
+    x = position_m[i]
+    r = bounds_m[i]
+    meets = True
+    for k in range(3):
+        if x[k] + r < low_m[k] or x[k] - r > high_m[k]:
+            meets = False
+    if meets:
+        wake[root[i]] = 1
 
 
 @wp.kernel
