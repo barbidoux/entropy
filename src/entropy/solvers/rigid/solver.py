@@ -281,6 +281,10 @@ class RigidSolver:
         self._count = 0
         self._state = {name: wp.zeros(n, dtype=dtype, device=device) for name, dtype in _STATE}
         self._before = {name: wp.zeros(n, dtype=dtype, device=device) for name, dtype in _STATE}
+        self._sleep_before = {
+            name: wp.zeros(n, dtype=dtype, device=device)  # pyright: ignore[reportArgumentType]
+            for name, dtype in _SLEEP
+        }
         self._before_count = 0
         self._properties = {
             name: wp.zeros(n, dtype=dtype, device=device)  # pyright: ignore[reportArgumentType]
@@ -383,6 +387,9 @@ class RigidSolver:
             for name, _ in _STATE:
                 if count:
                     wp.copy(self._before[name], self._state[name], count=count)
+            for name, _ in _SLEEP:
+                if count:
+                    wp.copy(self._sleep_before[name], self._sleep[name], count=count)
             for (_, table, rows), before in zip(
                 self._anchor_tables(), self._anchors_before, strict=True
             ):
@@ -767,6 +774,8 @@ class RigidSolver:
         before = {f"before_{name}": self._before[name].numpy()[:n].copy() for name, _ in _STATE}
         anchors = self._anchor_state(list(self._anchors_before), n)
         before |= {f"before_{key}": value for key, value in anchors.items()}
+        before |= {f"before_sleep_{name}": self._sleep_before[name].numpy()[:n].copy()
+                   for name, _ in _SLEEP}  # fmt: skip
         arrays = {key: np.asarray(value) for key, value in state.items()}
         arrays["gravity_m_per_s2"] = np.asarray(setup.gravity_m_per_s2)
         for field in fields(setup):

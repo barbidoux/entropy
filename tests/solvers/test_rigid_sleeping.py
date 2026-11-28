@@ -268,3 +268,65 @@ def test_a_struck_sleeping_stack_is_held_as_an_awake_one(device: str) -> None:
 
         assert asleep_gap >= awake_gap - 5e-4
         assert asleep_low >= awake_low - 5e-5
+
+
+def test_a_checkpoint_keeps_the_sleep_state() -> None:
+    """The sleep state is state (ADR 0033): restored from a checkpoint taken while a stack
+    falls asleep, the solver moves on exactly as it did, bit for bit on the CPU."""
+    solver = _stack("cpu")
+    _run(solver, 1.2)
+    saved = solver.checkpoint()
+    _run(solver, 2.0)
+    expected = solver.body_positions(), _asleep(solver)
+    assert expected[1].all()
+
+    solver.restore(saved)
+    _run(solver, 2.0)
+
+    np.testing.assert_array_equal(solver.body_positions(), expected[0])
+    np.testing.assert_array_equal(_asleep(solver), expected[1])
+
+
+def test_a_checkpoint_without_sleep_restores_everything_awake() -> None:
+    """A checkpoint that carries no sleep state (an older save) restores every body awake,
+    its quiet timer at 0."""
+    solver = _stack("cpu")
+    _run(solver, 3.0)
+    state = {k: v for k, v in solver.checkpoint().items() if not k.startswith("sleep_")}
+
+    solver.restore(state)
+
+    assert not _asleep(solver).any()
+    assert not solver.checkpoint()["sleep_timer_s"].any()
+
+
+def test_a_dump_replays_a_frame_with_sleeping_bodies(tmp_path) -> None:
+    """A NaN dump holds the sleep state before its frame: replayed, a sleeping stack stays
+    exactly where it slept, bit for bit on the CPU (rule 8)."""
+    import math
+
+    from entropy.solvers.interface import NonFiniteStateError
+    from entropy.solvers.rigid import load_dump
+
+    floor = FLOOR.to_device("cpu")
+    setup = RigidSetup(gravity_m_per_s2=GRAVITY, max_bodies=8, dump_dir=tmp_path, solids=floor,
+                       static_friction=0.5, dynamic_friction=0.5)  # fmt: skip
+    solver = RigidSolver.create(setup, "cpu")
+    solver.add_bodies([_box((0.0, 0.0, 0.1 + 0.2 * k), mu=0.5) for k in range(3)])
+    solver.add_bodies([_box((3.0, 0.0, 5.0))])
+    _run(solver, 3.0)
+    assert _asleep(solver)[:3].all()
+    solver.set_body_velocity(3, (math.nan, 0.0, 0.0))
+    solver.step(1.0 / 60.0)
+    try:
+        solver.step(1.0 / 60.0)
+    except NonFiniteStateError as raised:
+        dump = load_dump(raised.dump_path)
+    else:
+        raise AssertionError("the NaN was not caught")
+
+    replay = RigidSolver.from_dump(dump, "cpu")
+    replay.step(float(dump["dt_s"]))
+
+    np.testing.assert_array_equal(replay.body_positions()[:3], dump["positions_m"][:3])
+    assert replay.checkpoint()["sleep_asleep"][:3].all()
