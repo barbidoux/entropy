@@ -348,18 +348,20 @@ def test_a_non_finite_body_freezes_the_solver_and_dumps_its_frame(
 
 
 def test_a_dump_replays_its_frame(tmp_path) -> None:
-    """A dump holds the frame's starting state, the static solids and the room for pairs:
-    `RigidSolver.from_dump` rebuilds the solver at that state, and stepping the dump's
-    time step gives its result bit for bit on the CPU, contacts included (#101's review).
-    A dump is a regression test."""
+    """A dump holds the frame's starting state (the friction anchors included), the static
+    solids and the room for pairs: `RigidSolver.from_dump` rebuilds the solver at that
+    state, and stepping the dump's time step gives its result bit for bit on the CPU,
+    contacts and friction included (#101's review). A dump is a regression test."""
     floor = Solids((HalfSpace((0.0, 0.0, 0.0), (0.0, 0.0, 1.0)),)).to_device("cpu")
     setup = RigidSetup(gravity_m_per_s2=GRAVITY, max_bodies=64, dump_dir=tmp_path,
-                       solids=floor, max_pairs=7)  # fmt: skip
+                       solids=floor, max_pairs=7, static_friction=0.5,
+                       dynamic_friction=0.5)  # fmt: skip
     solver = RigidSolver.create(setup, "cpu")
+    mu = {"static_friction": 0.5, "dynamic_friction": 0.5}
     solver.add_bodies(
         [
-            _box(position_m=(0.0, 0.0, 0.1)),
-            _box(position_m=(0.02, 0.0, 0.3), angular_velocity_rad_per_s=(0.1, 0.2, 0.3)),
+            _box(position_m=(0.0, 0.0, 0.1), **mu),
+            _box(position_m=(0.02, 0.0, 0.3), angular_velocity_rad_per_s=(0.1, 0.2, 0.3), **mu),
             _box(position_m=(3.0, 0.0, 5.0)),
         ]
     )
@@ -377,6 +379,52 @@ def test_a_dump_replays_its_frame(tmp_path) -> None:
     assert replay.setup.max_pairs == 7
     np.testing.assert_array_equal(replay.body_positions()[:2], dump["positions_m"][:2])
     np.testing.assert_array_equal(replay.body_orientations()[:2], dump["orientations"][:2])
+
+
+def test_a_dump_from_before_friction_replays_frictionless(tmp_path) -> None:
+    """A dump written before friction (#88) has no coefficients and no anchors: it
+    replays with none, which is what made it, bit for bit on the CPU (rule 8: old dumps
+    stay regression tests)."""
+    floor = Solids((HalfSpace((0.0, 0.0, 0.0), (0.0, 0.0, 1.0)),)).to_device("cpu")
+    setup = RigidSetup(gravity_m_per_s2=GRAVITY, max_bodies=8, dump_dir=tmp_path, solids=floor)
+    solver = RigidSolver.create(setup, "cpu")
+    solver.add_bodies([_box(position_m=(0.0, 0.0, 0.1)), _box(position_m=(0.02, 0.0, 0.3)),
+                       _box(position_m=(3.0, 0.0, 5.0))])  # fmt: skip
+    for _ in range(20):
+        solver.step(1.0 / 60.0)
+    solver.set_body_velocity(2, (math.nan, 0.0, 0.0))
+    solver.step(1.0 / 30.0)
+    with pytest.raises(NonFiniteStateError) as raised:
+        solver.step(1.0 / 60.0)
+    newer = ("friction", "restitution", "anchor")
+    dump = {
+        k: v for k, v in load_dump(raised.value.dump_path).items() if not any(w in k for w in newer)
+    }
+
+    replay = RigidSolver.from_dump(dump, "cpu")
+    replay.step(float(dump["dt_s"]))
+
+    np.testing.assert_array_equal(replay.body_positions()[:2], dump["positions_m"][:2])
+
+
+@pytest.mark.parametrize("missing", ["masses_kg", "shapes", "bounds_m"])
+def test_a_dump_missing_a_body_property_is_refused(tmp_path, missing: str) -> None:
+    """Only the coefficients, which dumps from before friction lack, have a default: a
+    dump missing any other property is broken and raises, rather than replaying bodies
+    with no mass or shape (#102's fourth review)."""
+    floor = Solids((HalfSpace((0.0, 0.0, 0.0), (0.0, 0.0, 1.0)),)).to_device("cpu")
+    setup = RigidSetup(gravity_m_per_s2=GRAVITY, max_bodies=8, dump_dir=tmp_path, solids=floor)
+    solver = RigidSolver.create(setup, "cpu")
+    solver.add_bodies([_box(position_m=(0.0, 0.0, 0.1)), _box(position_m=(3.0, 0.0, 5.0))])
+    solver.step(1.0 / 60.0)
+    solver.set_body_velocity(1, (math.nan, 0.0, 0.0))
+    solver.step(1.0 / 30.0)  # the guard reads its status at the next call
+    with pytest.raises(NonFiniteStateError) as raised:
+        solver.step(1.0 / 60.0)
+    dump = {k: v for k, v in load_dump(raised.value.dump_path).items() if k != missing}
+
+    with pytest.raises(KeyError, match=missing):
+        RigidSolver.from_dump(dump, "cpu")
 
 
 def test_a_nan_orientation_is_caught(device: str, tmp_path) -> None:

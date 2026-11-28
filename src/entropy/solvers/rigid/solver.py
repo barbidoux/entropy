@@ -28,18 +28,30 @@ Simplifications, named (CLAUDE.md rule 7):
 - contacts (ADR 0031, which gives the numbers): edge-on-edge contacts between bodies
   are sampled; a capsule's envelope sags by up to 0.13 r between samples; a fast body
   can cross a thin one where it has no sample, from about 480 s⁻¹ times its thickness;
-  small boxes can leave the Test Tank at 30 m/s; without friction, bodies resting
-  off-centre slide off, so a stack is unstable (10 µm off brings five boxes down in 7 s,
-  and off the origin float32 positions seed it: most centred stacks fall within a
-  minute); pairs are Jacobi between them, so stacks sink under load
+  small boxes can leave the Test Tank at 30 m/s; without friction a stack is unstable
+  (10 µm off brings five boxes down in 7 s, and off the origin float32 positions seed
+  it), which friction holds; pairs are Jacobi between them, so stacks sink under load
   (7.7 mm for 10 boxes of 20 cm), a far heavier body sinks into the one under it, and
-  several bodies at once still pop and bounce (12 spheres of 10 cm spawned in a 30 cm
-  clump fly apart at up to 19 m/s), and a pile never settles; the static solids never
-  give a body energy (its speed is scaled down to the kinetic energy it had before
-  their corrections); angular momentum is kept within 1.35e-3 of its terms in V-RB-04's
-  scenes, the linear within 1.8e-7; a pair overflow loses support; the tank's rims are
-  not sampled as edges;
-- no friction, restitution or sleeping yet (#88, #89).
+  several bodies at once still pop and bounce (27 boxes spawned 5 cm into each other
+  fly apart at up to 12 m/s); the static solids never give a body energy (its speed is
+  scaled down to the kinetic energy it had before their corrections); angular momentum
+  is kept within 1.35e-3 of its terms in V-RB-04's scenes, the linear within 1.6e-7; a
+  pair overflow loses support; the tank's rims are not sampled as edges;
+- friction and restitution (ADR 0032, which gives the numbers): once per contact patch,
+  at its centre of pressure; on a wide patch static friction holds the resting body at
+  the patch's anchor, at most μs times the patch's normal impulse, and between bodies,
+  static or dynamic, it turns neither body, so a box sliding onto another in free fall
+  loses angular momentum, and one sliding across another off its centre does not turn
+  it; bounces on several bodies at once share one bounce, and the velocity pass does
+  not know a body's support; friction can give a little energy between bodies, in fast
+  hits or a box tipping off a plank's edge; no anchor on a patch
+  that is not wide, so a plank leaning on a wall creeps; no rolling resistance, and no
+  torsion at a single contact point; a gentle push springs back by up to 0.2 mm; far
+  from the origin, contacts see float32's resolution, and a block just past its
+  friction angle may stick from about 20 m; one surface material for all the static
+  solids; torsion about 1.4 times too strong on box faces, and dynamic only; bounces
+  1.3 to 1.7 % low;
+- no sleeping yet (#89).
 
 NaN guard (SPEC 5.9): after each step a kernel counts non-finite bodies into a small
 status array, copied to the host without waiting; the next call reads it. A non-finite
@@ -65,7 +77,7 @@ from entropy.core.paths import out_dir
 from entropy.fields.solids import DeviceSolids
 from entropy.solvers.interface import NonFiniteStateError
 from entropy.solvers.rigid import _kernels as _k
-from entropy.solvers.rigid.bodies import Body, Shape, mass_properties
+from entropy.solvers.rigid.bodies import Body, Shape, check_surface, mass_properties
 
 MAX_SUBSTEP_S = 1.0 / 480.0
 """The longest rigid substep (SPEC 5.4, ADR 0013)."""
@@ -82,6 +94,9 @@ _PROPERTIES = (
     ("shapes", wp.int32),
     ("sizes_m", wp.vec3),
     ("bounds_m", float),
+    ("static_friction", float),
+    ("dynamic_friction", float),
+    ("restitution", float),
 )
 PAIRS_PER_BODY = 16
 """Room for pairs of bodies in contact, per body by default: a box in a pile touches up
@@ -115,12 +130,18 @@ class RigidSetup:
     """Room for pairs of bodies in contact each substep; `PAIRS_PER_BODY` per body when
     None. Pairs past it are dropped and counted (`diagnostics()["pair_overflows"]`); the
     contacts with the static solids need no room."""
+    static_friction: float = 0.0
+    dynamic_friction: float = 0.0
+    restitution: float = 0.0
+    """The static solids' surface coefficients, one set for all of them (a named
+    simplification, ADR 0032); 0, none, when not given."""
 
     def __post_init__(self) -> None:
         if self.max_bodies <= 0:
             raise ValueError(f"max_bodies must be positive, got {self.max_bodies}")
         if self.max_pairs is not None and self.max_pairs <= 0:
             raise ValueError(f"max_pairs must be positive, got {self.max_pairs}")
+        check_surface(self.static_friction, self.dynamic_friction, self.restitution)
         if len(self.gravity_m_per_s2) != 3 or not all(
             math.isfinite(g) for g in self.gravity_m_per_s2
         ):
@@ -149,6 +170,23 @@ def _no_solids(device: str) -> DeviceSolids:
         plane_points_m=vectors,
         plane_normals=vectors,
     )
+
+
+_ANCHOR_FIELDS = (
+    ("other", wp.int32),
+    ("stuck", wp.int32),
+    ("normal", wp.vec3),
+    ("offset_a_m", wp.vec3),
+    ("offset_b_m", wp.vec3),
+)
+
+
+def _anchors(size: int, device: str) -> Any:  # a `_kernels.Anchors` (a Warp struct)
+    """`size` friction anchors, none set (ADR 0032)."""
+    anchors = _k.Anchors()
+    for name, dtype in _ANCHOR_FIELDS:
+        setattr(anchors, name, wp.zeros(size, dtype=dtype, device=device))  # pyright: ignore[reportArgumentType]
+    return anchors
 
 
 def load_dump(path: Path) -> dict[str, np.ndarray]:
@@ -199,9 +237,20 @@ class RigidSolver:
             }
         )
         solver = cls.create(RigidSetup(**values, solids=solids), device)
-        start = {name: dump[f"before_{name}"] for name, _ in _STATE}
-        properties = {name: dump[name] for name, _ in _PROPERTIES}
-        solver.restore({"count": int(dump["count"]), **start, **properties})
+        start = {
+            key.removeprefix("before_"): v for key, v in dump.items() if key.startswith("before_")
+        }
+        # A dump from before friction (#88) has no coefficients: none made it. Any other
+        # property missing is a broken dump, and raises.
+        count = int(dump["count"])
+        coefficients = ("static_friction", "dynamic_friction", "restitution")
+        properties = {
+            name: np.zeros(count, np.float32)
+            if name in coefficients and name not in dump
+            else dump[name]
+            for name, _ in _PROPERTIES
+        }
+        solver.restore({"count": count, **start, **properties})
         return solver
 
     @property
@@ -235,20 +284,37 @@ class RigidSolver:
         patches.impulse = wp.zeros(capacity, dtype=float, device=device)
         patches.moment = wp.zeros(capacity, dtype=wp.vec3, device=device)
         patches.normal = wp.zeros(capacity, dtype=wp.vec3, device=device)
+        patches.spread = wp.zeros(capacity, dtype=wp.mat33, device=device)
+        patches.upper = wp.zeros(capacity, dtype=wp.int32, device=device)  # pyright: ignore[reportArgumentType]
         patches.per_body = wp.zeros(n, dtype=wp.int32, device=device)  # pyright: ignore[reportArgumentType]
+        patches.anchor = wp.zeros(capacity, dtype=wp.int32, device=device)  # pyright: ignore[reportArgumentType]
+        patches.clamped = wp.zeros(capacity, dtype=wp.int32, device=device)  # pyright: ignore[reportArgumentType]
         self._patches = patches
+        # Friction anchors (ADR 0032): the pairs' table is written again each substep from
+        # the last one's, so there are two; the static solids' are kept in place.
+        self._pair_anchors = _anchors(PAIRS_PER_BODY * n, device)
+        self._spare_anchors = _anchors(PAIRS_PER_BODY * n, device)
+        self._static_anchors = _anchors(_k.STATIC_PATCHES * n, device)
+        self._anchors_before = (
+            _anchors(PAIRS_PER_BODY * n, device),
+            _anchors(_k.STATIC_PATCHES * n, device),
+        )
         static = _k.STATIC_PATCHES * n
         self._static_patches = [
             wp.zeros(static, dtype=float, device=device),
             wp.zeros(static, dtype=wp.vec3, device=device),
             wp.zeros(static, dtype=wp.vec3, device=device),
+            wp.zeros(static, dtype=wp.mat33, device=device),
+            wp.zeros(static, dtype=wp.int32, device=device),  # pyright: ignore[reportArgumentType]
         ]
+        self._static_touch = wp.zeros(static, dtype=wp.vec4, device=device)
         self._static_contacts = wp.zeros(1, dtype=wp.int32, device=device)  # pyright: ignore[reportArgumentType]
         self._rotated_rad = wp.zeros(n, dtype=wp.vec3, device=device)
         self._velocity_before_m_per_s = wp.zeros(n, dtype=wp.vec3, device=device)
         self._angular_before_rad_per_s = wp.zeros(n, dtype=wp.vec3, device=device)
         self._kick_m_per_s = wp.zeros(n, dtype=wp.vec3, device=device)
         self._twist_rad_per_s = wp.zeros(n, dtype=wp.vec3, device=device)
+        self._bouncing = wp.zeros(n, dtype=wp.int32, device=device)  # pyright: ignore[reportArgumentType]
         self._kinetic_j = wp.zeros(n, dtype=float, device=device)
         self._contact_count = wp.zeros(1, dtype=wp.int32, device=device)  # pyright: ignore[reportArgumentType]
         self._overflows = wp.zeros(1, dtype=wp.int32, device=device)  # pyright: ignore[reportArgumentType]
@@ -284,6 +350,12 @@ class RigidSolver:
             for name, _ in _STATE:
                 if count:
                     wp.copy(self._before[name], self._state[name], count=count)
+            for (_, table, rows), before in zip(
+                self._anchor_tables(), self._anchors_before, strict=True
+            ):
+                for name, _ in _ANCHOR_FIELDS:
+                    if count:
+                        wp.copy(getattr(before, name), getattr(table, name), count=count * rows)
             self._overflows.zero_()  # the HUD shows the last step's
             if count:
                 for _ in range(n):
@@ -303,11 +375,13 @@ class RigidSolver:
         return {**self._state, **self._properties}
 
     def checkpoint(self) -> dict[str, Any]:
+        """Every body's state and properties, and the friction anchors (ADR 0032)."""
         n = self._count
         state: dict[str, Any] = {"count": n}
         for name, array in (*self._state.items(), *self._properties.items()):
             state[name] = array.numpy()[:n].copy()
-        return state
+        tables = [table for _, table, _ in self._anchor_tables()]
+        return state | self._anchor_state(tables, n)
 
     def restore(self, state: dict[str, Any]) -> None:
         """Return to a checkpoint; a frozen solver runs again, and a status not yet read
@@ -322,6 +396,17 @@ class RigidSolver:
             if n:
                 values = wp.array(state[name], dtype=array.dtype, device=self._device)
                 wp.copy(array, values, count=n)
+        for prefix, table, rows in self._anchor_tables():
+            for name, _ in _ANCHOR_FIELDS:
+                array = getattr(table, name)
+                key = f"{prefix}_{name}"
+                if key not in state:  # a checkpoint without anchors: none is set
+                    array.zero_()
+                elif n:
+                    values = np.asarray(state[key])  # (n, entries per body, ...)
+                    flat = values.reshape(n * rows, *values.shape[2:])
+                    wp.copy(array, wp.array(flat, dtype=array.dtype, device=self._device),
+                            count=n * rows)  # fmt: skip
         self._count = n
         self._max_bound_m = float(np.max(state["bounds_m"])) if n else 0.0
         self._diagnostics.update(bodies=n, contacts=0, pair_overflows=0)
@@ -361,11 +446,17 @@ class RigidSolver:
             rows["shapes"].append(int(Shape(body.shape)))
             rows["sizes_m"].append(body.size_m)
             rows["bounds_m"].append(_bound(body))
+            rows["static_friction"].append(body.static_friction)
+            rows["dynamic_friction"].append(body.dynamic_friction)
+            rows["restitution"].append(body.restitution)
         start, count = self._count, len(bodies)
         for name, array in (*self._state.items(), *self._properties.items()):
             values = np.asarray(rows[name], dtype=np.int32 if name == "shapes" else np.float32)
             source = wp.array(values, dtype=array.dtype, device=self._device)
             wp.copy(array, source, dest_offset=start, count=count)
+        for _, table, per_body in self._anchor_tables():  # none set for the new bodies
+            for name, _ in _ANCHOR_FIELDS:
+                getattr(table, name)[start * per_body : (start + count) * per_body].zero_()
         self._count += count
         self._max_bound_m = max(self._max_bound_m, *rows["bounds_m"])
         self._diagnostics["bodies"] = self._count
@@ -396,6 +487,24 @@ class RigidSolver:
 
     # Internals ----------------------------------------------------------------------
 
+    def _anchor_tables(self) -> tuple[tuple[str, Any, int], ...]:
+        """The friction anchors' tables, with their checkpoint names and entries per body:
+        the pairs' of the last substep, and the static solids'."""
+        return (
+            ("pair_anchor", self._pair_anchors, PAIRS_PER_BODY),
+            ("static_anchor", self._static_anchors, _k.STATIC_PATCHES),
+        )
+
+    def _anchor_state(self, tables: list[Any], n: int) -> dict[str, np.ndarray]:
+        """The first `n` bodies' rows of the anchor `tables` (as `_anchor_tables` orders
+        them), one array per field and table, shaped (n, entries per body, ...)."""
+        state: dict[str, np.ndarray] = {}
+        for (prefix, _, rows), table in zip(self._anchor_tables(), tables, strict=True):
+            for name, _ in _ANCHOR_FIELDS:
+                values = getattr(table, name).numpy()[: n * rows]
+                state[f"{prefix}_{name}"] = values.reshape(n, rows, *values.shape[1:]).copy()
+        return state
+
     def _require_setup(self) -> RigidSetup:
         if self._setup is None:
             raise RuntimeError("allocate the rigid solver first")
@@ -416,6 +525,9 @@ class RigidSolver:
         each body's contacts with the static solids by its own thread (ADR 0031); recover
         the velocities; then the velocity pass, the static patches first."""
         count, device = self._count, self._device
+        setup = self._require_setup()
+        g = math.sqrt(sum(c * c for c in setup.gravity_m_per_s2))
+        slow = 2.0 * g * h
         state = [self._state[name] for name, _ in _STATE]
         positions, orientations = state[0], state[1]
         velocities = state[2:]
@@ -434,11 +546,13 @@ class RigidSolver:
         patches.per_body.zero_()
         self._grid.build(positions[:count], max(2.0 * self._max_bound_m, 1e-3))
         shapes, sizes = properties["shapes"], properties["sizes_m"]
+        self._pair_anchors, self._spare_anchors = self._spare_anchors, self._pair_anchors
         wp.launch(
             _k.detect,
             dim=count,
             inputs=[self._grid.id, positions, orientations, shapes, sizes, properties["bounds_m"],
-                    self._max_bound_m, self._signs, self._overflows, patches],
+                    self._max_bound_m, self._signs, self._overflows, patches,
+                    self._spare_anchors, self._pair_anchors, PAIRS_PER_BODY],
             device=device,
         )  # fmt: skip
         corrections = [self._shift_m, self._spin_rad]
@@ -446,7 +560,9 @@ class RigidSolver:
             _k.solve_pairs,
             dim=patches.a.shape[0],
             inputs=[patches, positions, orientations, shapes, sizes, masses, inertia, self._signs,
-                    self._contact_count, *corrections],
+                    self._displacement, self._turn, properties["static_friction"],
+                    properties["dynamic_friction"], gravity, self._contact_count, *corrections,
+                    self._pair_anchors],
             device=device,
         )  # fmt: skip
         wp.launch(_k.apply_corrections, dim=count,
@@ -455,19 +571,30 @@ class RigidSolver:
                   device=device)  # fmt: skip
         static = [positions, orientations, *increments, properties["shapes"], properties["sizes_m"],
                   properties["bounds_m"], masses, inertia, self._signs, *self._solids.arrays(),
-                  self._static_contacts, *self._static_patches]  # fmt: skip
+                  self._static_contacts, *self._static_patches, self._static_touch,
+                  properties["static_friction"], setup.static_friction,
+                  properties["dynamic_friction"], setup.dynamic_friction,
+                  self._static_anchors]  # fmt: skip
         wp.launch(_k.solve_static, dim=count, inputs=static, device=device)
         wp.launch(_k.recover, dim=count,
                   inputs=[self._displacement, self._rotated_rad, h, *velocities],
                   device=device)  # fmt: skip
         wp.launch(_k.solve_static_velocities, dim=count,
                   inputs=[positions, orientations, *velocities, *before, masses, inertia,
-                          *self._static_patches, self._kinetic_j],
+                          *self._static_patches, properties["dynamic_friction"],
+                          properties["restitution"], setup.dynamic_friction, setup.restitution,
+                          slow, h, self._kinetic_j],
                   device=device)  # fmt: skip
         kicks = [self._kick_m_per_s, self._twist_rad_per_s]
+        self._bouncing.zero_()
+        wp.launch(_k.count_bouncing, dim=patches.a.shape[0],
+                  inputs=[patches, positions, *before, properties["restitution"], slow,
+                          self._bouncing],
+                  device=device)  # fmt: skip
         wp.launch(_k.solve_velocities, dim=patches.a.shape[0],
                   inputs=[patches, positions, orientations, *velocities, *before, masses, inertia,
-                          *kicks],
+                          properties["dynamic_friction"], properties["restitution"], slow, h,
+                          *kicks, self._bouncing],
                   device=device)  # fmt: skip
         wp.launch(_k.apply_velocity_corrections, dim=count, inputs=[*kicks, *velocities],
                   device=device)  # fmt: skip
@@ -515,6 +642,8 @@ class RigidSolver:
         state = self.checkpoint()
         n = self._before_count
         before = {f"before_{name}": self._before[name].numpy()[:n].copy() for name, _ in _STATE}
+        anchors = self._anchor_state(list(self._anchors_before), n)
+        before |= {f"before_{key}": value for key, value in anchors.items()}
         arrays = {key: np.asarray(value) for key, value in state.items()}
         arrays["gravity_m_per_s2"] = np.asarray(setup.gravity_m_per_s2)
         for field in fields(setup):
