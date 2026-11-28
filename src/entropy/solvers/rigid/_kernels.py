@@ -1666,6 +1666,47 @@ def apply_velocity_corrections(
     twist_rad_per_s[i] = wp.vec3(0.0, 0.0, 0.0)
 
 
+# Sleeping (ADR 0033) -----------------------------------------------------------------
+
+SLEEP_SPEED_M_PER_S = wp.constant(0.05)
+"""A body is quiet while its speed stays under this (Box2D's 0.05 m/s, ADR 0033)."""
+SLEEP_TIME_S = wp.constant(0.5)
+"""... for this long (Box2D's 0.5 s)."""
+
+
+@wp.kernel
+def update_quiet(
+    position_m: wp.array(dtype=wp.vec3),
+    orientation: wp.array(dtype=wp.quat),
+    velocity_m_per_s: wp.array(dtype=wp.vec3),
+    angular_velocity_rad_per_s: wp.array(dtype=wp.vec3),
+    bounds_m: wp.array(dtype=float),
+    last_position_m: wp.array(dtype=wp.vec3),
+    last_orientation: wp.array(dtype=wp.quat),
+    dt_s: float,
+    timer_s: wp.array(dtype=float),
+):
+    """Once per step: body i's speed, the larger of |v| + |ω| r and its frame's motion
+    (|Δx| + |Δθ| r) / Δt, r its bounding radius, so the recovered velocities and the
+    frame's motion both count. Under `SLEEP_SPEED_M_PER_S` the quiet timer runs on by
+    the step (s); over it, it starts again. The pose is kept for the next step."""
+    i = wp.tid()
+    x = position_m[i]
+    q = orientation[i]
+    r = bounds_m[i]
+    lq = last_orientation[i]
+    cosine = wp.abs(wp.dot(q, lq)) / wp.sqrt(wp.dot(q, q) * wp.dot(lq, lq))
+    turned = 2.0 * wp.acos(wp.min(cosine, 1.0))
+    moved = (wp.length(x - last_position_m[i]) + turned * r) / dt_s
+    now = wp.length(velocity_m_per_s[i]) + wp.length(angular_velocity_rad_per_s[i]) * r
+    if wp.max(moved, now) < SLEEP_SPEED_M_PER_S:
+        timer_s[i] = timer_s[i] + dt_s
+    else:
+        timer_s[i] = 0.0
+    last_position_m[i] = x
+    last_orientation[i] = q
+
+
 @wp.kernel
 def count_nonfinite(
     position_m: wp.array(dtype=wp.vec3),

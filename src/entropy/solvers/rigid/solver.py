@@ -98,6 +98,15 @@ _PROPERTIES = (
     ("dynamic_friction", float),
     ("restitution", float),
 )
+_SLEEP = (
+    ("asleep", wp.int32),
+    ("timer_s", float),
+    ("root", wp.int32),
+    ("last_position_m", wp.vec3),
+    ("last_orientation", wp.quat),
+)
+"""Each body's sleep state (ADR 0033), in checkpoints as `sleep_<name>`: whether it
+sleeps, how long it has been quiet, its island's root, and its pose at the last frame."""
 PAIRS_PER_BODY = 16
 """Room for pairs of bodies in contact, per body by default: a box in a pile touches up
 to about 10 others."""
@@ -135,6 +144,9 @@ class RigidSetup:
     restitution: float = 0.0
     """The static solids' surface coefficients, one set for all of them (a named
     simplification, ADR 0032); 0, none, when not given."""
+    sleeping: bool = True
+    """Whether bodies at rest sleep in islands (ADR 0033). The tests of the contact and
+    friction physics turn it off, so a stack asleep cannot pass them trivially."""
 
     def __post_init__(self) -> None:
         if self.max_bodies <= 0:
@@ -222,6 +234,8 @@ class RigidSolver:
                 value = dump[key]
                 if value.ndim == 1:
                     values[field.name] = tuple(float(v) for v in value)
+                elif value.dtype == np.bool_:
+                    values[field.name] = bool(value)
                 elif np.issubdtype(value.dtype, np.integer):
                     values[field.name] = int(value)
                 else:
@@ -316,6 +330,10 @@ class RigidSolver:
         self._twist_rad_per_s = wp.zeros(n, dtype=wp.vec3, device=device)
         self._bouncing = wp.zeros(n, dtype=wp.int32, device=device)  # pyright: ignore[reportArgumentType]
         self._kinetic_j = wp.zeros(n, dtype=float, device=device)
+        self._sleep = {
+            name: wp.zeros(n, dtype=dtype, device=device)  # pyright: ignore[reportArgumentType]
+            for name, dtype in _SLEEP
+        }
         self._contact_count = wp.zeros(1, dtype=wp.int32, device=device)  # pyright: ignore[reportArgumentType]
         self._overflows = wp.zeros(1, dtype=wp.int32, device=device)  # pyright: ignore[reportArgumentType]
         self._signs = wp.array(_BOX_SIGNS, dtype=wp.vec3, device=device)
@@ -360,6 +378,8 @@ class RigidSolver:
             if count:
                 for _ in range(n):
                     self._substep(h, wp.vec3(*setup.gravity_m_per_s2))
+                if setup.sleeping:
+                    self._sleep_step(dt_s)
         self._diagnostics["substeps"] = n
         self._last_dt_s = dt_s
         self._send_status()
@@ -380,6 +400,8 @@ class RigidSolver:
         state: dict[str, Any] = {"count": n}
         for name, array in (*self._state.items(), *self._properties.items()):
             state[name] = array.numpy()[:n].copy()
+        for name, array in self._sleep.items():
+            state[f"sleep_{name}"] = array.numpy()[:n].copy()
         tables = [table for _, table, _ in self._anchor_tables()]
         return state | self._anchor_state(tables, n)
 
@@ -407,6 +429,14 @@ class RigidSolver:
                     flat = values.reshape(n * rows, *values.shape[2:])
                     wp.copy(array, wp.array(flat, dtype=array.dtype, device=self._device),
                             count=n * rows)  # fmt: skip
+        if all(f"sleep_{name}" in state for name, _ in _SLEEP):
+            for name, array in self._sleep.items():
+                if n:
+                    values = wp.array(state[f"sleep_{name}"], dtype=array.dtype,
+                                      device=self._device)  # fmt: skip
+                    wp.copy(array, values, count=n)
+        elif n:  # a checkpoint without sleep state: everything awake
+            self._wake_fresh(0, n)
         self._count = n
         self._max_bound_m = float(np.max(state["bounds_m"])) if n else 0.0
         self._diagnostics.update(bodies=n, contacts=0, pair_overflows=0)
@@ -457,6 +487,7 @@ class RigidSolver:
         for _, table, per_body in self._anchor_tables():  # none set for the new bodies
             for name, _ in _ANCHOR_FIELDS:
                 getattr(table, name)[start * per_body : (start + count) * per_body].zero_()
+        self._wake_fresh(start, count)
         self._count += count
         self._max_bound_m = max(self._max_bound_m, *rows["bounds_m"])
         self._diagnostics["bodies"] = self._count
@@ -598,6 +629,28 @@ class RigidSolver:
                   device=device)  # fmt: skip
         wp.launch(_k.apply_velocity_corrections, dim=count, inputs=[*kicks, *velocities],
                   device=device)  # fmt: skip
+
+    def _wake_fresh(self, start: int, count: int) -> None:
+        """Bodies `start` to `start + count` awake, unquiet, each its own island, their
+        last pose where they are now (ADR 0033)."""
+        sleep = self._sleep
+        sleep["asleep"][start : start + count].zero_()
+        sleep["timer_s"][start : start + count].zero_()
+        roots = wp.array(np.arange(start, start + count, dtype=np.int32), dtype=wp.int32,
+                         device=self._device)  # fmt: skip
+        wp.copy(sleep["root"], roots, dest_offset=start, count=count)
+        for last, now in (("last_position_m", "positions_m"), ("last_orientation", "orientations")):
+            wp.copy(sleep[last], self._state[now], dest_offset=start, src_offset=start,
+                    count=count)  # fmt: skip
+
+    def _sleep_step(self, dt_s: float) -> None:
+        """Once per step, after the substeps: each body's quiet timer (ADR 0033)."""
+        state = [self._state[name] for name, _ in _STATE]
+        sleep = self._sleep
+        wp.launch(_k.update_quiet, dim=self._count,
+                  inputs=[*state, self._properties["bounds_m"], sleep["last_position_m"],
+                          sleep["last_orientation"], dt_s, sleep["timer_s"]],
+                  device=self._device)  # fmt: skip
 
     def _send_status(self) -> None:
         self._status.zero_()
