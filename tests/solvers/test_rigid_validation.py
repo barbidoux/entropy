@@ -1,4 +1,4 @@
-"""Validation of the rigid bodies: V-RB-01 (SPEC 9.4)."""
+"""Validation of the rigid bodies: V-RB-01 to V-RB-05 (SPEC 9.4)."""
 
 import math
 
@@ -176,3 +176,30 @@ def test_v_rb_03_a_block_holds_below_the_friction_angle_and_slides_above(
         assert moved < 1e-3
     else:
         assert moved > 0.05
+
+
+def test_v_rb_05_a_stack_of_ten_boxes_stands_for_a_minute(device: str) -> None:
+    """V-RB-05: ten 20 cm wooden boxes stacked on the floor, μ = 0.5, off the origin and
+    turned 30° about z (where a frictionless stack falls within a minute, ADR 0031): over
+    60 s after 1 s to settle, no box drifts more than 1 mm. The stack's sinking under its
+    own load (7.7 mm, ADR 0031) happens while it settles."""
+    from entropy.world.sdf import HalfSpace, Solids
+
+    floor = Solids((HalfSpace((0.0, 0.0, 0.0), (0.0, 0.0, 1.0)),)).to_device(device)
+    solver = RigidSolver.create(
+        RigidSetup(gravity_m_per_s2=GRAVITY, max_bodies=16, solids=floor,
+                   static_friction=0.5, dynamic_friction=0.5),
+        device,
+    )  # fmt: skip
+    turn = (0.0, 0.0, math.sin(math.radians(15.0)), math.cos(math.radians(15.0)))
+    solver.add_bodies([Body(Shape.BOX, (0.1, 0.1, 0.1), 600.0, position_m=(0.5, 0.3, 0.1 + 0.2 * k),
+                            orientation=turn, static_friction=0.5, dynamic_friction=0.5)
+                       for k in range(10)])  # fmt: skip
+    for _ in range(60):
+        solver.step(1.0 / 60.0)
+    settled = solver.body_positions().copy()
+
+    for _ in range(60 * 60):
+        solver.step(1.0 / 60.0)
+
+    assert np.linalg.norm(solver.body_positions() - settled, axis=1).max() <= 1e-3
